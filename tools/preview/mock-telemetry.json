@@ -1,0 +1,2136 @@
+{
+  "ok": true,
+  "timestamp": "2026-03-15T14:22:08-04:00",
+  "providers": {
+    "codex": {
+      "label": "Codex",
+      "status": "ok",
+      "source": "codex-json-rpc",
+      "message": "Read account/rateLimits via Codex app-server",
+      "limits": [
+        {
+          "label": "Session",
+          "percent": 34.0,
+          "reset": "Resets in 2h 41m",
+          "unit": "%",
+          "isExtraUsage": false,
+          "formattedUsedText": "34% used",
+          "formattedDetailText": "",
+          "formattedDetailLeft": "",
+          "formattedDetailRight": "",
+          "pacePercent": 61.0
+        },
+        {
+          "label": "Weekly",
+          "percent": 61.0,
+          "reset": "Resets in 3d 9h",
+          "unit": "%",
+          "isExtraUsage": false,
+          "formattedUsedText": "61% used",
+          "formattedDetailText": "",
+          "formattedDetailLeft": "",
+          "formattedDetailRight": ""
+        }
+      ],
+      "tier": "Plus",
+      "accentColor": "#10a37f",
+      "costSummary": {
+        "title": "Cost (if pay-per-use)",
+        "today": "Today: $1.42 \u00b7 4.3M tok",
+        "last7Days": "Last 7 days: $8.00 \u00b7 33M tok",
+        "last30Days": "Last 30 days: $26.85 \u00b7 121M tok",
+        "source": "local-codex-logs",
+        "weeklyTokenUsage": [
+          {
+            "date": "2026-03-09",
+            "day": "Mon",
+            "tokens": 3100000,
+            "cost": 0.74,
+            "label": "3.1M",
+            "models": [
+              {
+                "model": "gpt-5.2-codex",
+                "cost": 0.74,
+                "tokens": 3100000
+              }
+            ]
+          },
+          {
+            "date": "2026-03-10",
+            "day": "Tue",
+            "tokens": 5400000,
+            "cost": 1.29,
+            "label": "5.4M",
+            "models": [
+              {
+                "model": "gpt-5.2-codex",
+                "cost": 1.29,
+                "tokens": 5400000
+              }
+            ]
+          },
+          {
+            "date": "2026-03-11",
+            "day": "Wed",
+            "tokens": 1200000,
+            "cost": 0.29,
+            "label": "1.2M",
+            "models": [
+              {
+                "model": "gpt-5.2-codex",
+                "cost": 0.29,
+                "tokens": 1200000
+              }
+            ]
+          },
+          {
+            "date": "2026-03-12",
+            "day": "Thu",
+            "tokens": 7800000,
+            "cost": 1.87,
+            "label": "7.8M",
+            "models": [
+              {
+                "model": "gpt-5.2-codex",
+                "cost": 1.87,
+                "tokens": 7800000
+              }
+            ]
+          },
+          {
+            "date": "2026-03-13",
+            "day": "Fri",
+            "tokens": 4100000,
+            "cost": 0.98,
+            "label": "4.1M",
+            "models": [
+              {
+                "model": "gpt-5.2-codex",
+                "cost": 0.98,
+                "tokens": 4100000
+              }
+            ]
+          },
+          {
+            "date": "2026-03-14",
+            "day": "Sat",
+            "tokens": 9200000,
+            "cost": 2.21,
+            "label": "9.2M",
+            "models": [
+              {
+                "model": "gpt-5.2-codex",
+                "cost": 2.21,
+                "tokens": 9200000
+              }
+            ]
+          },
+          {
+            "date": "2026-03-15",
+            "day": "Sun",
+            "tokens": 2600000,
+            "cost": 0.62,
+            "label": "2.6M",
+            "models": [
+              {
+                "model": "gpt-5.2-codex",
+                "cost": 0.62,
+                "tokens": 2600000
+              }
+            ]
+          }
+        ],
+        "monthlyTokenUsage": [
+          {
+            "date": "2026-02-22",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-02-23",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-02-24",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-02-25",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-02-26",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-02-27",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-02-28",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-01",
+            "inMonth": true,
+            "tokens": 2192,
+            "cost": 0.006795,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-02",
+            "inMonth": true,
+            "tokens": 4384,
+            "cost": 0.01359,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-03",
+            "inMonth": true,
+            "tokens": 6576,
+            "cost": 0.020386,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-04",
+            "inMonth": true,
+            "tokens": 8768,
+            "cost": 0.027181,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-05",
+            "inMonth": true,
+            "tokens": 10960,
+            "cost": 0.033976,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-06",
+            "inMonth": true,
+            "tokens": 13152,
+            "cost": 0.040771,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-07",
+            "inMonth": true,
+            "tokens": 15344,
+            "cost": 0.047566,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-08",
+            "inMonth": true,
+            "tokens": 2192,
+            "cost": 0.006795,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-09",
+            "inMonth": true,
+            "tokens": 4384,
+            "cost": 0.01359,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-10",
+            "inMonth": true,
+            "tokens": 6576,
+            "cost": 0.020386,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-11",
+            "inMonth": true,
+            "tokens": 8768,
+            "cost": 0.027181,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-12",
+            "inMonth": true,
+            "tokens": 10960,
+            "cost": 0.033976,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-13",
+            "inMonth": true,
+            "tokens": 13152,
+            "cost": 0.040771,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-14",
+            "inMonth": true,
+            "tokens": 15344,
+            "cost": 0.047566,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-15",
+            "inMonth": true,
+            "tokens": 2192,
+            "cost": 0.006795,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-16",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-17",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-18",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-19",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-20",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-21",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-22",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-23",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-24",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-25",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-26",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-27",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-28",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-29",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-30",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-31",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-04-01",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-04-02",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-04-03",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-04-04",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          }
+        ],
+        "hourlyTokenUsage": [
+          {
+            "hour": 0,
+            "label": "12a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 1,
+            "label": "1a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 2,
+            "label": "2a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 3,
+            "label": "3a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 4,
+            "label": "4a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 5,
+            "label": "5a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 6,
+            "label": "6a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 7,
+            "label": "7a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 8,
+            "label": "8a",
+            "tokens": 278333,
+            "cost": 0.862832,
+            "models": []
+          },
+          {
+            "hour": 9,
+            "label": "9a",
+            "tokens": 371111,
+            "cost": 1.150444,
+            "models": []
+          },
+          {
+            "hour": 10,
+            "label": "10a",
+            "tokens": 463888,
+            "cost": 1.438053,
+            "models": []
+          },
+          {
+            "hour": 11,
+            "label": "11a",
+            "tokens": 556666,
+            "cost": 1.725665,
+            "models": []
+          },
+          {
+            "hour": 12,
+            "label": "12p",
+            "tokens": 649444,
+            "cost": 2.013276,
+            "models": []
+          },
+          {
+            "hour": 13,
+            "label": "1p",
+            "tokens": 742222,
+            "cost": 2.300888,
+            "models": []
+          },
+          {
+            "hour": 14,
+            "label": "2p",
+            "tokens": 835000,
+            "cost": 2.5885,
+            "models": []
+          },
+          {
+            "hour": 15,
+            "label": "3p",
+            "tokens": 742222,
+            "cost": 2.300888,
+            "models": []
+          },
+          {
+            "hour": 16,
+            "label": "4p",
+            "tokens": 649444,
+            "cost": 2.013276,
+            "models": []
+          },
+          {
+            "hour": 17,
+            "label": "5p",
+            "tokens": 556666,
+            "cost": 1.725665,
+            "models": []
+          },
+          {
+            "hour": 18,
+            "label": "6p",
+            "tokens": 463888,
+            "cost": 1.438053,
+            "models": []
+          },
+          {
+            "hour": 19,
+            "label": "7p",
+            "tokens": 371111,
+            "cost": 1.150444,
+            "models": []
+          },
+          {
+            "hour": 20,
+            "label": "8p",
+            "tokens": 278333,
+            "cost": 0.862832,
+            "models": []
+          },
+          {
+            "hour": 21,
+            "label": "9p",
+            "tokens": 185555,
+            "cost": 0.575221,
+            "models": []
+          },
+          {
+            "hour": 22,
+            "label": "10p",
+            "tokens": 92777,
+            "cost": 0.287609,
+            "models": []
+          },
+          {
+            "hour": 23,
+            "label": "11p",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          }
+        ],
+        "costToday": 1.42,
+        "cost7d": 8.0,
+        "cost30d": 26.85,
+        "tokensToday": 4300000,
+        "tokens7d": 33400000,
+        "tokens30d": 121000000,
+        "burnRatePerDay": 1.142857,
+        "projectedMonthlyCost": 34.285714,
+        "modelBreakdown": [
+          {
+            "model": "gpt-5.2-codex",
+            "cost": 26.85,
+            "tokens": 121000000
+          }
+        ],
+        "breakdown": "Input 14.2M \u00b7 Output 2.1M \u00b7 Cached 105M"
+      }
+    },
+    "claude": {
+      "label": "Claude",
+      "status": "ok",
+      "source": "browser",
+      "message": "Read usage from claude.ai",
+      "limits": [
+        {
+          "label": "Session",
+          "percent": 68.0,
+          "reset": "Resets in 1h 12m",
+          "unit": "%",
+          "isExtraUsage": false,
+          "formattedUsedText": "68% used",
+          "formattedDetailText": "",
+          "formattedDetailLeft": "",
+          "formattedDetailRight": "",
+          "pacePercent": 52.0
+        },
+        {
+          "label": "Weekly",
+          "percent": 31.0,
+          "reset": "Resets in 4d 6h",
+          "unit": "%",
+          "isExtraUsage": false,
+          "formattedUsedText": "31% used",
+          "formattedDetailText": "",
+          "formattedDetailLeft": "",
+          "formattedDetailRight": "",
+          "pacePercent": 44.0
+        },
+        {
+          "label": "Fable",
+          "percent": 47.0,
+          "reset": "Resets in 4d 6h",
+          "unit": "%",
+          "isExtraUsage": false,
+          "formattedUsedText": "47% used",
+          "formattedDetailText": "",
+          "formattedDetailLeft": "",
+          "formattedDetailRight": "",
+          "pacePercent": 44.0
+        }
+      ],
+      "tier": "Max",
+      "accentColor": "#c07f63",
+      "costSummary": {
+        "title": "Cost (if pay-per-use)",
+        "today": "Today: $4.12 \u00b7 13.1M tok",
+        "last7Days": "Last 7 days: $26.08 \u00b7 84M tok",
+        "last30Days": "Last 30 days: $98.44 \u00b7 312M tok",
+        "source": "local-claude-logs",
+        "weeklyTokenUsage": [
+          {
+            "date": "2026-03-09",
+            "day": "Mon",
+            "tokens": 8400000,
+            "cost": 2.61,
+            "label": "8.4M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "cost": 1.6182,
+                "tokens": 5208000
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "cost": 0.9918,
+                "tokens": 3192000
+              }
+            ]
+          },
+          {
+            "date": "2026-03-10",
+            "day": "Tue",
+            "tokens": 12100000,
+            "cost": 3.74,
+            "label": "12.1M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "cost": 2.3188,
+                "tokens": 7502000
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "cost": 1.4212,
+                "tokens": 4598000
+              }
+            ]
+          },
+          {
+            "date": "2026-03-11",
+            "day": "Wed",
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-12",
+            "day": "Thu",
+            "tokens": 19600000,
+            "cost": 6.08,
+            "label": "19.6M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "cost": 3.7696,
+                "tokens": 12152000
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "cost": 2.3104,
+                "tokens": 7448000
+              }
+            ]
+          },
+          {
+            "date": "2026-03-13",
+            "day": "Fri",
+            "tokens": 14300000,
+            "cost": 4.44,
+            "label": "14.3M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "cost": 2.7528,
+                "tokens": 8866000
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "cost": 1.6872,
+                "tokens": 5434000
+              }
+            ]
+          },
+          {
+            "date": "2026-03-14",
+            "day": "Sat",
+            "tokens": 22800000,
+            "cost": 7.07,
+            "label": "22.8M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "cost": 4.3834,
+                "tokens": 14136000
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "cost": 2.6866,
+                "tokens": 8664000
+              }
+            ]
+          },
+          {
+            "date": "2026-03-15",
+            "day": "Sun",
+            "tokens": 6900000,
+            "cost": 2.14,
+            "label": "6.9M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "cost": 1.3268,
+                "tokens": 4278000
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "cost": 0.8132,
+                "tokens": 2622000
+              }
+            ]
+          }
+        ],
+        "monthlyTokenUsage": [
+          {
+            "date": "2026-02-22",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-02-23",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-02-24",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-02-25",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-02-26",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-02-27",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-02-28",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-01",
+            "inMonth": true,
+            "tokens": 2329,
+            "cost": 0.00722,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-02",
+            "inMonth": true,
+            "tokens": 4658,
+            "cost": 0.01444,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-03",
+            "inMonth": true,
+            "tokens": 6987,
+            "cost": 0.02166,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-04",
+            "inMonth": true,
+            "tokens": 9316,
+            "cost": 0.02888,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-05",
+            "inMonth": true,
+            "tokens": 11645,
+            "cost": 0.036099,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-06",
+            "inMonth": true,
+            "tokens": 13974,
+            "cost": 0.043319,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-07",
+            "inMonth": true,
+            "tokens": 16303,
+            "cost": 0.050539,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-08",
+            "inMonth": true,
+            "tokens": 2329,
+            "cost": 0.00722,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-09",
+            "inMonth": true,
+            "tokens": 4658,
+            "cost": 0.01444,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-10",
+            "inMonth": true,
+            "tokens": 6987,
+            "cost": 0.02166,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-11",
+            "inMonth": true,
+            "tokens": 9316,
+            "cost": 0.02888,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-12",
+            "inMonth": true,
+            "tokens": 11645,
+            "cost": 0.036099,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-13",
+            "inMonth": true,
+            "tokens": 13974,
+            "cost": 0.043319,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-14",
+            "inMonth": true,
+            "tokens": 16303,
+            "cost": 0.050539,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-15",
+            "inMonth": true,
+            "tokens": 2329,
+            "cost": 0.00722,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-16",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-17",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-18",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-19",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-20",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-21",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-22",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-23",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-24",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-25",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-26",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-27",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-28",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-29",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-30",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-31",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-04-01",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-04-02",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-04-03",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-04-04",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          }
+        ],
+        "hourlyTokenUsage": [
+          {
+            "hour": 0,
+            "label": "12a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 1,
+            "label": "1a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 2,
+            "label": "2a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 3,
+            "label": "3a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 4,
+            "label": "4a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 5,
+            "label": "5a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 6,
+            "label": "6a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 7,
+            "label": "7a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 8,
+            "label": "8a",
+            "tokens": 700833,
+            "cost": 2.172582,
+            "models": []
+          },
+          {
+            "hour": 9,
+            "label": "9a",
+            "tokens": 934444,
+            "cost": 2.896776,
+            "models": []
+          },
+          {
+            "hour": 10,
+            "label": "10a",
+            "tokens": 1168055,
+            "cost": 3.62097,
+            "models": []
+          },
+          {
+            "hour": 11,
+            "label": "11a",
+            "tokens": 1401666,
+            "cost": 4.345165,
+            "models": []
+          },
+          {
+            "hour": 12,
+            "label": "12p",
+            "tokens": 1635277,
+            "cost": 5.069359,
+            "models": []
+          },
+          {
+            "hour": 13,
+            "label": "1p",
+            "tokens": 1868888,
+            "cost": 5.793553,
+            "models": []
+          },
+          {
+            "hour": 14,
+            "label": "2p",
+            "tokens": 2102500,
+            "cost": 6.51775,
+            "models": []
+          },
+          {
+            "hour": 15,
+            "label": "3p",
+            "tokens": 1868888,
+            "cost": 5.793553,
+            "models": []
+          },
+          {
+            "hour": 16,
+            "label": "4p",
+            "tokens": 1635277,
+            "cost": 5.069359,
+            "models": []
+          },
+          {
+            "hour": 17,
+            "label": "5p",
+            "tokens": 1401666,
+            "cost": 4.345165,
+            "models": []
+          },
+          {
+            "hour": 18,
+            "label": "6p",
+            "tokens": 1168055,
+            "cost": 3.62097,
+            "models": []
+          },
+          {
+            "hour": 19,
+            "label": "7p",
+            "tokens": 934444,
+            "cost": 2.896776,
+            "models": []
+          },
+          {
+            "hour": 20,
+            "label": "8p",
+            "tokens": 700833,
+            "cost": 2.172582,
+            "models": []
+          },
+          {
+            "hour": 21,
+            "label": "9p",
+            "tokens": 467222,
+            "cost": 1.448388,
+            "models": []
+          },
+          {
+            "hour": 22,
+            "label": "10p",
+            "tokens": 233611,
+            "cost": 0.724194,
+            "models": []
+          },
+          {
+            "hour": 23,
+            "label": "11p",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          }
+        ],
+        "costToday": 4.12,
+        "cost7d": 26.08,
+        "cost30d": 98.44,
+        "tokensToday": 13100000,
+        "tokens7d": 84100000,
+        "tokens30d": 312000000,
+        "burnRatePerDay": 3.725714,
+        "projectedMonthlyCost": 111.771429,
+        "modelBreakdown": [
+          {
+            "model": "claude-opus-4-5",
+            "cost": 61.03,
+            "tokens": 138000000
+          },
+          {
+            "model": "claude-sonnet-4-5",
+            "cost": 29.53,
+            "tokens": 152000000
+          },
+          {
+            "model": "claude-haiku-4-5",
+            "cost": 7.88,
+            "tokens": 22000000
+          }
+        ],
+        "breakdown": "Input 3.1M \u00b7 Output 9.4M \u00b7 Cached 299M"
+      }
+    },
+    "gemini": {
+      "label": "Gemini",
+      "status": "ok",
+      "source": "browser-cookies",
+      "message": "Read usage from gemini.google.com",
+      "limits": [
+        {
+          "label": "Daily",
+          "percent": 22.0,
+          "reset": "Resets in 9h 38m",
+          "unit": "%",
+          "isExtraUsage": false,
+          "formattedUsedText": "22% used",
+          "formattedDetailText": "",
+          "formattedDetailLeft": "",
+          "formattedDetailRight": ""
+        }
+      ],
+      "tier": "Google AI Pro",
+      "accentColor": "#2f74f5"
+    },
+    "antigravity": {
+      "label": "Antigravity",
+      "status": "ok",
+      "source": "local-antigravity:41279",
+      "message": "Read Antigravity local language-server status",
+      "limits": [
+        {
+          "label": "Gemini",
+          "percent": 23.0,
+          "reset": "Resets in 3h 04m",
+          "unit": "%",
+          "isExtraUsage": false,
+          "formattedUsedText": "23% used",
+          "formattedDetailText": "",
+          "formattedDetailLeft": "",
+          "formattedDetailRight": ""
+        },
+        {
+          "label": "Others",
+          "percent": 11.0,
+          "reset": "Resets in 3h 04m",
+          "unit": "%",
+          "isExtraUsage": false,
+          "formattedUsedText": "11% used",
+          "formattedDetailText": "",
+          "formattedDetailLeft": "",
+          "formattedDetailRight": "",
+          "sublabel": "Claude \u00b7 GPT"
+        }
+      ],
+      "tier": "Google AI Pro",
+      "costSummary": {
+        "title": "Cost (if pay-per-use)",
+        "today": "Today: $0.68 \u00b7 2.2M tok",
+        "last7Days": "Last 7 days: $4.91 \u00b7 19M tok",
+        "last30Days": "Last 30 days: $17.32 \u00b7 63M tok",
+        "source": "antigravity-token-ledger",
+        "weeklyTokenUsage": [
+          {
+            "date": "2026-03-09",
+            "day": "Mon",
+            "tokens": 1900000,
+            "cost": 0.51,
+            "label": "1.9M",
+            "models": [
+              {
+                "model": "Gemini 3.1 Pro",
+                "cost": 0.3621,
+                "tokens": 1349000
+              },
+              {
+                "model": "Claude Opus 4.5",
+                "cost": 0.1479,
+                "tokens": 551000
+              }
+            ]
+          },
+          {
+            "date": "2026-03-10",
+            "day": "Tue",
+            "tokens": 2400000,
+            "cost": 0.63,
+            "label": "2.4M",
+            "models": [
+              {
+                "model": "Gemini 3.1 Pro",
+                "cost": 0.4473,
+                "tokens": 1704000
+              },
+              {
+                "model": "Claude Opus 4.5",
+                "cost": 0.1827,
+                "tokens": 696000
+              }
+            ]
+          },
+          {
+            "date": "2026-03-11",
+            "day": "Wed",
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-12",
+            "day": "Thu",
+            "tokens": 3800000,
+            "cost": 1.0,
+            "label": "3.8M",
+            "models": [
+              {
+                "model": "Gemini 3.1 Pro",
+                "cost": 0.71,
+                "tokens": 2698000
+              },
+              {
+                "model": "Claude Opus 4.5",
+                "cost": 0.29,
+                "tokens": 1102000
+              }
+            ]
+          },
+          {
+            "date": "2026-03-13",
+            "day": "Fri",
+            "tokens": 2900000,
+            "cost": 0.77,
+            "label": "2.9M",
+            "models": [
+              {
+                "model": "Gemini 3.1 Pro",
+                "cost": 0.5467,
+                "tokens": 2059000
+              },
+              {
+                "model": "Claude Opus 4.5",
+                "cost": 0.2233,
+                "tokens": 841000
+              }
+            ]
+          },
+          {
+            "date": "2026-03-14",
+            "day": "Sat",
+            "tokens": 5400000,
+            "cost": 1.32,
+            "label": "5.4M",
+            "models": [
+              {
+                "model": "Gemini 3.1 Pro",
+                "cost": 0.9372,
+                "tokens": 3834000
+              },
+              {
+                "model": "Claude Opus 4.5",
+                "cost": 0.3828,
+                "tokens": 1566000
+              }
+            ]
+          },
+          {
+            "date": "2026-03-15",
+            "day": "Sun",
+            "tokens": 2200000,
+            "cost": 0.68,
+            "label": "2.2M",
+            "models": [
+              {
+                "model": "Gemini 3.1 Pro",
+                "cost": 0.4828,
+                "tokens": 1562000
+              },
+              {
+                "model": "Claude Opus 4.5",
+                "cost": 0.1972,
+                "tokens": 638000
+              }
+            ]
+          }
+        ],
+        "monthlyTokenUsage": [
+          {
+            "date": "2026-02-22",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-02-23",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-02-24",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-02-25",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-02-26",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-02-27",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-02-28",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-01",
+            "inMonth": true,
+            "tokens": 3288,
+            "cost": 0.010193,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-02",
+            "inMonth": true,
+            "tokens": 6576,
+            "cost": 0.020386,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-03",
+            "inMonth": true,
+            "tokens": 9864,
+            "cost": 0.030578,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-04",
+            "inMonth": true,
+            "tokens": 13152,
+            "cost": 0.040771,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-05",
+            "inMonth": true,
+            "tokens": 16440,
+            "cost": 0.050964,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-06",
+            "inMonth": true,
+            "tokens": 19728,
+            "cost": 0.061157,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-07",
+            "inMonth": true,
+            "tokens": 23016,
+            "cost": 0.07135,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-08",
+            "inMonth": true,
+            "tokens": 3288,
+            "cost": 0.010193,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-09",
+            "inMonth": true,
+            "tokens": 6576,
+            "cost": 0.020386,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-10",
+            "inMonth": true,
+            "tokens": 9864,
+            "cost": 0.030578,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-11",
+            "inMonth": true,
+            "tokens": 13152,
+            "cost": 0.040771,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-12",
+            "inMonth": true,
+            "tokens": 16440,
+            "cost": 0.050964,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-13",
+            "inMonth": true,
+            "tokens": 19728,
+            "cost": 0.061157,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-14",
+            "inMonth": true,
+            "tokens": 23016,
+            "cost": 0.07135,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-15",
+            "inMonth": true,
+            "tokens": 3288,
+            "cost": 0.010193,
+            "label": "0.0M",
+            "models": []
+          },
+          {
+            "date": "2026-03-16",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-17",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-18",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-19",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-20",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-21",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-22",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-23",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-24",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-25",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-26",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-27",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-28",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-29",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-30",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-03-31",
+            "inMonth": true,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-04-01",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-04-02",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-04-03",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          },
+          {
+            "date": "2026-04-04",
+            "inMonth": false,
+            "tokens": 0,
+            "cost": 0.0,
+            "label": "0",
+            "models": []
+          }
+        ],
+        "hourlyTokenUsage": [
+          {
+            "hour": 0,
+            "label": "12a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 1,
+            "label": "1a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 2,
+            "label": "2a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 3,
+            "label": "3a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 4,
+            "label": "4a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 5,
+            "label": "5a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 6,
+            "label": "6a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 7,
+            "label": "7a",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          },
+          {
+            "hour": 8,
+            "label": "8a",
+            "tokens": 155000,
+            "cost": 0.4805,
+            "models": []
+          },
+          {
+            "hour": 9,
+            "label": "9a",
+            "tokens": 206666,
+            "cost": 0.640665,
+            "models": []
+          },
+          {
+            "hour": 10,
+            "label": "10a",
+            "tokens": 258333,
+            "cost": 0.800832,
+            "models": []
+          },
+          {
+            "hour": 11,
+            "label": "11a",
+            "tokens": 310000,
+            "cost": 0.961,
+            "models": []
+          },
+          {
+            "hour": 12,
+            "label": "12p",
+            "tokens": 361666,
+            "cost": 1.121165,
+            "models": []
+          },
+          {
+            "hour": 13,
+            "label": "1p",
+            "tokens": 413333,
+            "cost": 1.281332,
+            "models": []
+          },
+          {
+            "hour": 14,
+            "label": "2p",
+            "tokens": 465000,
+            "cost": 1.4415,
+            "models": []
+          },
+          {
+            "hour": 15,
+            "label": "3p",
+            "tokens": 413333,
+            "cost": 1.281332,
+            "models": []
+          },
+          {
+            "hour": 16,
+            "label": "4p",
+            "tokens": 361666,
+            "cost": 1.121165,
+            "models": []
+          },
+          {
+            "hour": 17,
+            "label": "5p",
+            "tokens": 310000,
+            "cost": 0.961,
+            "models": []
+          },
+          {
+            "hour": 18,
+            "label": "6p",
+            "tokens": 258333,
+            "cost": 0.800832,
+            "models": []
+          },
+          {
+            "hour": 19,
+            "label": "7p",
+            "tokens": 206666,
+            "cost": 0.640665,
+            "models": []
+          },
+          {
+            "hour": 20,
+            "label": "8p",
+            "tokens": 155000,
+            "cost": 0.4805,
+            "models": []
+          },
+          {
+            "hour": 21,
+            "label": "9p",
+            "tokens": 103333,
+            "cost": 0.320332,
+            "models": []
+          },
+          {
+            "hour": 22,
+            "label": "10p",
+            "tokens": 51666,
+            "cost": 0.160165,
+            "models": []
+          },
+          {
+            "hour": 23,
+            "label": "11p",
+            "tokens": 0,
+            "cost": 0.0,
+            "models": []
+          }
+        ],
+        "costToday": 0.68,
+        "cost7d": 4.91,
+        "cost30d": 17.32,
+        "tokensToday": 2200000,
+        "tokens7d": 18600000,
+        "tokens30d": 63400000,
+        "burnRatePerDay": 0.701429,
+        "projectedMonthlyCost": 21.042857,
+        "modelBreakdown": [
+          {
+            "model": "Gemini 3.1 Pro",
+            "cost": 12.3,
+            "tokens": 51100000
+          },
+          {
+            "model": "Claude Opus 4.5",
+            "cost": 5.02,
+            "tokens": 12300000
+          }
+        ],
+        "breakdown": "Input 8.9M \u00b7 Output 1.4M \u00b7 Cached 53.1M"
+      }
+    },
+    "grok": {
+      "label": "Grok",
+      "status": "ok",
+      "source": "local-grok-build",
+      "message": "Grok Build usage",
+      "limits": [
+        {
+          "label": "Weekly",
+          "percent": 57.0,
+          "reset": "Resets in 1d 1h",
+          "unit": "percent",
+          "isExtraUsage": false,
+          "formattedUsedText": "57% used",
+          "formattedDetailText": "This week: 18.4M tokens \u00b7 $11.62",
+          "formattedDetailLeft": "",
+          "formattedDetailRight": "",
+          "detailText": "This week: 18.4M tokens \u00b7 $11.62"
+        }
+      ],
+      "tier": "SuperGrok",
+      "accentColor": "#d0d0d0"
+    }
+  },
+  "diagnostics": {},
+  "config": {
+    "providers": [
+      "codex",
+      "claude",
+      "gemini",
+      "antigravity",
+      "grok"
+    ],
+    "refreshIntervalMinutes": 5,
+    "notificationsEnabled": true,
+    "notificationThresholds": [
+      80,
+      95
+    ],
+    "panelDisplayMode": "percent",
+    "monthlyBudget": 0,
+    "mutedProviders": []
+  },
+  "notifications": []
+}

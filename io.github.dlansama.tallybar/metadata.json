@@ -1,0 +1,25 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "Dylan Reed",
+                "Email": "258674612+DLANSAMA@users.noreply.github.com"
+            }
+        ],
+        "BugReportUrl": "https://github.com/DLANSAMA/TallyBarPlasmoid/issues",
+        "Category": "System Information",
+        "Description": "Native KDE Plasma usage monitor for Codex, Gemini, Claude, Antigravity, and Grok sessions.",
+        "EnabledByDefault": true,
+        "FormFactors": [
+            "desktop"
+        ],
+        "Icon": "utilities-system-monitor",
+        "Id": "io.github.dlansama.tallybar",
+        "License": "MIT",
+        "Name": "TallyBar",
+        "Version": "0.1.0",
+        "Website": "https://github.com/DLANSAMA/TallyBarPlasmoid"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

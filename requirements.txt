@@ -1,0 +1,12 @@
+# Development / CI dependencies only.
+#
+# The TallyBar backend itself has NO third-party runtime dependencies — it runs
+# on the system python3 (3.11+) with the standard library only (crypto is via
+# ctypes against system libssl). These packages are used solely for running the
+# test suite and the CI static-analysis step; they are NOT installed on end-user
+# systems and are NOT bundled into the .plasmoid.
+pytest>=8.0
+pytest-asyncio>=0.24
+pytest-timeout>=2.3
+flake8>=7.0
+mypy>=1.11

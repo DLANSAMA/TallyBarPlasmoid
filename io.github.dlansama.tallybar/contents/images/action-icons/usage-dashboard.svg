@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <defs>
+    <style type="text/css" id="current-color-scheme">
+      .ColorScheme-Text { color:#20202a; }
+    </style>
+  </defs>
+  <g class="ColorScheme-Text" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" transform="translate(-1.2 -1.2) scale(1.15)">
+    <path d="M3.3 12.9V9.4"/>
+    <path d="M8 12.9V4.1"/>
+    <path d="M12.7 12.9V6.8"/>
+  </g>
+</svg>
