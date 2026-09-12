@@ -11,6 +11,7 @@ local on-disk state only; performs no network I/O.
 from __future__ import annotations
 
 import datetime as dt
+import functools
 import json
 import os
 import re
@@ -965,11 +966,15 @@ def _rpc_model_pricing_key(placeholder: str, api_provider: str) -> str:
     return "gemini-3.1-pro"
 
 
+@functools.lru_cache(maxsize=128)
 def _normalize_model_name(name: str) -> str:
     """Map a CLI statusLine model *display* name to a pricing-catalog key.
 
     "Gemini 3.5 Flash (High)" -> "gemini-3.5-flash"; "Gemini 3.1 Pro (High)" -> "gemini-3.1-pro".
     Drops the reasoning-effort parenthetical, lowercases, and hyphenates spaces.
+
+    Memoized via lru_cache: called per ledger entry during cost calculations;
+    caching eliminates redundant regex operations across thousands of entries.
     """
     s = re.sub(r"\(.*?\)", "", str(name)).strip().lower()
     return re.sub(r"\s+", "-", s)
