@@ -1,4 +1,4 @@
-"""Unit tests for the provider-orchestration functions (audit finding A0528-TEST-3).
+"""Unit tests for the provider-orchestration functions.
 
 These exercise the per-provider fetch paths in ``providers/`` — the missing-cookie
 guards, the success paths (with all network I/O mocked), and the auth/error branches.
@@ -987,7 +987,7 @@ def test_antigravity_oauth_pairs_from_data():
 
 
 # ---------------------------------------------------------------------------
-# apply_google_one_credits (providers/antigravity.py) — [AUDIT-4]
+# apply_google_one_credits (providers/antigravity.py)
 # Replaces Antigravity's misleading Code Assist prompt/flow "credits" with the
 # real Google One AI credit pool, and DROPS the "Monthly credit pool" lane.
 # ---------------------------------------------------------------------------

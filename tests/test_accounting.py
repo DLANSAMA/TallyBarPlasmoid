@@ -359,7 +359,7 @@ def test_enrich_ui_formatting():
 
 
 # ---------------------------------------------------------------------------
-# Local per-provider token-summary readers (TEST-4). These exercise the real
+# Local per-provider token-summary readers. These exercise the real
 # file-discovery / parsing / dedup / bucketing paths AND the corrected cost math
 # end-to-end. Pricing is patched to a flat $10/MTok so each expected dollar value
 # is a regression guard for a specific per-provider accounting rule.
@@ -851,7 +851,7 @@ def test_local_summary_includes_hourly(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# [AUDIT-5] codex_credit_balance selects the first PRESENT key, not first truthy
+# codex_credit_balance selects the first PRESENT key, not first truthy
 # ---------------------------------------------------------------------------
 
 def test_codex_credit_balance_zero_balance_not_dropped():
@@ -874,7 +874,7 @@ def test_codex_credit_balance_no_numeric_key_returns_none():
 
 
 # ---------------------------------------------------------------------------
-# [AUDIT-6] provider-family fallback pricing for unknown-but-non-empty models
+# provider-family fallback pricing for unknown-but-non-empty models
 # ---------------------------------------------------------------------------
 
 def test_provider_family_for_model_mapping():

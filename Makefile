@@ -67,10 +67,8 @@ typecheck:
 
 # Aggregate static-analysis gate: lint + qmllint + typecheck, all STRICT.
 #
-# typecheck was advisory while the tree carried 41 pre-existing mypy errors — a
-# permanently-red gate that nobody reads, so error #42 (the real one) would never
-# have been noticed. Those 41 were triaged (all false positives, one narrowing
-# idiom) and fixed; the tree is now type-clean, so this blocks. If mypy is not
+# The tree is type-clean, so typecheck blocks: a gate that is allowed to stay red
+# stops being read, and the first real error goes unnoticed. If mypy is not
 # installed the step is skipped, not failed — it must not break a contributor who
 # has neither uvx nor mypy.
 check: lint qmllint typecheck

@@ -429,7 +429,7 @@ def test_all_ai_mtd_sums_inmonth_buckets_only_not_cost30d():
 
 def test_budget_alert_fires_dedupes_rearms(tmp_path, monkeypatch):
     monkeypatch.setattr(backend, "NOTIFY_STATE_PATH", tmp_path / "n.json")
-    # Neutralize the predictive crossing (Item 3) so this test stays about real-spend
+    # Neutralize the predictive crossing so this test stays about real-spend
     # crossings only — otherwise the calendar-pace projection of $85/$120 early in a month
     # would emit a second "all" notification and depend on today's date.
     monkeypatch.setattr(backend, "all_ai_projected_month_cost", lambda *a, **k: 0.0)
@@ -547,13 +547,13 @@ def test_update_config_values_monthly_budget(tmp_path, monkeypatch):
     assert backend.update_config_values({"monthlyBudget": "nonsense"})["monthlyBudget"] == 150.0  # garbage ignored
     assert backend.update_config_values({"monthlyBudget": -5})["monthlyBudget"] == 150.0          # out-of-range ignored
     assert backend.update_config_values({"monthlyBudget": 0})["monthlyBudget"] == 0.0             # 0 disables (valid)
-    # Item 5: a free-entry (non-preset) budget round-trips intact — the backend already
+    # A free-entry (non-preset) budget round-trips intact — the backend already
     # accepts any float 0..1e6, so the custom-value UI needs no backend change.
     assert backend.update_config_values({"monthlyBudget": 137.5})["monthlyBudget"] == 137.5
 
 
 def test_update_config_values_custom_thresholds_roundtrip(tmp_path, monkeypatch):
-    # Item 5: an arbitrary custom threshold list (not the 80/90/100 presets) round-trips,
+    # An arbitrary custom threshold list (not the 80/90/100 presets) round-trips,
     # deduped + sorted, with out-of-range values dropped.
     monkeypatch.setattr(backend, "CONFIG_PATH", tmp_path / ".tallybar" / "config.json")
     out = backend.update_config_values({"notificationThresholds": [55, 73, 55, 120, 0, 99]})
@@ -563,7 +563,7 @@ def test_update_config_values_custom_thresholds_roundtrip(tmp_path, monkeypatch)
 # --- QoL batch 2026-07: weekly-80 alert, muted providers, actionUrl ----------
 
 def test_weekly_alert_fires_once_and_rearms_on_reset(tmp_path, monkeypatch):
-    """Feature 6: a weekly window crossing 80% fires ONE notification, de-duped per
+    """A weekly window crossing 80% fires ONE notification, de-duped per
     provider+label, re-armed only when usage drops back below the hysteresis floor
     (what a genuine window reset does). NOT keyed by resetAt — Claude's API recomputes
     resets_at per request, so a resetAt key churned and re-fired every refresh."""
@@ -615,7 +615,7 @@ def test_weekly_alert_migrates_old_resetat_keys(tmp_path, monkeypatch):
 
 
 def test_muted_provider_raises_no_notifications(tmp_path, monkeypatch):
-    """Feature 7: a muted provider fires no status OR usage notifications."""
+    """A muted provider fires no status OR usage notifications."""
     monkeypatch.setattr(backend, "NOTIFY_STATE_PATH", tmp_path / "notify_state.json")
     provs = {"codex": {"label": "Codex", "status": "unauthorized",
                        "limits": [{"label": "Session", "percent": 100}]}}
@@ -642,7 +642,7 @@ def test_public_config_defaults_muted_empty():
 
 
 def test_snapshot_carries_generatedat_timestamp():
-    """Feature 5: the snapshot carries an ISO timestamp used for the staleness stamp."""
+    """The snapshot carries an ISO timestamp used for the staleness stamp."""
     import argparse
     import asyncio
     args = argparse.Namespace(timeout=6.0, background=True, no_network=True)
@@ -651,7 +651,7 @@ def test_snapshot_carries_generatedat_timestamp():
 
 
 def test_gemini_unauthorized_carries_action_url():
-    """Feature 3: gemini's signed-out path surfaces a sign-in actionUrl."""
+    """Gemini's signed-out path surfaces a sign-in actionUrl."""
     from providers import gemini
     html_signed_out = (
         'cfb2h="build" FdrFJe="sid" '

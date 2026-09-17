@@ -40,7 +40,7 @@ Item {
                 width: root.switcherTabWidth(providerKey)
                 height: parent.height
 
-                // Item 1: a provider whose live status is bad (api-error / timeout /
+                // A provider whose live status is bad (api-error / timeout /
                 // unauthorized / wallet-locked) while it may still show cached data —
                 // surface the otherwise-invisible message on hover, plus the glyph below.
                 QQC2.ToolTip.delay: 350
@@ -136,7 +136,7 @@ Item {
                     text: root.tabLabel(providerTab.providerKey)
                 }
 
-                // Small amber warning glyph on a bad-status tab (Item 1).
+                // Small amber warning glyph on a bad-status tab.
                 Kirigami.Icon {
                     anchors.right: tabSurface.right
                     anchors.top: tabSurface.top
@@ -150,7 +150,7 @@ Item {
                     color: "#e0a23c"
                 }
 
-                // Feature 7: a muted-provider tab shows a small mute glyph instead of the
+                // A muted-provider tab shows a small mute glyph instead of the
                 // bad-status warning (tabStatusBad is suppressed while muted).
                 Kirigami.Icon {
                     anchors.right: tabSurface.right

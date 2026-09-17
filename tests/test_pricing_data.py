@@ -104,7 +104,7 @@ def test_embedded_fallback_when_no_cache_at_all():
 
 
 # ---------------------------------------------------------------------------
-# [AUDIT-1] Exact-match-first against the EMBEDDED fallback table. With no cache,
+# Exact-match-first against the EMBEDDED fallback table. With no cache,
 # the embedded _FALLBACK_PRICING is active. The old "first substring hit wins"
 # behaviour let a short canonical name ("gpt-5") resolve to a longer EARLIER-listed
 # key ("gpt-5.5") and overbill ~2x (5.0/30.0 vs the correct 2.5/15.0). exact-first

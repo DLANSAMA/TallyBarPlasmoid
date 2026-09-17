@@ -87,14 +87,14 @@ def test_update_acquires_and_releases_exclusive_lock(monkeypatch, tmp_path):
 
     monkeypatch.setattr(fcntl, "flock", recording_flock)
     costmod.update_antigravity_token_ledger()
-    acquire = fcntl.LOCK_EX | fcntl.LOCK_NB                               # non-blocking acquire (ARCH-1)
+    acquire = fcntl.LOCK_EX | fcntl.LOCK_NB                               # non-blocking acquire
     assert acquire in calls and fcntl.LOCK_UN in calls                    # acquired + released
     assert calls.index(acquire) < calls.index(fcntl.LOCK_UN)              # in that order
     assert fcntl.LOCK_EX not in calls                                     # never the blocking form
 
 
 def test_ledger_update_skips_gracefully_when_lock_held(monkeypatch, tmp_path):
-    # ARCH-1: if another process holds the ledger lock, the update must NOT block (it runs in an
+    # If another process holds the ledger lock, the update must NOT block (it runs in an
     # asyncio.to_thread worker that an outer wait_for can't unblock). It returns the last-known
     # ledger read-only within the deadline budget instead of hanging.
     import fcntl
@@ -146,7 +146,7 @@ _FIXED_NOW = _dt.datetime(2026, 6, 2, 12, 0, tzinfo=_dt.timezone.utc)
 
 
 def test_rpc_stems_reconstruct_with_rsplit(monkeypatch, tmp_path):
-    # DATA-6: a persisted RPC key whose cascade id pathologically contains '#' must still map back
+    # A persisted RPC key whose cascade id pathologically contains '#' must still map back
     # to the FULL cascade id (rsplit on the last '#'), so the matching disk DB stays deduped.
     led = _point_at(monkeypatch, tmp_path)
     weird = "ca#sc"                                                       # cascade id containing '#'

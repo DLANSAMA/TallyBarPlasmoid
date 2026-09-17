@@ -141,7 +141,7 @@ async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
             result.update(status="api-error", message=scrub_credentials(str(exc))[:160])
         return result
     if status == 401 or status == 403:
-        # Feature 3: surface a sign-in URL so the UI's error state is clickable.
+        # Surface a sign-in URL so the UI's error state is clickable.
         result.update(status="unauthorized", message=f"API rejected session cookies ({status})",
                       actionUrl="https://claude.ai")
         return result

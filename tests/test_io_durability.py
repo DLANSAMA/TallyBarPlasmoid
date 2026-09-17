@@ -1,6 +1,6 @@
 """Tests for the 2026-05-31 external-audit hardening: the shared fsync_dir helper,
-the atomic 0600 OAuth-credential write (mkstemp, SEC-2/SEC-6), and the Gemini in-fetch
-timeout classification (ERR-2)."""
+the atomic 0600 OAuth-credential write (mkstemp), and the Gemini in-fetch
+timeout classification."""
 
 import json
 import socket
@@ -56,7 +56,7 @@ def test_gemini_is_timeout_exc():
 
 
 def test_no_duplicate_atomic_write_definitions():
-    # ARCH-4 (extended 2026-07): the fsync/atomic-write recipe must live ONLY in
+    # The fsync/atomic-write recipe must live ONLY in
     # io_helpers — guard against a future re-introduction of a local copy in the
     # writers. backend's _atomic_write_text must BE the shared helper, not a fork.
     import accounting
