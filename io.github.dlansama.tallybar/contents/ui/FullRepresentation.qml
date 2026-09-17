@@ -1,8 +1,5 @@
 import QtQuick
-import QtQuick.Controls as QQC2
 import QtQuick.Layouts
-import org.kde.kirigami as Kirigami
-import org.kde.plasma.core as PlasmaCore
 import "lib/format.js" as Fmt
 import "lib/ui_helpers.js" as UIHelpers
 import "components"
