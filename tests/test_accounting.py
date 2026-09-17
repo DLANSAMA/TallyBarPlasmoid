@@ -1370,3 +1370,212 @@ def test_slim_usage_covers_every_key_the_readers_consume():
         f"these usage keys are read by the token/cost math but slim_usage would discard "
         f"them: {sorted(missing)} — add them to _USAGE_SCALAR_FIELDS in pricing.py"
     )
+
+
+# --- incremental tail parse ---------------------------------------------------------
+# An active session's JSONL is appended to on essentially every refresh, so "file changed"
+# is the common case and a full reparse of it was the most expensive thing a refresh did.
+# Resuming is only safe if it is byte-identical to a cold parse in every case, including
+# the nasty one: a trailing line the agent was still streaming when we last looked.
+
+from accounting import log_parsers as _lp  # noqa: E402
+
+
+def _claude_line(i, out_tokens=10):
+    return json.dumps({
+        "type": "assistant",
+        "timestamp": f"2026-09-{(i % 27) + 1:02d}T10:00:00Z",
+        "requestId": f"req_{i}",
+        "message": {"model": "claude-opus-4-5",
+                    "usage": {"input_tokens": 100 + i, "output_tokens": out_tokens}},
+    })
+
+
+def _run(tmp_path, cache_dir):
+    """One _cached_log_records pass over tmp_path with incremental enabled."""
+    return _lp._cached_log_records(tmp_path, "*.jsonl", cache_dir / "claude_logs.json",
+                                   _lp._parse_claude_file, _lp._CLAUDE_PARSE_VERSION,
+                                   incremental=True)
+
+
+def _bump_mtime(path, seconds=10):
+    st = path.stat()
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + seconds * 1_000_000_000))
+
+
+def test_incremental_tail_parse_matches_cold_parse(tmp_path):
+    logs, cache = tmp_path / "logs", tmp_path / "cache"
+    logs.mkdir(); cache.mkdir()
+    f = logs / "session.jsonl"
+    f.write_text("\n".join(_claude_line(i) for i in range(5)) + "\n")
+    first = _run(logs, cache)
+    assert len(first) == 5
+
+    with f.open("a") as handle:
+        handle.write("\n".join(_claude_line(i) for i in range(5, 12)) + "\n")
+    _bump_mtime(f)
+    incremental = _run(logs, cache)
+
+    assert incremental == _lp._parse_claude_file(f), "tail parse diverged from a cold parse"
+    assert len(incremental) == 12
+
+
+def test_incremental_handles_a_torn_trailing_line(tmp_path):
+    """The agent is mid-write: the file ends with a partial JSON line. That line must not
+    be split across two parses — it is skipped now and picked up whole once completed."""
+    logs, cache = tmp_path / "logs", tmp_path / "cache"
+    logs.mkdir(); cache.mkdir()
+    f = logs / "session.jsonl"
+    complete = "\n".join(_claude_line(i) for i in range(3)) + "\n"
+    torn = _claude_line(99)[:40]                      # no trailing newline, invalid JSON
+    f.write_text(complete + torn)
+    assert len(_run(logs, cache)) == 3                # torn line contributes nothing
+
+    # The writer finishes that line and appends another.
+    with f.open("a") as handle:
+        handle.write(_claude_line(99)[40:] + "\n" + _claude_line(100) + "\n")
+    _bump_mtime(f)
+    out = _run(logs, cache)
+
+    assert out == _lp._parse_claude_file(f), "torn trailing line was lost or double-counted"
+    assert len(out) == 5
+    assert [r["r"] for r in out][-2:] == ["req_99", "req_100"]
+
+
+def test_shrinking_file_forces_a_full_reparse(tmp_path):
+    """Truncation/rotation invalidates the stored offset — it now points into unrelated
+    bytes, so the whole file must be re-read."""
+    logs, cache = tmp_path / "logs", tmp_path / "cache"
+    logs.mkdir(); cache.mkdir()
+    f = logs / "session.jsonl"
+    f.write_text("\n".join(_claude_line(i) for i in range(10)) + "\n")
+    assert len(_run(logs, cache)) == 10
+
+    f.write_text("\n".join(_claude_line(i) for i in range(2)) + "\n")   # rotated
+    _bump_mtime(f)
+    out = _run(logs, cache)
+    assert out == _lp._parse_claude_file(f)
+    assert len(out) == 2, "stale records survived a truncation"
+
+
+def test_same_size_rewrite_forces_a_full_reparse(tmp_path):
+    """Equal size + moved mtime means the bytes BEFORE the offset may have changed, so the
+    append-only assumption does not hold and _tail_parse must bail out."""
+    logs, cache = tmp_path / "logs", tmp_path / "cache"
+    logs.mkdir(); cache.mkdir()
+    f = logs / "session.jsonl"
+    f.write_text("\n".join(_claude_line(i, out_tokens=10) for i in range(4)) + "\n")
+    assert len(_run(logs, cache)) == 4
+
+    f.write_text("\n".join(_claude_line(i, out_tokens=99) for i in range(4)) + "\n")
+    _bump_mtime(f)
+    out = _run(logs, cache)
+    assert out == _lp._parse_claude_file(f)
+    assert all(r["u"]["output_tokens"] == 99 for r in out), "stale pre-rewrite records kept"
+
+
+def test_grown_rewrite_forces_a_full_reparse(tmp_path):
+    """A file REWRITTEN to a larger size passes the grew-only size check, and here the old
+    offset even still lands on a line boundary (same-length lines) — only the fingerprint
+    of the bytes before the offset can tell that the cached records are stale."""
+    logs, cache = tmp_path / "logs", tmp_path / "cache"
+    logs.mkdir(); cache.mkdir()
+    f = logs / "session.jsonl"
+    f.write_text("\n".join(_claude_line(i, out_tokens=10) for i in range(4)) + "\n")
+    assert len(_run(logs, cache)) == 4
+
+    f.write_text("\n".join(_claude_line(i, out_tokens=99) for i in range(6)) + "\n")
+    _bump_mtime(f)
+    out = _run(logs, cache)
+    assert out == _lp._parse_claude_file(f)
+    assert len(out) == 6
+    assert all(r["u"]["output_tokens"] == 99 for r in out), "stale pre-rewrite records kept"
+
+
+def test_unterminated_but_complete_final_line_is_counted_once(tmp_path):
+    """The final line is already valid JSON but its newline has not landed. Parsing it now
+    AND resuming before it next time would store the record twice (and the summarizer's
+    requestId dedup does not cover keyless records), so it must wait for its newline."""
+    logs, cache = tmp_path / "logs", tmp_path / "cache"
+    logs.mkdir(); cache.mkdir()
+    f = logs / "session.jsonl"
+    f.write_text(_claude_line(0) + "\n" + _claude_line(1))          # no trailing "\n"
+    assert [r["r"] for r in _run(logs, cache)] == ["req_0"]
+
+    with f.open("a") as handle:
+        handle.write("\n" + _claude_line(2) + "\n")
+    _bump_mtime(f)
+    out = _run(logs, cache)
+    assert [r["r"] for r in out] == ["req_0", "req_1", "req_2"]
+    assert out == _lp._parse_claude_file(f)
+
+
+def test_append_during_the_parse_is_neither_lost_nor_doubled(tmp_path, monkeypatch):
+    """The agent appends a whole line after the parse window was fixed. The cached records
+    must stay exactly the parse of [0, off): the late line is picked up — once — by the
+    NEXT run's tail parse, without falling back to a full reparse."""
+    logs, cache = tmp_path / "logs", tmp_path / "cache"
+    logs.mkdir(); cache.mkdir()
+    f = logs / "session.jsonl"
+    f.write_text(_claude_line(0) + "\n")
+    assert len(_run(logs, cache)) == 1
+
+    with f.open("a") as handle:
+        handle.write(_claude_line(1) + "\n")
+    _bump_mtime(f)
+    real_offset = _lp._safe_resume_offset
+
+    def offset_then_concurrent_append(path):
+        end = real_offset(path)
+        with path.open("a") as handle:
+            handle.write(_claude_line(2) + "\n")
+        return end
+
+    monkeypatch.setattr(_lp, "_safe_resume_offset", offset_then_concurrent_append)
+    assert [r["r"] for r in _run(logs, cache)] == ["req_0", "req_1"]
+    monkeypatch.setattr(_lp, "_safe_resume_offset", real_offset)
+
+    starts = []
+    real_parser = _lp._parse_claude_file
+
+    def spy(path, start=0, end=None):
+        starts.append(start)
+        return real_parser(path, start, end)
+
+    out = _lp._cached_log_records(logs, "*.jsonl", cache / "claude_logs.json", spy,
+                                  _lp._CLAUDE_PARSE_VERSION, incremental=True)
+    assert [r["r"] for r in out] == ["req_0", "req_1", "req_2"]
+    assert len(starts) == 1 and starts[0] > 0, f"expected one tail parse, got starts={starts}"
+
+
+def test_safe_resume_offset_stops_at_the_last_complete_line(tmp_path):
+    f = tmp_path / "x.jsonl"
+    f.write_text("aaa\nbbb\nccc")                 # trailing line unterminated
+    assert _lp._safe_resume_offset(f) == 8        # just past the second "\n"
+    f.write_text("aaa\nbbb\n")
+    assert _lp._safe_resume_offset(f) == 8
+    f.write_text("no newline at all")
+    assert _lp._safe_resume_offset(f) == 0
+    f.write_text("")
+    assert _lp._safe_resume_offset(f) == 0
+    assert _lp._safe_resume_offset(tmp_path / "missing.jsonl") is None   # unreadable != empty
+
+
+def test_stateful_parsers_are_not_wired_for_incremental():
+    """Codex carries current_model and Grok carries model_by_sid across lines, so resuming
+    mid-file would silently mis-attribute models. Only the stateless Claude parser opts in."""
+    import inspect
+    source = inspect.getsource(_lp)
+    calls = []
+    for m in re.finditer(r"(?<!def )_cached_log_records\(", source):
+        depth, i = 1, m.end()
+        while i < len(source) and depth:
+            depth += {"(": 1, ")": -1}.get(source[i], 0)
+            i += 1
+        calls.append(source[m.end():i - 1])
+    assert len(calls) == 4, f"expected one call per provider, found {len(calls)}"
+    for call in calls:
+        if "_parse_claude_file" in call:
+            assert "incremental=True" in call
+        else:
+            assert "incremental" not in call, f"a stateful parser opted in:\n{call}"
