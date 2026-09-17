@@ -7,6 +7,7 @@ import os
 import re
 import stat
 import time
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +36,7 @@ _UNSET = object()
 
 _PARSE_CACHE_DIR = Path.home() / ".tallybar" / "cache"
 _CACHE_SCHEMA_VERSION = 1          # bump to invalidate ALL parse caches at once
-_CLAUDE_PARSE_VERSION = 2          # bump when _parse_claude_file's output shape changes
+_CLAUDE_PARSE_VERSION = 3          # bump when _parse_claude_file's output shape changes
 _CODEX_PARSE_VERSION = 2           # bump when _parse_codex_file's output shape changes
 _GROK_PARSE_VERSION = 3            # bump when _parse_grok_file's output shape changes
 _GEMINI_PARSE_VERSION = 2          # bump when _parse_gemini_file's output shape changes
@@ -68,9 +69,88 @@ def _save_parse_cache(cache_path: Path, parse_version: int,
         pass
 
 
+def _safe_resume_offset(path: Path) -> int | None:
+    """Byte offset just past the file's LAST newline — i.e. the end of the last COMPLETE
+    line (0 when there is none; None when the file cannot be read). Resuming here can never
+    land mid-record: a partially written trailing line (the agent is still streaming into
+    this file) is excluded, so it gets parsed whole on the next refresh instead of being
+    split across two parses and lost. Scans backwards from EOF in 8 KiB chunks, so it costs
+    a couple of reads rather than a full file scan."""
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            pos = handle.tell()
+            while pos > 0:
+                start = max(0, pos - 8192)
+                handle.seek(start)
+                buf = handle.read(pos - start)
+                idx = buf.rfind(b"\n")
+                if idx != -1:
+                    return start + idx + 1
+                pos = start
+    except OSError:
+        return None
+    return 0
+
+
+def _offset_fingerprint(path: Path, offset: int) -> int | None:
+    """CRC32 of the (up to) 256 bytes that END at ``offset``. Stored beside ``off`` so a
+    later tail parse can prove the bytes it is about to skip are still the bytes it parsed:
+    a file REWRITTEN to a larger size passes the grew-only size check, but its content
+    before the old offset differs, so the fingerprint does not match."""
+    try:
+        with path.open("rb") as handle:
+            start = max(0, offset - 256)
+            handle.seek(start)
+            buf = handle.read(offset - start)
+    except OSError:
+        return None
+    if len(buf) != offset - start:
+        return None
+    return zlib.crc32(buf)
+
+
+def _tail_parse(path: Path, prev: dict[str, Any], parser, size: int,
+                end: int) -> list[dict[str, Any]] | None:
+    """Extend a cached file's records with only the complete lines appended since the last
+    parse, i.e. the bytes ``[prev["off"], end)``.
+
+    Returns the full record list, or None when anything looks off — the caller then falls
+    back to a full reparse. FAIL-CLOSED by design: every bail-out costs one ordinary full
+    parse, whereas a wrong incremental result would silently corrupt the cost history
+    until the cache version is next bumped.
+
+    Bails out when the previous entry lacks a usable offset/fingerprint/records list, when
+    the file SHRANK (truncated or rotated — the old offset now points into unrelated
+    bytes), when the size is unchanged but the mtime moved (an in-place rewrite), and when
+    the bytes just before the old offset no longer match their fingerprint (rewritten AND
+    grown). Append-only growth is the only case it accepts.
+    """
+    prev_off = prev.get("off")
+    prev_fp = prev.get("fp")
+    prev_recs = prev.get("records")
+    prev_size = prev.get("size")
+    if (not isinstance(prev_off, int) or not isinstance(prev_fp, int)
+            or not isinstance(prev_recs, list) or not isinstance(prev_size, int)):
+        return None
+    if size <= prev_size:              # shrank, or unchanged-size rewrite
+        return None
+    if prev_off < 0 or prev_off > end:
+        return None
+    if _offset_fingerprint(path, prev_off) != prev_fp:
+        return None
+    if end == prev_off:                # grew, but only by a still-unterminated line
+        return list(prev_recs)
+    tail = parser(path, prev_off, end)
+    if tail is None:
+        return None
+    return prev_recs + tail
+
+
 def _cached_log_records(root: Path, pattern: str, cache_path: Path | None,
                         parser, parse_version: int, walker=None,
-                        deadline: float | None = None) -> list[dict[str, Any]]:
+                        deadline: float | None = None,
+                        incremental: bool = False) -> list[dict[str, Any]]:
     old_files = _load_parse_cache(cache_path, parse_version) if cache_path is not None else {}
     new_files: dict[str, dict[str, Any]] = {}
     records: list[dict[str, Any]] = []
@@ -88,15 +168,44 @@ def _cached_log_records(root: Path, pattern: str, cache_path: Path | None,
             continue
         key = str(path)
         prev = old_files.get(key)
+        offset: int | None = None
+        fingerprint: int | None = None
+        recs: list[dict[str, Any]] | None = None
         if (prev is not None and prev.get("mtime") == st.st_mtime_ns
                 and prev.get("size") == st.st_size):
             recs = prev.get("records") or []
-        else:
+            off, fp = prev.get("off"), prev.get("fp")
+            if isinstance(off, int) and isinstance(fp, int):
+                offset, fingerprint = off, fp
+        elif not incremental:
             recs = parser(path)
             if recs is None:
                 continue
             changed = True
-        new_files[key] = {"mtime": st.st_mtime_ns, "size": st.st_size, "records": recs}
+        else:
+            # The parse window's END is fixed BEFORE reading and the parser is bounded to
+            # it, so the cached records are exactly the parse of bytes [0, off) no matter
+            # what the agent appends meanwhile. (Parsing to EOF and measuring the offset
+            # afterwards double-counted a final line whose "\n" had not landed yet.)
+            end = _safe_resume_offset(path)
+            if end is None:
+                continue
+            if prev is not None:
+                # An active session's JSONL is appended to constantly, so "changed" is the
+                # common case during use and a full reparse of a large file was the single
+                # most expensive thing a refresh did.
+                recs = _tail_parse(path, prev, parser, st.st_size, end)
+            if recs is None:
+                recs = parser(path, 0, end)
+                if recs is None:
+                    continue
+            offset, fingerprint = end, _offset_fingerprint(path, end)
+            changed = True
+        entry: dict[str, Any] = {"mtime": st.st_mtime_ns, "size": st.st_size, "records": recs}
+        if offset is not None and fingerprint is not None:
+            entry["off"] = offset
+            entry["fp"] = fingerprint
+        new_files[key] = entry
         records.extend(recs)
     if cache_path is not None and complete and (changed or len(new_files) != len(old_files)):
         _save_parse_cache(cache_path, parse_version, new_files)
@@ -111,17 +220,40 @@ def _resolve_cache_path(explicit_dir, provided_root, name: str) -> Path | None:
     return Path(explicit_dir) / name
 
 
-def _parse_claude_file(path: Path) -> list[dict[str, Any]] | None:
+def _parse_claude_file(path: Path, start: int = 0,
+                       end: int | None = None) -> list[dict[str, Any]] | None:
+    """Parse a Claude session JSONL — the BYTE range ``[start, end)`` of it when given
+    (both must sit on line boundaries; ``end=None`` reads to EOF).
+
+    Safe to resume because this parser is stateless across lines — each record is decided
+    entirely by its own line. ``_parse_codex_file`` (carries ``current_model``) and
+    ``_parse_grok_file`` (carry ``model_by_sid``/``last_global_model``) are NOT, which is
+    why only this one is wired for incremental parsing in ``_cached_log_records``.
+
+    Opened in binary so ``start`` is a real byte offset: text-mode ``seek()`` only accepts
+    opaque cookies from ``tell()``. ``json.loads`` takes bytes directly, and decoding a
+    mangled line now raises UnicodeDecodeError, which is skipped alongside JSONDecodeError
+    rather than escaping the way it used to in text mode.
+    """
     try:
-        handle = path.open("r", encoding="utf-8")
+        handle = path.open("rb")
     except OSError:
         return None
     out: list[dict[str, Any]] = []
     with handle:
+        if start > 0:
+            handle.seek(start)
+        remaining = None if end is None else end - start
         for line in handle:
+            if remaining is not None:
+                remaining -= len(line)
+                if remaining < 0:      # past the window: appended after ``end`` was fixed
+                    break
             try:
                 record = json.loads(line)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            if not isinstance(record, dict):
                 continue
             if record.get("type") != "assistant":
                 continue
@@ -358,7 +490,7 @@ def local_claude_token_summary(
 
     for record in _cached_log_records(root, "*.jsonl", cache_path,
                                        _parse_claude_file, _CLAUDE_PARSE_VERSION,
-                                       deadline=deadline):
+                                       deadline=deadline, incremental=True):
         timestamp = parse_timestamp(record["t"])
         if timestamp is None or timestamp < history_start:
             continue
