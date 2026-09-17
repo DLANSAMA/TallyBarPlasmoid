@@ -37,6 +37,11 @@ jobs:
         run: |
           flake8 --select=F io.github.dlansama.tallybar/contents/code/ tests/ integrations/
 
+      - name: QML static analysis (qmllint)
+        run: |
+          sudo apt-get update && sudo apt-get install -y qt6-declarative-dev-tools || true
+          make qmllint
+
       - name: Type-check (mypy)
         run: |
           # Strict since the tree was made type-clean; `make check` blocks on this

@@ -168,5 +168,5 @@ async def test_bounded_provider_error_shape_is_redacted():
     async def _boom():
         raise RuntimeError("token Bearer abc123DEF leaked")
     out = await http_helpers.bounded_provider(_boom(), timeout=1.0, fallback={"label": "Codex"})
-    assert out["status"] == "error"
+    assert out["status"] == "api-error"
     assert "Bearer [REDACTED]" in out["message"] and "abc123DEF" not in out["message"]

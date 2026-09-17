@@ -6,7 +6,7 @@ measurements: [`docs/DEVNOTES.md`](docs/DEVNOTES.md).
 ## What this is
 
 TallyBar is a **KDE Plasma 6 widget (Plasmoid)** monitoring AI session usage (Codex/OpenAI, Gemini, Claude, Antigravity). Two halves:
-- **QML frontend** (`io.github.dlansama.tallybar/contents/ui/`) — Plasma applet UI.
+- **QML frontend** (`io.github.dlansama.tallybar/contents/ui/`) — Plasma applet UI, with modular sections in `ui/components/` (`UsageLimitCard.qml`, `ProviderTabBar.qml`, `CostSection.qml`, `ActionFooter.qml`, etc.) and helper logic in `ui/lib/ui_helpers.js`.
 - **Python backend** (`io.github.dlansama.tallybar/contents/code/`) — one-shot CLI, prints JSON, exits.
 
 Communication is a process boundary: QML's `Plasma5Support.DataSource` runs `python3 backend.py --once ...`, captures stdout, `JSON.parse`s it. No daemon. (`-B` intentionally omitted — `__pycache__` speeds re-runs.)
@@ -44,7 +44,8 @@ Runtime: stdlib-only (no third-party deps). `.venv` is for pytest only. Release:
 - `providers/cost.py` — cost enrichment + Antigravity token-capture pipeline (`update_antigravity_token_ledger`).
 - `providers/__init__.py` — re-exports public names backend.py imports.
 - `parsers.py` — pure payload → limit-row functions. No I/O.
-- `accounting.py` — pure token/cost math, pricing lookups, usage-bucket helpers. No network. (Largest file.)
+- `accounting/` — package decomposing pure token/cost math, pricing lookups, log parsers, and usage-bucket helpers (`buckets.py`, `formatting.py`, `limits.py`, `log_parsers.py`, `pricing.py`). Pure stdlib, no network. Re-exported via `accounting/__init__.py`.
+- `proto_wire.py` — zero-dependency LEB128 varint and protobuf wire-format parser for Antigravity trajectories.
 - `pricing_data.py` — LiteLLM catalog fetcher, disk-cached, USD per **million** tokens (MTok) everywhere.
 - `cookies.py` / `crypto.py` — browser cookie extraction; `crypto.py` uses ctypes + KDE KWallet D-Bus.
 - `http_helpers.py` — `http_json`/`http_text`/`http_json_async`, `bounded_provider`, `run_threaded_provider`.

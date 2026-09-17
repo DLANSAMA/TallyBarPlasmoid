@@ -361,6 +361,16 @@ def test_status_notification_ambiguous_status_holds_armed_state(tmp_path, monkey
     assert backend.compute_notifications(_status_providers(claude_status="api-error"), cfg) == []
 
 
+def test_status_notification_fires_on_generic_error(tmp_path, monkeypatch):
+    """Defensive backstop: status='error' also triggers status notifications."""
+    monkeypatch.setattr(backend, "NOTIFY_STATE_PATH", tmp_path / "n.json")
+    cfg = {"notificationsEnabled": True}
+    notifs = backend.compute_notifications(_status_providers(claude_status="error"), cfg)
+    assert len(notifs) == 1
+    assert notifs[0]["provider"] == "claude"
+    assert notifs[0]["status"] == "error"
+
+
 def test_status_notification_disabled_tracks_but_emits_nothing(tmp_path, monkeypatch):
     # Notifications off: no emit, but the armed-set still tracks the transition so a later
     # enable doesn't replay it (mirrors the usage/budget behaviour).

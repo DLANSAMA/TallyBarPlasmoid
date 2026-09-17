@@ -4,6 +4,8 @@ import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 import org.kde.plasma.core as PlasmaCore
 import "lib/format.js" as Fmt
+import "lib/ui_helpers.js" as UIHelpers
+import "components"
 
 Item {
     id: root
@@ -37,18 +39,11 @@ Item {
     property string costGraphMode: "week"
     readonly property real settingsWidth: 300
     // QML font.family takes a single family name (not a CSS fallback stack), so
-    // resolve to the first installed family from an Apple-first preference list.
+    // resolve to the first installed family from an Apple-first preference list via Fmt.pickFont.
     // SF Pro Text/Display mirror macOS's optical-size split (body vs. headings).
     readonly property var availableFonts: Qt.fontFamilies()
-    function pickFont(prefs) {
-        for (var i = 0; i < prefs.length; ++i) {
-            if (root.availableFonts.indexOf(prefs[i]) >= 0)
-                return prefs[i];
-        }
-        return ""; // empty -> Qt's default application font
-    }
-    readonly property string uiFont: root.pickFont(["SF Pro Text", "SF Pro", "Inter", "Roboto", "Noto Sans"])
-    readonly property string displayFont: root.pickFont(["SF Pro Display", "SF Pro", "Inter", "Roboto", "Noto Sans"])
+    readonly property string uiFont: Fmt.pickFont(root.availableFonts, ["SF Pro Text", "SF Pro", "Inter", "Roboto", "Noto Sans"])
+    readonly property string displayFont: Fmt.pickFont(root.availableFonts, ["SF Pro Display", "SF Pro", "Inter", "Roboto", "Noto Sans"])
     readonly property real contentWidth: 380
     readonly property real availableScreenHeight: screenGeometry && Number(screenGeometry.height) > 0 ? Number(screenGeometry.height) : Number(Screen.height || 760)
     readonly property real drawerWidth: 312
@@ -166,12 +161,7 @@ Item {
     // (tests/test_compact_count_parity.py), so the panel and the backend cost lines can't drift.
 
     function tabLabel(provider) {
-        if (provider === "gemini") return "Gemini";
-        if (provider === "antigravity") return "Antigravity";
-        if (provider === "codex") return "Codex";
-        if (provider === "claude") return "Claude";
-        if (provider === "grok") return "Grok";
-        return "Codex";
+        return UIHelpers.tabLabel(provider);
     }
 
     function switcherIconSource(provider, selected) {
@@ -432,13 +422,7 @@ Item {
     // The site the user logs into for a given provider's cookies (used by the
     // missing-cookies remediation hint, Item 1).
     function providerLoginSite(providerKey) {
-        switch (providerKey) {
-        case "claude": return "claude.ai";
-        case "codex": return "chatgpt.com";
-        case "gemini": return "gemini.google.com";
-        case "antigravity": return "antigravity";
-        default: return providerKey;
-        }
+        return UIHelpers.providerLoginSite(providerKey);
     }
 
     // The full login URL for a provider whose empty state is missing-cookies/unauthorized —
@@ -446,12 +430,7 @@ Item {
     // Empty for providers with no browser-cookie login (e.g. Antigravity's OAuth/local path),
     // which suppresses the button for them.
     function providerLoginUrl(providerKey) {
-        switch (providerKey) {
-        case "claude": return "https://claude.ai/login";
-        case "codex": return "https://chatgpt.com/";
-        case "gemini": return "https://gemini.google.com/";
-        default: return "";
-        }
+        return UIHelpers.providerLoginUrl(providerKey);
     }
 
     // Defense-in-depth: only hand https strings to the browser. Backend-supplied URLs
@@ -540,24 +519,7 @@ Item {
     }
     // Mirror of CompactRepresentation.statusIsBad — the bad/actionable statuses.
     function statusIsBad(status) {
-        switch (status) {
-        case "missing-cookies":
-        case "missing-cli":
-        case "unauthorized":
-        case "api-error":
-        case "error":
-        case "timeout":
-        case "wallet-locked":
-        case "wallet-state-unknown":
-        case "not-running":
-        case "no-port":
-        case "missing-oauth":
-        case "oauth-expired":
-        case "oauth-unavailable":
-            return true;
-        default:
-            return false;
-        }
+        return UIHelpers.statusIsBad(status);
     }
 
     // A provider tab whose live status is bad while it may still show cached limits — the
@@ -595,29 +557,11 @@ Item {
     // Render "$188" as "$ 188"; dropped in the refactor while callers stayed, which
     // silently killed the Today / Last 30 days cost lines.
     function menuMoneySpacing(text) {
-        return String(text || "").replace(/\$(?=\d)/g, "$ ");
+        return UIHelpers.menuMoneySpacing(text);
     }
 
     function normalizedCostLine(value, label) {
-        const text = String(value || "").trim();
-        if (text.length === 0)
-            return "";
-
-        const spacedText = root.menuMoneySpacing(text);
-        const lower = text.toLowerCase();
-        const lowerLabel = String(label || "").toLowerCase();
-        if (lower.indexOf(lowerLabel + ":") === 0)
-            return spacedText;
-
-        if (label === "Today" && lower.endsWith(" today")) {
-            const amount = text.slice(0, text.length - " today".length).trim();
-            return amount.length > 0 ? "Today: " + root.menuMoneySpacing(amount) : spacedText;
-        }
-        if (label === "Last 30 days" && lower.endsWith(" last 30 days")) {
-            const amount = text.slice(0, text.length - " last 30 days".length).trim();
-            return amount.length > 0 ? "Last 30 days: " + root.menuMoneySpacing(amount) : spacedText;
-        }
-        return spacedText;
+        return UIHelpers.normalizedCostLine(value, label);
     }
 
     function todayCostText(cost) {
@@ -633,12 +577,7 @@ Item {
     }
 
     function costLineValue(text, label) {
-        const value = String(text || "").trim();
-        const prefix = String(label || "") + ":";
-        if (value.toLowerCase().indexOf(prefix.toLowerCase()) === 0)
-            return value.slice(prefix.length).trim();
-
-        return value;
+        return UIHelpers.costLineValue(text, label);
     }
 
     // Only show the cost section when we actually have data — empty
@@ -946,47 +885,15 @@ Item {
     }
 
     function providerShortLabel(key) {
-        if (key === "codex") return "Codex";
-        if (key === "claude") return "Claude";
-        if (key === "gemini") return "Gemini";
-        if (key === "antigravity") return "Antigr.";
-        if (key === "grok") return "Grok";
-        return key;
+        return UIHelpers.providerShortLabel(key);
     }
 
     function dashboardUrl() {
-        if (root.selectedProvider === "gemini")
-            return "https://gemini.google.com/usage";
-
-        if (root.selectedProvider === "antigravity")
-            return "https://gemini.google.com/usage";
-
-        if (root.selectedProvider === "codex")
-            return "https://chatgpt.com/codex/settings/usage";
-
-        if (root.selectedProvider === "claude")
-            return "https://claude.ai/settings/usage";
-
-        if (root.selectedProvider === "grok")
-            return "https://grok.com/?_s=usage";
-
-        return "https://chatgpt.com/codex/settings/usage";
+        return UIHelpers.dashboardUrl(root.selectedProvider);
     }
 
     function statusUrl() {
-        if (root.selectedProvider === "gemini" || root.selectedProvider === "antigravity")
-            return "https://www.google.com/appsstatus/dashboard/products/npdyhgECDJ6tB66MxXyo/history";
-
-        if (root.selectedProvider === "codex")
-            return "https://status.openai.com/";
-
-        if (root.selectedProvider === "claude")
-            return "https://status.claude.com/";
-
-        if (root.selectedProvider === "grok")
-            return "https://status.x.ai/";
-
-        return "https://status.openai.com/";
+        return UIHelpers.statusUrl(root.selectedProvider);
     }
 
     function actionIcon(name) {
@@ -1223,17 +1130,7 @@ Item {
     }
 
     function compactUsd(value) {
-        const v = Number(value || 0);
-        if (v >= 1000)
-            return "$" + (v / 1000).toFixed(1).replace(/\.0$/, "") + "K";
-        if (v >= 100)
-            return "$" + Math.round(v);
-        // A nonzero figure must never render as "$0.00" — e.g. a trailing burn rate of
-        // ~$0.004/day (which is enough to SHOW the burn-rate row) would otherwise read as
-        // zero spend. Floor it to a visible "<$0.01" instead.
-        if (v > 0 && v < 0.01)
-            return "<$0.01";
-        return "$" + v.toFixed(2);
+        return UIHelpers.compactUsd(value);
     }
 
     // Top per-model cost rows (from the backend's modelBreakdown, already top-6 by $),
@@ -1251,12 +1148,7 @@ Item {
         let s = String(name || "").trim();
         if (s.length === 0 || s === "Unknown")
             return i18n("Other");
-        if (s.indexOf(" ") >= 0)
-            return s;  // already a display name
-        s = s.replace(/-\d{8}$/, "");                               // drop a trailing date snapshot
-        s = s.replace(/-(\d)/g, " $1").replace(/-/g, " ");          // "claude-opus-4-7" -> "claude opus 4 7"
-        s = s.replace(/(\d) (\d)/g, "$1.$2");                        // "4 7" -> "4.7"
-        return s.replace(/\b\w/g, (c) => c.toUpperCase());          // title-case words
+        return UIHelpers.prettyModelName(s);
     }
 
     function metricsBodyHeight() {
@@ -1368,263 +1260,14 @@ Item {
         anchors.bottomMargin: 10
         spacing: 8
 
-        Item {
+        ProviderTabBar {
             id: providerDock
-
-            Layout.fillWidth: true
-            Layout.leftMargin: -5
-            Layout.rightMargin: -5
-            Layout.preferredHeight: 58
-
-            Row {
-                // Content-width (not full-width) so a capped inter-tab gap clusters few-tab
-                // layouts centered instead of pinning them to opposite dock edges. At the 4-/5-tab
-                // defaults the gap fills to the padded width, so centring reproduces the same
-                // ~16px side margin the old left/right anchors gave — pixel-identical there.
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-                spacing: root.switcherComputedGap(parent.width)
-
-                Repeater {
-                    model: Math.max(1, root.switcherTabs().length)
-
-                    delegate: Item {
-                        id: providerTab
-
-                        required property int index
-                        property string providerKey: root.switcherTabs()[Math.min(index, root.switcherTabs().length - 1)]
-                        property bool selected: root.selectedProvider === providerKey
-                        property var tabProvider: root.telemetry && root.telemetry.providers ? root.telemetry.providers[providerKey] : ({
-                        })
-                        property real sessionPct: root.providerSessionPercent(providerKey)
-                        readonly property real tabContentWidth: Math.max(root.switcherTabWidth(providerKey), 54)
-
-                        width: root.switcherTabWidth(providerKey)
-                        height: parent.height
-
-                        // Item 1: a provider whose live status is bad (api-error / timeout /
-                        // unauthorized / wallet-locked) while it may still show cached data —
-                        // surface the otherwise-invisible message on hover, plus the glyph below.
-                        QQC2.ToolTip.delay: 350
-                        QQC2.ToolTip.text: root.providerMuted(providerTab.providerKey)
-                            ? i18n("Muted — alerts off")
-                            : root.tabStatusMessage(providerTab.providerKey)
-                        QQC2.ToolTip.visible: tabMouse.containsMouse
-                            && (root.tabStatusBad(providerTab.providerKey) || root.providerMuted(providerTab.providerKey))
-
-                        Rectangle {
-                            id: tabSurface
-
-                            anchors.horizontalCenter: parent.horizontalCenter
-                            anchors.top: parent.top
-                            anchors.bottom: parent.bottom
-                            anchors.topMargin: 6
-                            anchors.bottomMargin: 6
-                            width: providerTab.tabContentWidth
-                            radius: 9
-                            color: providerTab.selected ? Qt.rgba(1, 1, 1, 0.18) : (tabMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.08) : "transparent")
-                            border.width: 1
-                            border.color: providerTab.selected ? Qt.rgba(1, 1, 1, 0.12) : "transparent"
-
-                            // Per-tab session-usage preview: faint track + a fill whose width is
-                            // the provider's session percent, shown on every tab so usage is
-                            // legible before selecting. Selected tab reads brightest.
-                            Rectangle {
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.bottom: parent.bottom
-                                anchors.leftMargin: 7
-                                anchors.rightMargin: 7
-                                anchors.bottomMargin: 4
-                                height: 2
-                                radius: height / 2
-                                color: root.neutralUsageColor(providerTab.selected ? 0.22 : 0.14)
-
-                                Rectangle {
-                                    anchors.left: parent.left
-                                    anchors.top: parent.top
-                                    anchors.bottom: parent.bottom
-                                    width: providerTab.sessionPct > 0 ? Math.max(parent.height, parent.width * providerTab.sessionPct / 100) : 0
-                                    radius: parent.radius
-                                    color: root.tabUsageColor(providerTab.providerKey, providerTab.sessionPct, providerTab.selected)
-                                    opacity: providerTab.selected ? 1.0 : 0.8
-
-                                    Behavior on width {
-                                        SpringAnimation {
-    spring: 4.0
-    damping: 0.85
-    epsilon: 0.01
-}
-
-                                    }
-
-                                }
-
-                            }
-
-                            Behavior on color {
-                                ColorAnimation {
-                                    duration: 140
-                                    easing.type: Easing.OutCubic
-                                }
-
-                            }
-
-                        }
-
-                        Kirigami.Icon {
-                            id: providerIcon
-
-                            anchors.horizontalCenter: tabSurface.horizontalCenter
-                            anchors.top: tabSurface.top
-                            anchors.topMargin: 6
-                            width: root.logoPixelSize(providerTab.providerKey, 16)
-                            height: width
-                            source: root.switcherIconSource(providerTab.providerKey, providerTab.selected)
-                            // Recolor every provider glyph to the provider-name colour (white when
-                            // selected, light grey otherwise) so the baked-in SVG tints never show.
-                            isMask: true
-                            color: providerTab.selected ? root.primaryTextColor(0.96) : root.mutedTextColor(tabMouse.containsMouse ? 0.82 : 0.68)
-                            smooth: true
-                        }
-
-                        Text {
-                            anchors.left: tabSurface.left
-                            anchors.right: tabSurface.right
-                            anchors.top: providerIcon.bottom
-                            anchors.topMargin: 0
-                            color: providerTab.selected ? root.primaryTextColor(0.96) : root.mutedTextColor(tabMouse.containsMouse ? 0.78 : 0.62)
-                            elide: Text.ElideRight
-                            font.family: root.uiFont
-                            font.pixelSize: root.providerTabFontSize(providerTab.providerKey)
-                            font.weight: providerTab.selected ? Font.DemiBold : Font.Medium
-                            horizontalAlignment: Text.AlignHCenter
-                            text: root.tabLabel(providerTab.providerKey)
-                        }
-
-                        // Small amber warning glyph on a bad-status tab (Item 1).
-                        Kirigami.Icon {
-                            anchors.right: tabSurface.right
-                            anchors.top: tabSurface.top
-                            anchors.rightMargin: 4
-                            anchors.topMargin: 4
-                            width: 11
-                            height: 11
-                            visible: root.tabStatusBad(providerTab.providerKey)
-                            source: "data-warning"
-                            isMask: true
-                            color: "#e0a23c"
-                        }
-
-                        // Feature 7: a muted-provider tab shows a small mute glyph instead of the
-                        // bad-status warning (tabStatusBad is suppressed while muted).
-                        Kirigami.Icon {
-                            anchors.right: tabSurface.right
-                            anchors.top: tabSurface.top
-                            anchors.rightMargin: 4
-                            anchors.topMargin: 4
-                            width: 11
-                            height: 11
-                            visible: root.providerMuted(providerTab.providerKey)
-                            source: "audio-volume-muted"
-                            isMask: true
-                            color: root.mutedTextColor(0.7)
-                        }
-
-                        MouseArea {
-                            id: tabMouse
-                            Accessible.role: Accessible.Button
-                                                        Accessible.name: i18n("%1 tab", root.tabLabel(providerTab.providerKey))
-                                                        Accessible.description: i18n("Switch to the %1 provider tab", root.tabLabel(providerTab.providerKey))
-
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            activeFocusOnTab: true
-                            onClicked: (mouse) => {
-                                root.costDrawerOpen = false;
-                                root.providerRequested(providerTab.providerKey);
-                            }
-                            Keys.onPressed: (event) => {
-                                if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) {
-                                    event.accepted = true;
-                                    root.costDrawerOpen = false;
-                                    root.providerRequested(providerTab.providerKey);
-                                }
-                            }
-                        }
-
-                        // Visible keyboard-focus indicator — matches tabSurface's rounding,
-                        // invisible unless tabMouse actually has keyboard focus.
-                        Rectangle {
-                            anchors.fill: tabSurface
-                            radius: tabSurface.radius
-                            color: "transparent"
-                            border.width: 2
-                            border.color: root.accentColor()
-                            visible: tabMouse.activeFocus
-                        }
-
-                    }
-
-                }
-
-            }
-
+            root: root
         }
 
-        Item {
+        ProviderHeader {
             id: heroPanel
-
-            Layout.fillWidth: true
-            Layout.preferredHeight: 50
-
-            Text {
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.leftMargin: 0
-                anchors.rightMargin: 10
-                anchors.topMargin: 3
-                color: root.primaryTextColor()
-                elide: Text.ElideRight
-                font.family: root.displayFont
-                font.pixelSize: 13
-                font.weight: Font.DemiBold
-                textFormat: Text.PlainText
-                text: root.providerData().label
-            }
-
-            Text {
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.rightMargin: 10
-                anchors.topMargin: 30
-                // Amber (fixed palette — never Kirigami/PlasmaCore theme) once the snapshot is
-                // stale (> 2× refresh interval), so an old "Updated 18m ago" actually reads as old.
-                // Also amber when THIS provider's entry is a carried-forward (per-provider stale)
-                // one, even if the overall snapshot timestamp is fresh.
-                color: (root.stalenessLevel() > 0 || root.refreshPaused() || root.providerStale()) ? "#e0a23c" : root.mutedTextColor(0.66)
-                elide: Text.ElideRight
-                font.family: root.uiFont
-                font.pixelSize: 11
-                font.weight: Font.Normal
-                textFormat: Text.PlainText
-                text: root.providerSubtitleText()
-            }
-
-            Rectangle {
-                id: separator
-
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                height: 1
-                color: root.separatorColor(0.14)
-            }
-
+            root: root
         }
 
         // Degraded-state banner: first UI consumer of telemetry.diagnostics (cost-scan
@@ -1689,636 +1332,24 @@ Item {
                     // parent.width as 0 pre-layout, then the Behavior animates 0 -> value).
                     model: root.usageLimits().length
 
-                delegate: Item {
-                    id: row
-
-                    required property int index
-                    // Reactive lookup (re-evaluates when telemetry changes) instead of a
-                    // model-provided role, so the persistent delegate refreshes in place.
-                    property var modelData: root.usageLimits()[index] || ({})
-                    property real pct: root.safePercent(modelData.percent || 0)
-                    property bool warning: pct >= 72
-                    property bool critical: pct >= 90
-                    property real pulse: 1.0
-
-                    SequentialAnimation {
-
-                        id: rowPulseAnim
-
-                        running: root.visible && row.warning
-
-                        loops: Animation.Infinite
-
-                        NumberAnimation { target: row; property: "pulse"; to: 0.62; duration: row.critical ? 450 : 1250; easing.type: Easing.InOutSine }
-
-                        NumberAnimation { target: row; property: "pulse"; to: 1.0; duration: row.critical ? 450 : 1250; easing.type: Easing.InOutSine }
-
+                    delegate: UsageLimitCard {
+                        root: root
                     }
-
-                    onWarningChanged: {
-
-                        if (!warning) {
-
-                            rowPulseAnim.stop();
-
-                            pulse = 1.0;
-
-                        }
-
-                    }
-                    property string detailLeft: root.metricDetailLeftText(modelData)
-                    property string detailRight: root.metricDetailRightText(modelData)
-                    property string detailText: root.metricDetailText(modelData)
-                    property bool hasSplitDetail: detailLeft.length > 0 || detailRight.length > 0
-                    property bool hasDetailLine: detailText.length > 0
-
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: root.rowMetricHeight(modelData)  // single source, mirrored in metricsBodyHeight()
-                    clip: false
-
-                    Text {
-                        id: label
-
-                        anchors.left: parent.left
-                        anchors.top: parent.top
-                        anchors.topMargin: 1
-                        color: root.primaryTextColor()
-                        elide: Text.ElideRight
-                        font.family: root.uiFont
-                        font.pixelSize: 13
-                        font.weight: Font.DemiBold
-                        textFormat: Text.PlainText
-                        text: modelData.label || i18n("Usage")
-                        width: Math.min(implicitWidth, Math.max(0, parent.width - (sublabel.visible ? sublabel.implicitWidth + 7 : 0)))
-                    }
-
-                    Text {
-                        id: sublabel
-
-                        anchors.left: label.right
-                        anchors.leftMargin: 7
-                        anchors.baseline: label.baseline
-                        visible: text.length > 0
-                        color: root.mutedTextColor(0.45)
-                        elide: Text.ElideRight
-                        font.family: root.uiFont
-                        font.pixelSize: 11
-                        font.weight: Font.Normal
-                        textFormat: Text.PlainText
-                        text: String(row.modelData && row.modelData.sublabel ? row.modelData.sublabel : "")
-                        width: Math.min(implicitWidth, Math.max(0, parent.width - label.width - 7))
-                    }
-
-                    Rectangle {
-                        id: track
-
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: label.bottom
-                        anchors.topMargin: 8
-                        height: 5
-                        radius: 2.5
-                        color: root.neutralUsageColor(0.2)
-
-                        Rectangle {
-                            anchors.verticalCenter: parent.verticalCenter
-                            height: parent.height
-                            width: row.pct > 0 ? Math.max(parent.height, parent.width * row.pct / 100) : 0
-                            radius: parent.radius
-                            color: root.accentColor()
-                            // Near-solid fill at any value (macOS: width encodes the amount,
-                            // not opacity). Keep only a whisper of gradient for subtle depth.
-                            opacity: row.warning ? row.pulse : root.usageOpacityFromPercent(row.pct, 0.72, 0.96)
-
-                            Behavior on width {
-                                SpringAnimation {
-    spring: 4.0
-    damping: 0.85
-    epsilon: 0.01
-}
-
-                            }
-
-                        }
-
-                        // Elapsed-time marker. Drawn after the fill so it stays
-                        // legible over it; taller than the track so it reads as a
-                        // tick rather than a gap in the bar.
-                        Rectangle {
-                            id: paceMarker
-
-                            readonly property real pacePct: root.metricPacePercent(row.modelData)
-
-                            visible: pacePct >= 0
-                            anchors.verticalCenter: parent.verticalCenter
-                            x: Math.round(parent.width * pacePct / 100) - (width / 2)
-                            width: 2
-                            height: parent.height + 5
-                            radius: 1
-                            color: root.primaryTextColor(0.58)
-
-                            Behavior on x {
-                                SpringAnimation {
-                                    spring: 4.0
-                                    damping: 0.85
-                                    epsilon: 0.01
-                                }
-                            }
-
-                        }
-
-                    }
-
-                    Text {
-                        id: usedText
-
-                        anchors.left: parent.left
-                        anchors.right: resetText.left
-                        anchors.top: track.bottom
-                        anchors.rightMargin: 10
-                        anchors.topMargin: 5
-                        color: root.primaryTextColor(0.92)
-                        elide: Text.ElideRight
-                        font.family: root.uiFont
-                        font.pixelSize: 11
-                        font.weight: Font.Normal
-                        text: root.metricUsedText(modelData)
-                    }
-
-                    Text {
-                        id: resetText
-
-                        anchors.right: parent.right
-                        anchors.top: track.bottom
-                        anchors.topMargin: 5
-                        color: root.mutedTextColor(0.64)
-                        elide: Text.ElideRight
-                        font.family: root.uiFont
-                        font.pixelSize: 11
-                        horizontalAlignment: Text.AlignRight
-                        text: modelData.reset || ""
-                    }
-
-                    Text {
-                        id: detailLeftText
-
-                        anchors.left: parent.left
-                        anchors.right: detailRightText.left
-                        anchors.top: usedText.bottom
-                        anchors.rightMargin: 10
-                        anchors.topMargin: 2
-                        color: root.primaryTextColor(0.88)
-                        elide: Text.ElideRight
-                        font.family: root.uiFont
-                        font.pixelSize: 11
-                        visible: row.hasSplitDetail
-                        text: row.detailLeft
-                    }
-
-                    Text {
-                        id: detailRightText
-
-                        anchors.right: parent.right
-                        anchors.top: usedText.bottom
-                        anchors.topMargin: 2
-                        color: root.mutedTextColor(0.64)
-                        elide: Text.ElideRight
-                        font.family: root.uiFont
-                        font.pixelSize: 11
-                        horizontalAlignment: Text.AlignRight
-                        visible: row.hasSplitDetail
-                        text: row.detailRight
-                    }
-
-                    Text {
-                        id: detailLineText
-
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: row.hasSplitDetail ? detailLeftText.bottom : usedText.bottom
-                        anchors.topMargin: 2
-                        color: root.mutedTextColor(0.64)
-                        elide: Text.ElideRight
-                        font.family: root.uiFont
-                        font.pixelSize: 11
-                        visible: row.hasDetailLine
-                        text: row.detailText
-                    }
-
                 }
 
-            }
-
-            Item {
+            ExtraUsageSection {
                 id: extraUsageSection
-
-                property var extraLimit: root.extraUsageLimit() || ({
-                })
-                property real pct: root.safePercent(extraLimit.percent || 0)
-                // The section is shown whenever there's an extra-usage DETAIL line, but the
-                // bar only makes sense with a real isExtraUsage limit. A credit-only provider
-                // (detail set, no isExtraUsage limit) would otherwise render an empty 0% track.
-                property bool hasBar: root.extraUsageLimit() !== null
-
-                Layout.fillWidth: true
-                Layout.preferredHeight: visible ? root.extraUsageBodyHeight : 0
-                visible: root.hasExtraUsage()
-
-                // Extra usage is an informational row (no click target), so it
-                // gets no hover highlight — only the Cost section below reacts
-                // to its own pointer.
-
-                Rectangle {
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    height: 1
-                    color: root.separatorColor(0.14)
-                }
-
-                Text {
-                    id: extraTitle
-
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.topMargin: 18
-                    color: root.primaryTextColor()
-                    elide: Text.ElideRight
-                    font.family: root.uiFont
-                    font.pixelSize: 13
-                    font.weight: Font.DemiBold
-                    text: i18n("Extra usage")
-                }
-
-                Rectangle {
-                    id: extraTrack
-
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: extraTitle.bottom
-                    anchors.topMargin: 8
-                    height: 5
-                    radius: 2.5
-                    color: root.neutralUsageColor(0.2)
-                    // Keep the geometry (the detail text anchors to extraTrack.bottom and the
-                    // section height mirror stays 86) but don't paint an empty track when
-                    // there's no real limit behind it.
-                    visible: extraUsageSection.hasBar
-
-                    Rectangle {
-                        anchors.verticalCenter: parent.verticalCenter
-                        height: parent.height
-                        width: extraUsageSection.pct > 0 ? Math.max(parent.height, parent.width * extraUsageSection.pct / 100) : 0
-                        radius: parent.radius
-                        color: root.accentColor()
-                        opacity: root.usageOpacityFromPercent(extraUsageSection.pct, 0.72, 0.96)
-                    }
-
-                }
-
-                Text {
-                    anchors.left: parent.left
-                    anchors.right: extraPercent.left
-                    anchors.top: extraTrack.bottom
-                    anchors.rightMargin: 10
-                    anchors.topMargin: 7
-                    color: root.primaryTextColor(0.92)
-                    elide: Text.ElideRight
-                    font.family: root.uiFont
-                    font.pixelSize: 11
-                    text: root.extraUsageDetail()
-                }
-
-                Text {
-                    id: extraPercent
-
-                    anchors.right: parent.right
-                    anchors.top: extraTrack.bottom
-                    anchors.topMargin: 7
-                    color: root.mutedTextColor(0.64)
-                    font.family: root.uiFont
-                    font.pixelSize: 11
-                    horizontalAlignment: Text.AlignRight
-                    text: root.metricUsedText(extraUsageSection.extraLimit)
-                }
-
+                root: root
             }
 
-            Item {
+            CostSection {
                 id: costSection
-
-                property var cost: root.costSummary() || ({
-                })
-                property bool hasRealCost: root.hasCostSummary()
-                property bool hasBreakdown: String(costSection.cost.breakdown || "").trim().length > 0
-
-                Layout.fillWidth: true
-                Layout.preferredHeight: visible ? root.costSectionHeight() : 0
-                visible: root.hasCostSection()
-
-                Rectangle {
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    height: 1
-                    color: root.separatorColor(0.14)
-                }
-
-                Text {
-                    id: costTitle
-
-                    anchors.left: parent.left
-                    anchors.right: costArrow.left
-                    anchors.top: parent.top
-                    anchors.topMargin: 18
-                    anchors.rightMargin: 8
-                    color: root.primaryTextColor()
-                    elide: Text.ElideRight
-                    font.family: root.uiFont
-                    font.pixelSize: 13
-                    font.weight: Font.DemiBold
-                    text: costSection.cost.title || i18n("Cost")
-                }
-
-                Text {
-                    id: costArrow
-
-                    anchors.right: parent.right
-                    anchors.rightMargin: 2
-                    anchors.verticalCenter: costTitle.verticalCenter
-                    color: costMouse.containsMouse ? root.primaryTextColor() : root.mutedTextColor(0.58)
-                    font.family: root.uiFont
-                    font.pixelSize: 24
-                    text: root.costDrawerOpen ? "‹" : "›"
-
-                    Behavior on color {
-                        ColorAnimation {
-                            duration: 120
-                        }
-
-                    }
-
-                }
-
-                MouseArea {
-                    id: costMouse
-                    Accessible.role: Accessible.Button
-                                        Accessible.name: i18n("Cost details")
-                                        Accessible.description: i18n("Toggle the cost graph drawer")
-
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    hoverEnabled: true
-                    activeFocusOnTab: true
-                    onClicked: {
-                        root.toggleCostPopout();
-                    }
-                    Keys.onPressed: (event) => {
-                        if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) {
-                            event.accepted = true;
-                            root.toggleCostPopout();
-                        }
-                    }
-                }
-
-                // Visible keyboard-focus indicator, invisible unless costMouse has focus.
-                Rectangle {
-                    anchors.fill: parent
-                    radius: 6
-                    color: "transparent"
-                    border.width: 2
-                    border.color: root.accentColor()
-                    visible: costMouse.activeFocus
-                }
-
-                Text {
-                    id: todayText
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.rightMargin: 8
-                    anchors.top: costTitle.bottom
-                    anchors.topMargin: 6
-                    color: root.primaryTextColor(0.92)
-                    elide: Text.ElideRight
-                    font.family: root.uiFont
-                    font.pixelSize: 11
-                    text: costSection.hasRealCost ? root.todayCostText(costSection.cost) : i18n("Local estimate unavailable")
-                }
-
-                Text {
-                    id: weekText
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.rightMargin: 8
-                    anchors.top: costTitle.bottom
-                    anchors.topMargin: 27
-                    color: root.primaryTextColor(0.86)
-                    elide: Text.ElideRight
-                    font.family: root.uiFont
-                    font.pixelSize: 11
-                    text: costSection.hasRealCost ? root.weekCostText(costSection.cost) : ""
-                    // Hide when a summary carries no 7-day row so there's no empty gap.
-                    visible: text.length > 0
-                }
-
-                Text {
-                    id: monthText
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.rightMargin: 8
-                    anchors.top: costTitle.bottom
-                    anchors.topMargin: 48
-                    color: root.primaryTextColor(0.8)
-                    elide: Text.ElideRight
-                    font.family: root.uiFont
-                    font.pixelSize: 11
-                    text: costSection.hasRealCost ? root.monthCostText(costSection.cost) : i18n("No local token cost summary found")
-                    // Hide the second line when a summary has no 30-day row so there's no empty gap.
-                    visible: text.length > 0
-                }
-
-                Text {
-                    id: breakdownText
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.rightMargin: 8
-                    anchors.top: costTitle.bottom
-                    anchors.topMargin: 69
-                    color: root.mutedTextColor(0.64)
-                    elide: Text.ElideRight
-                    font.family: root.uiFont
-                    font.pixelSize: 11
-                    // Per-type token breakdown (Input · Output · Cached) for the 30-day window.
-                    text: String(costSection.cost.breakdown || "")
-                    visible: costSection.hasBreakdown
-                }
-
+                root: root
             }
 
-            // Empty state: an actionable message (remediation hint per status, Item 1) plus,
-            // for a locked KWallet, an "Unlock KWallet" button that triggers a foreground
-            // backend run. The column fills the scroller; the message takes the remainder above
-            // the button so the exact body height (metricsBodyHeight()'s empty-state mirror)
-            // doesn't have to be pixel-perfect.
-            ColumnLayout {
-                Layout.fillWidth: true
-                Layout.preferredHeight: Math.max(120, metricsScroller.height)
-                // Cost-only providers (e.g. Grok, or Antigravity while the LS is down) have no
-                // limit rows but DO carry a cost card — don't also show the empty-state message.
-                // Same for providers whose only data is the extra-usage line (e.g. Claude
-                // prepaid credits with no parseable limits) — mirrors the hasCostSection() term.
-                visible: root.providerLimits().length === 0 && !root.hasCostSection() && !root.hasExtraUsage()
-                spacing: 12
-
-                Text {
-                    id: emptyStateText
-
-                    // Feature 3: when the bad state carries an actionUrl, the message reads as a
-                    // link (accent colour + underline) and clicking it opens the sign-in page.
-                    readonly property string actionUrl: root.providerActionUrl()
-                    readonly property bool isLink: actionUrl.length > 0
-
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    color: isLink ? root.accentColor() : root.mutedTextColor(0.68)
-                    font.family: root.uiFont
-                    font.pixelSize: 13
-                    font.underline: isLink && emptyStateLinkHover.hovered
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                    wrapMode: Text.WordWrap
-                    textFormat: Text.PlainText
-                    text: root.emptyStateMessage()
-
-                    Accessible.role: isLink ? Accessible.Button : Accessible.StaticText
-                    Accessible.name: text
-                    Accessible.description: isLink ? i18n("Open the sign-in page in your browser") : ""
-
-                    HoverHandler {
-                        id: emptyStateLinkHover
-                        enabled: emptyStateText.isLink
-                        cursorShape: Qt.PointingHandCursor
-                    }
-                    TapHandler {
-                        enabled: emptyStateText.isLink
-                        onTapped: root.openExternalUrlSafe(emptyStateText.actionUrl)
-                    }
-                }
-
-                Rectangle {
-                    id: unlockButton
-                    Layout.alignment: Qt.AlignHCenter
-                    Layout.preferredHeight: 32
-                    Layout.preferredWidth: unlockLabel.implicitWidth + 32
-                    Layout.bottomMargin: 8
-                    visible: root.emptyStateShowsUnlock()
-                    radius: 8
-                    color: unlockMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.18) : Qt.rgba(1, 1, 1, 0.10)
-                    border.width: 1
-                    border.color: Qt.rgba(1, 1, 1, 0.16)
-
-                    Behavior on color {
-                        ColorAnimation { duration: 120; easing.type: Easing.OutCubic }
-                    }
-
-                    Text {
-                        id: unlockLabel
-                        anchors.centerIn: parent
-                        text: i18n("Unlock KWallet")
-                        color: root.primaryTextColor(0.92)
-                        font.family: root.uiFont
-                        font.pixelSize: 12
-                        font.weight: Font.DemiBold
-                    }
-
-                    MouseArea {
-                        id: unlockMouse
-                        Accessible.role: Accessible.Button
-                        Accessible.name: i18n("Unlock KWallet")
-                        Accessible.description: i18n("Run a foreground refresh that prompts for the KWallet password")
-                        anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        hoverEnabled: true
-                        activeFocusOnTab: true
-                        onClicked: root.unlockWalletRequested()
-                        Keys.onPressed: (event) => {
-                            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) {
-                                event.accepted = true;
-                                root.unlockWalletRequested();
-                            }
-                        }
-                    }
-
-                    // Visible keyboard-focus indicator, invisible unless unlockMouse has focus.
-                    Rectangle {
-                        anchors.fill: parent
-                        radius: unlockButton.radius
-                        color: "transparent"
-                        border.width: 2
-                        border.color: root.accentColor()
-                        visible: unlockMouse.activeFocus
-                    }
-                }
-
-                // Sign-in button (Item 1): for missing-cookies / unauthorized, opens the
-                // provider's login site in the browser so the user can land a fresh session
-                // cookie, then refresh. Styled/positioned like the unlock button; the two are
-                // mutually exclusive by status (never both visible).
-                Rectangle {
-                    id: signInButton
-                    Layout.alignment: Qt.AlignHCenter
-                    Layout.preferredHeight: 32
-                    Layout.preferredWidth: signInLabel.implicitWidth + 32
-                    Layout.bottomMargin: 8
-                    visible: root.emptyStateShowsSignIn()
-                    radius: 8
-                    color: signInMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.18) : Qt.rgba(1, 1, 1, 0.10)
-                    border.width: 1
-                    border.color: Qt.rgba(1, 1, 1, 0.16)
-
-                    Behavior on color {
-                        ColorAnimation { duration: 120; easing.type: Easing.OutCubic }
-                    }
-
-                    Text {
-                        id: signInLabel
-                        anchors.centerIn: parent
-                        text: i18n("Sign in to %1", root.providerLoginSite(root.selectedProvider))
-                        color: root.primaryTextColor(0.92)
-                        font.family: root.uiFont
-                        font.pixelSize: 12
-                        font.weight: Font.DemiBold
-                    }
-
-                    MouseArea {
-                        id: signInMouse
-                        Accessible.role: Accessible.Button
-                        Accessible.name: i18n("Sign in to %1", root.providerLoginSite(root.selectedProvider))
-                        Accessible.description: i18n("Open the sign-in page in your browser, then refresh")
-                        anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        hoverEnabled: true
-                        activeFocusOnTab: true
-                        onClicked: Qt.openUrlExternally(root.providerLoginUrl(root.selectedProvider))
-                        Keys.onPressed: (event) => {
-                            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) {
-                                event.accepted = true;
-                                Qt.openUrlExternally(root.providerLoginUrl(root.selectedProvider));
-                            }
-                        }
-                    }
-
-                    // Visible keyboard-focus indicator, invisible unless signInMouse has focus.
-                    Rectangle {
-                        anchors.fill: parent
-                        radius: signInButton.radius
-                        color: "transparent"
-                        border.width: 2
-                        border.color: root.accentColor()
-                        visible: signInMouse.activeFocus
-                    }
-                }
+            EmptyStateSection {
+                id: emptyStateSection
+                root: root
             }
 
             }
@@ -2355,267 +1386,9 @@ Item {
 
         }
 
-        ColumnLayout {
-            Layout.fillWidth: true
-            Layout.preferredHeight: root.actionFooterHeight()
-            spacing: 0
-
-            // Cross-provider "All AI" spend — the snapshot's per-provider cost totals summed
-            // (the popup body is per-provider; this is the only all-providers figure). Shows
-            // the 30-day total (so it adds up to each tab's "Last 30 days"), or month-to-date
-            // vs budget when a monthly budget is set. Height mirrored in actionFooterHeight().
-            Item {
-                id: allAiRow
-
-                property var totals: root.allAiTotals()
-                property real budget: root.monthlyBudgetValue()
-
-                Layout.fillWidth: true
-                Layout.preferredHeight: visible ? 27 : 0
-                visible: allAiRow.totals.has
-
-                Rectangle {
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    height: 1
-                    color: root.separatorColor(0.14)
-                }
-
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.topMargin: 1
-                    spacing: 8
-
-                    Text {
-                        Layout.alignment: Qt.AlignVCenter
-                        color: root.mutedTextColor(0.72)
-                        font.family: root.uiFont
-                        font.pixelSize: 11
-                        font.weight: Font.DemiBold
-                        text: i18n("All AI")
-                    }
-
-                    Item { Layout.fillWidth: true }
-
-                    Text {
-                        Layout.alignment: Qt.AlignVCenter
-                        color: root.primaryTextColor(0.9)
-                        elide: Text.ElideRight
-                        font.family: root.uiFont
-                        font.pixelSize: 11
-                        horizontalAlignment: Text.AlignRight
-                        text: {
-                            const t = allAiRow.totals;
-                            // Default: the 30-day total (sums each provider's "Last 30 days", so
-                            // it adds up to the tabs). With a monthly budget set, switch to
-                            // month-to-date vs that budget — the window the budget alert tracks.
-                            if (allAiRow.budget > 0) {
-                                const pct = Math.round(t.mtd / allAiRow.budget * 100);
-                                return i18n("%1 of %2 this month · %3%", root.compactUsd(t.mtd), root.compactUsd(allAiRow.budget), pct);
-                            }
-                            return i18n("%1 · last 30 days", root.compactUsd(t.m30));
-                        }
-                    }
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 1
-                color: root.separatorColor(0.14)
-            }
-
-            Item {
-                id: quickActionStrip
-
-                Layout.fillWidth: true
-                Layout.preferredHeight: 44
-
-                Row {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    anchors.verticalCenter: parent.verticalCenter
-                    height: 34
-                    spacing: 16
-
-                    Repeater {
-                        model: root.quickActionRows()
-
-                        delegate: Item {
-                            id: quickAction
-
-                            required property int index
-                            required property var modelData
-
-                            width: 38
-                            height: parent.height
-                            QQC2.ToolTip.delay: 450
-                            QQC2.ToolTip.text: quickAction.modelData.label
-                            QQC2.ToolTip.visible: quickActionMouse.containsMouse
-
-                            Rectangle {
-                                anchors.fill: parent
-                                radius: 8
-                                // macOS toolbar/Control-Center style: borderless at rest,
-                                // a soft rounded highlight appears only on hover.
-                                color: quickActionMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.12) : "transparent"
-                                border.width: 0
-
-                                Behavior on color {
-                                    ColorAnimation {
-                                        duration: 120
-                                        easing.type: Easing.OutCubic
-                                    }
-                                }
-
-                            }
-
-                            Kirigami.Icon {
-                                anchors.centerIn: parent
-                                width: 16
-                                height: 16
-                                source: quickAction.modelData.icon
-                                color: quickActionMouse.containsMouse ? root.accentColor() : root.primaryTextColor(0.78)
-                            }
-
-                            MouseArea {
-                                id: quickActionMouse
-                                Accessible.role: Accessible.Button
-                                                                Accessible.name: modelData.label
-                                                                Accessible.description: i18n("Execute quick action: %1", modelData.label)
-
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                hoverEnabled: true
-                                activeFocusOnTab: true
-                                onClicked: {
-                                    root.triggerAction(quickAction.modelData);
-                                }
-                                Keys.onPressed: (event) => {
-                                    if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) {
-                                        event.accepted = true;
-                                        root.triggerAction(quickAction.modelData);
-                                    }
-                                }
-                            }
-
-                            // Visible keyboard-focus indicator, invisible unless quickActionMouse has focus.
-                            Rectangle {
-                                anchors.fill: parent
-                                radius: 8
-                                color: "transparent"
-                                border.width: 2
-                                border.color: root.accentColor()
-                                visible: quickActionMouse.activeFocus
-                            }
-
-                        }
-
-                    }
-
-                }
-
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 1
-                color: root.separatorColor(0.12)
-            }
-
-            Repeater {
-                model: root.systemActionRows()
-
-                delegate: Item {
-                    id: actionRow
-
-                    required property int index
-                    required property var modelData
-
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: root.actionRowHeight(actionRow.modelData, actionRow.index)
-
-                    Rectangle {
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        height: 1
-                        visible: Boolean(actionRow.modelData.separator)
-                        color: root.separatorColor(0.14)
-                    }
-
-                    Rectangle {
-                        anchors.fill: parent
-                        anchors.leftMargin: -2
-                        anchors.rightMargin: -2
-                        radius: 5
-                        color: actionMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.12) : Qt.rgba(1, 1, 1, 0)
-                    }
-
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.leftMargin: 0
-                        anchors.rightMargin: 4
-                        spacing: 10
-
-                        Kirigami.Icon {
-                            visible: String(actionRow.modelData.icon || "").length > 0
-                            Layout.preferredWidth: visible ? 18 : 0
-                            Layout.preferredHeight: 18
-                            Layout.alignment: Qt.AlignVCenter
-                            source: actionRow.modelData.icon
-                            color: actionMouse.containsMouse ? root.accentColor() : root.primaryTextColor(0.84)
-                        }
-
-                        Text {
-                            Layout.fillWidth: true
-                            Layout.alignment: Qt.AlignVCenter
-                            color: root.primaryTextColor()
-                            elide: Text.ElideRight
-                            font.family: root.uiFont
-                            font.pixelSize: 13
-                            text: actionRow.modelData.label
-                        }
-
-                    }
-
-                    MouseArea {
-                        id: actionMouse
-                        Accessible.role: Accessible.Button
-                                                Accessible.name: actionRow.modelData.label
-                                                Accessible.description: i18n("Activate %1", actionRow.modelData.label)
-
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        activeFocusOnTab: true
-                        onClicked: (mouse) => {
-                            root.triggerAction(actionRow.modelData);
-                        }
-                        Keys.onPressed: (event) => {
-                            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) {
-                                event.accepted = true;
-                                root.triggerAction(actionRow.modelData);
-                            }
-                        }
-                    }
-
-                    // Visible keyboard-focus indicator, invisible unless actionMouse has focus.
-                    Rectangle {
-                        anchors.fill: parent
-                        anchors.leftMargin: -2
-                        anchors.rightMargin: -2
-                        radius: 5
-                        color: "transparent"
-                        border.width: 2
-                        border.color: root.accentColor()
-                        visible: actionMouse.activeFocus
-                    }
-
-                }
-
-            }
-
+        ActionFooter {
+            id: actionFooter
+            root: root
         }
 
     }

@@ -36,7 +36,7 @@ async def test_run_threaded_provider_exception():
         timeout=1.0,
         fallback={"label": "Test", "status": "fallback"}
     )
-    assert res["status"] == "error"
+    assert res["status"] == "api-error"
     assert "Oops" in res["message"]
 
 
@@ -638,6 +638,19 @@ async def test_build_snapshot_carries_forward_transient_claude_failure():
     assert claude["limits"][0]["percent"] == 40
     assert claude["stale"] is True
     assert claude["staleAsOf"] == cached["timestamp"]
+
+
+@pytest.mark.asyncio
+async def test_build_snapshot_carries_forward_transient_error_status():
+    """Defensive backstop: a transient provider 'error' status is also carried forward."""
+    good_limits = [{"label": "Session", "percent": 40}]
+    cached = _cached_provider("Claude", good_limits, ts_offset=60.0)
+    res = await _build_snapshot_carry_forward("error", cached)
+    claude = res["providers"]["claude"]
+    assert claude["status"] == "ok"
+    assert len(claude["limits"]) == 1
+    assert claude["limits"][0]["label"] == "Session"
+    assert claude["stale"] is True
 
 
 # --- Google One AI credit-pool throttle (mirrors the Claude CREDIT_REFRESH_SECONDS carry) ---
