@@ -7,6 +7,14 @@ import "components"
 Item {
     id: root
 
+    // Handle for passing this item into Repeater/ListView DELEGATES. A delegate is its own
+    // component scope, so inside `UsageLimitCard { root: root }` the right-hand `root`
+    // resolves to the card's OWN `root` property (undefined), not this id — the cards then
+    // rendered as three collapsed "Usage" rows. Top-level children can use `root: root`
+    // (same component, the id wins); delegates must use `root: host`.
+    // -> tests/test_qml_render.py
+    readonly property Item host: root
+
     property var telemetry: ({
     })
     property string selectedProvider: "claude"
@@ -1330,7 +1338,7 @@ Item {
                     model: root.usageLimits().length
 
                     delegate: UsageLimitCard {
-                        root: root
+                        root: host   // NOT `root: root` — see `host` above
                     }
                 }
 
@@ -1347,6 +1355,7 @@ Item {
             EmptyStateSection {
                 id: emptyStateSection
                 root: root
+                availableHeight: metricsScroller.height
             }
 
             }
