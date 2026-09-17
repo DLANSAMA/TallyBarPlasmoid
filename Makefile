@@ -32,21 +32,20 @@ test:
 lint:
 	$(VENV)/python -m flake8 --select=F $(APPLET)/contents/code/ tests/ integrations/
 
-# QML static analysis via the Qt6 qmllint.
+# QML static analysis via the Qt6 qmllint — logic and rationale in tools/qmllint_gate.sh.
 # The binary is resolved explicitly: on many distros a bare `qmllint` on PATH is the Qt5
 # tool (which silently accepts this Qt6 tree, syntax errors included), while the Qt6 one
 # lives off-PATH under /usr/lib/qt6/bin. A bare `qmllint` is only trusted if it reports 6.x.
-# Fails on any qmllint error (e.g. a syntax error); warnings are printed but do not fail.
-# [unqualified] is disabled: Plasma applets resolve ids/context properties at runtime, so
-# it is ~700 lines of noise that buries real findings.
-# Missing linter: skipped locally, a hard failure under CI (so the gate can't rot silently).
+# QMLLINT_MODE=full (default) trusts the linter's verdict; CI uses `syntax` because the
+# QtQuick/Plasma QML modules aren't installable there. Missing linter: skipped locally, a
+# hard failure under CI (so the gate can't rot silently).
 QMLLINT ?= $(firstword $(wildcard /usr/lib/qt6/bin/qmllint /usr/lib64/qt6/bin/qmllint /usr/bin/qmllint6 /usr/bin/qmllint-qt6) \
 	$(shell qmllint --version 2>/dev/null | grep -q '^qmllint 6\.' && command -v qmllint))
-QMLLINT_FLAGS ?= --unqualified disable
+QMLLINT_MODE ?= full
 qmllint:
 	@if [ -n "$(QMLLINT)" ] && [ -x "$(QMLLINT)" ]; then \
-	    echo "Running $(QMLLINT) ($$($(QMLLINT) --version)) on $(APPLET)/contents/ui/*.qml and components/*.qml ..."; \
-	    $(QMLLINT) $(QMLLINT_FLAGS) $(APPLET)/contents/ui/*.qml $(APPLET)/contents/ui/components/*.qml; \
+	    echo "Running $(QMLLINT) ($$($(QMLLINT) --version), mode=$(QMLLINT_MODE)) on $(APPLET)/contents/ui/*.qml and components/*.qml ..."; \
+	    sh tools/qmllint_gate.sh "$(QMLLINT)" "$(QMLLINT_MODE)" $(APPLET)/contents/ui/*.qml $(APPLET)/contents/ui/components/*.qml; \
 	elif [ -n "$$CI" ]; then \
 	    echo "Qt6 qmllint not found — failing because CI is set (install qt6-declarative-dev-tools)"; exit 1; \
 	else \
