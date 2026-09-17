@@ -1221,3 +1221,41 @@ def test_carry_forward_staleAsOf_does_not_ratchet():
     cached3 = {"timestamp": _iso(0.0), "providers": {"claude": carried_expired}}
     out = backend.carry_forward_provider_last_good(dict(failing), cached3, max_stale_seconds=900)
     assert out["status"] == "unauthorized"  # window expired off the original fetch time
+
+
+# --- diagnostics.timings -----------------------------------------------------------
+# The refresh is a one-shot on a 5-minute timer; a phase that quietly grows costs battery
+# and disk on every tick with nothing in the snapshot to show it. That is how the
+# 2026-06-07 cost-scan regression stayed invisible until it started tripping the deadline.
+
+@pytest.mark.asyncio
+async def test_build_snapshot_reports_phase_timings():
+    args = MagicMock()
+    args.no_network = False
+    args.timeout = 5.0
+
+    async def ok(func, *a, **k):
+        return {"status": "ok", "limits": []}
+
+    async def benign_rpc(*a, **k):
+        return {"label": "Codex", "status": "not-running", "limits": []}
+
+    with patch("backend.load_config", return_value={}), \
+         patch("backend.load_snapshot", return_value={}), \
+         patch("backend.collect_browser_sessions", return_value=([], {})), \
+         patch("backend.run_threaded_provider", side_effect=ok), \
+         patch("backend.run_codex_rpc", side_effect=benign_rpc), \
+         patch("backend.compute_local_cost_summaries", side_effect=lambda deadline=None: {}):
+        res = await backend.build_snapshot(args)
+
+    timings = res["diagnostics"]["timings"]
+    assert set(timings) == {"cookies", "providers", "cost_scan", "total"}
+    for phase, value in timings.items():
+        # Monotonic clock: never negative, even across a wall-clock step.
+        assert isinstance(value, int) and value >= 0, f"{phase}={value!r}"
+    # The phases are bounded by the whole run. They deliberately do NOT sum to total —
+    # the cost scan overlaps the provider fetches — so assert containment, not a sum.
+    for phase in ("cookies", "providers", "cost_scan"):
+        assert timings[phase] <= timings["total"] + 50, (
+            f"{phase} ({timings[phase]}ms) exceeds total ({timings['total']}ms)"
+        )
