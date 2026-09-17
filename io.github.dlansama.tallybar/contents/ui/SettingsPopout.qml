@@ -402,8 +402,13 @@ PlasmaCore.PopupPlasmaWindow {
 
                     property bool on: root.notificationsEnabledValue()
 
-                    width: 40
-                    height: 22
+                    // Layout.preferred*, not width/height: this Rectangle is a direct child of
+                    // the RowLayout above, which owns its geometry — setting width/height on a
+                    // layout-managed item is undefined behaviour (Quick.layout-positioning).
+                    // Matches the sibling toggle at the "50 x 24" pill above. The knob below
+                    // reads parent.width, which the layout still resolves to 40 at runtime.
+                    Layout.preferredWidth: 40
+                    Layout.preferredHeight: 22
                     radius: 11
                     color: notifToggle.on ? root.accentTintColor(0.55) : Qt.rgba(1, 1, 1, 0.12)
 

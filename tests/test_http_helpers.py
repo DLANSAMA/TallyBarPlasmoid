@@ -110,7 +110,7 @@ def _http_error(code, body):
 def test_http_json_success_and_body_cap():
     resp = _FakeResp(200, b'{"a": 1}')
     with patch.object(http_helpers.urllib.request, "build_opener", return_value=_FakeOpener(resp)):
-        status, data = http_helpers.http_json("http://x", CookieJar(), 1.0)
+        status, data = http_helpers.http_json("https://x", CookieJar(), 1.0)
     assert status == 200 and data == {"a": 1}
     assert resp.read_caps == [http_helpers.MAX_JSON_BODY_BYTES]  # read is bounded, not unbounded
 
@@ -118,34 +118,34 @@ def test_http_json_success_and_body_cap():
 def test_http_json_non_json_success_falls_back_to_text():
     resp = _FakeResp(200, b"<html>not json</html>")
     with patch.object(http_helpers.urllib.request, "build_opener", return_value=_FakeOpener(resp)):
-        status, data = http_helpers.http_json("http://x", CookieJar(), 1.0)
+        status, data = http_helpers.http_json("https://x", CookieJar(), 1.0)
     assert status == 200 and data["text"].startswith("<html>")
 
 
 def test_http_json_http_error_with_json_body():
     err = _http_error(429, b'{"error": "rate limited"}')
     with patch.object(http_helpers.urllib.request, "build_opener", return_value=_FakeOpener(exc=err)):
-        status, data = http_helpers.http_json("http://x", CookieJar(), 1.0)
+        status, data = http_helpers.http_json("https://x", CookieJar(), 1.0)
     assert status == 429 and data == {"error": "rate limited"}
 
 
 def test_http_json_http_error_non_json_body_uses_reason():
     err = _http_error(500, b"Internal Server Error")
     with patch.object(http_helpers.urllib.request, "build_opener", return_value=_FakeOpener(exc=err)):
-        status, data = http_helpers.http_json("http://x", CookieJar(), 1.0)
+        status, data = http_helpers.http_json("https://x", CookieJar(), 1.0)
     assert status == 500 and data == {"error": "Boom"}
 
 
 def test_http_text_success_and_error_caps():
     resp = _FakeResp(200, b"hello")
     with patch.object(http_helpers.urllib.request, "build_opener", return_value=_FakeOpener(resp)):
-        status, text = http_helpers.http_text("http://x", CookieJar(), 1.0)
+        status, text = http_helpers.http_text("https://x", CookieJar(), 1.0)
     assert status == 200 and text == "hello"
     assert resp.read_caps == [http_helpers.MAX_TEXT_BODY_BYTES]
 
     err = _http_error(403, b"forbidden")
     with patch.object(http_helpers.urllib.request, "build_opener", return_value=_FakeOpener(exc=err)):
-        status, text = http_helpers.http_text("http://x", CookieJar(), 1.0)
+        status, text = http_helpers.http_text("https://x", CookieJar(), 1.0)
     assert status == 403 and text == "forbidden"
 
 
@@ -170,3 +170,48 @@ async def test_bounded_provider_error_shape_is_redacted():
     out = await http_helpers.bounded_provider(_boom(), timeout=1.0, fallback={"label": "Codex"})
     assert out["status"] == "api-error"
     assert "Bearer [REDACTED]" in out["message"] and "abc123DEF" not in out["message"]
+
+
+# --- scheme gate -----------------------------------------------------------------
+# http_json/http_text are the CREDENTIALED path: every caller passes a CookieJar of real
+# browser session cookies, and urllib's default opener follows redirects. _require_https
+# keeps a file://, ftp:// or plaintext http:// URL from ever reaching that opener.
+
+import pytest  # noqa: E402
+
+from http_helpers import _require_https, http_json, http_text  # noqa: E402
+
+
+@pytest.mark.parametrize("url", [
+    "http://claude.ai/api/organizations",        # plaintext downgrade
+    "file:///etc/passwd",                        # urllib would happily open this
+    "ftp://example.com/x",
+    "HTTP://claude.ai/x",                        # case-insensitive check
+    "",
+    None,
+])
+def test_require_https_rejects_non_https(url):
+    with pytest.raises(ValueError):
+        _require_https(url)
+
+
+@pytest.mark.parametrize("url", [
+    "https://claude.ai/api/organizations",
+    "HTTPS://gemini.google.com/usage",           # scheme compare is lowercased
+])
+def test_require_https_accepts_https(url):
+    _require_https(url)  # must not raise
+
+
+def test_http_helpers_reject_non_https_before_opening(monkeypatch):
+    """The gate must fire BEFORE any opener is built — no socket, no cookie on the wire."""
+    def _explode(*a, **k):
+        raise AssertionError("build_opener must not be reached for a non-https URL")
+
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "build_opener", _explode)
+
+    from http.cookiejar import CookieJar
+    for fn in (http_json, http_text):
+        with pytest.raises(ValueError):
+            fn("http://claude.ai/x", CookieJar(), 1.0)

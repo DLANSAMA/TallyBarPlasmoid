@@ -59,7 +59,28 @@ def scrub_credentials(text: str) -> str:
     return text
 
 
+def _require_https(url: str) -> None:
+    """Reject any non-``https://`` URL before it reaches an opener carrying cookies.
+
+    These two helpers are the CREDENTIALED path — every caller hands them a CookieJar
+    holding real browser session cookies (claude.ai, gemini.google.com, chatgpt.com), and
+    urllib's default opener follows redirects. Without this gate a ``file://``/``ftp://``
+    URL would be fetched by urllib's other handlers, and a plaintext ``http://`` hop would
+    put a non-Secure cookie on the wire. Every call site passes an ``https://`` module
+    constant today, so this costs nothing and pins that invariant.
+
+    The LOCAL language-server calls deliberately do NOT come through here — they build
+    their own request in ``providers/antigravity.post_local_json`` (self-signed loopback
+    TLS, no cookie jar), so this gate can stay strict without a loopback exemption.
+
+    Raises ValueError, which the callers' existing ``except Exception`` turns into a
+    scrubbed ``api-error`` status rather than a crash."""
+    if not isinstance(url, str) or not url.lower().startswith("https://"):
+        raise ValueError(f"refusing non-https request URL: {str(url)[:60]!r}")
+
+
 def http_json(url: str, jar: CookieJar, timeout: float, method: str = "GET", body: bytes | None = None) -> tuple[int, Any]:
+    _require_https(url)
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
     headers = {
         "Accept": "application/json, text/plain, */*",
@@ -91,6 +112,7 @@ def http_text(
     body: bytes | None = None,
     headers: dict[str, str] | None = None,
 ) -> tuple[int, str]:
+    _require_https(url)
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
     request_headers = {
         "Accept": "*/*",
