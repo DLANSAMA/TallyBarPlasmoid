@@ -78,6 +78,7 @@ Item {
         elide: Text.ElideRight
         font.family: root.uiFont
         font.pixelSize: 11
+        textFormat: Text.PlainText
         text: root.extraUsageDetail()
     }
 
@@ -91,6 +92,7 @@ Item {
         font.family: root.uiFont
         font.pixelSize: 11
         horizontalAlignment: Text.AlignRight
+        textFormat: Text.PlainText
         text: root.metricUsedText(extraUsageSection.extraLimit)
     }
 }

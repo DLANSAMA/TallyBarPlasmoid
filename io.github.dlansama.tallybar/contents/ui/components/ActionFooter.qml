@@ -57,6 +57,7 @@ ColumnLayout {
                 font.family: root.uiFont
                 font.pixelSize: 11
                 horizontalAlignment: Text.AlignRight
+                textFormat: Text.PlainText
                 text: {
                     const t = allAiRow.totals;
                     // Default: the 30-day total (sums each provider's "Last 30 days", so
@@ -221,6 +222,7 @@ ColumnLayout {
                     elide: Text.ElideRight
                     font.family: root.uiFont
                     font.pixelSize: 13
+                    textFormat: Text.PlainText
                     text: actionRow.modelData.label
                 }
             }

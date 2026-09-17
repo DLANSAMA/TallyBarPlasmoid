@@ -129,6 +129,7 @@ ColumnLayout {
         Text {
             id: signInLabel
             anchors.centerIn: parent
+            textFormat: Text.PlainText
             text: i18n("Sign in to %1", root.providerLoginSite(root.selectedProvider))
             color: root.primaryTextColor(0.92)
             font.family: root.uiFont
