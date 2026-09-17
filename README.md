@@ -63,7 +63,15 @@ shows a status line, never an error dialog.
 
 ## Install
 
-There is no tagged release yet, so install from source:
+Download `io.github.dlansama.tallybar.plasmoid` from the
+[latest release](https://github.com/DLANSAMA/TallyBarPlasmoid/releases/latest) and
+install it with the tool Plasma ships:
+
+```bash
+kpackagetool6 --type Plasma/Applet --install io.github.dlansama.tallybar.plasmoid
+```
+
+Or install from source:
 
 ```bash
 git clone https://github.com/DLANSAMA/TallyBarPlasmoid.git
@@ -73,13 +81,8 @@ make install
 
 Then right-click your panel → **Add Widgets…** → search for *TallyBar*.
 
-`make install` wraps `kpackagetool6`; if you would rather build the package and
-install that — which is also what a future release asset will be — use:
-
-```bash
-make build
-kpackagetool6 --type Plasma/Applet --install io.github.dlansama.tallybar.plasmoid
-```
+`make install` wraps `kpackagetool6`; `make build` produces the same `.plasmoid`
+package the release ships.
 
 To update an existing install, `make upgrade`, then restart the shell so Plasma
 drops its cached copy of the QML:
@@ -234,14 +237,11 @@ pushing a `v*` tag builds the `.plasmoid`, stamps the version into
   ones their web UIs call, with your own session. They are not public APIs and
   can change without notice. When one does, that provider degrades to a status
   message and the others keep working.
-- **Grok has no live quota.** The xAI CLI stores none locally and the console
-  API has not been wired up, so Grok shows local token history and a weekly bar
-  derived from it.
+- **Grok's weekly bar is only as fresh as the CLI's last run.** xAI's own
+  credit reading reaches the local log when the `grok` CLI starts; between runs
+  the widget shows the last reading and marks it "(cached)" past an hour.
 - **Costs are estimates.** They are list prices applied to locally logged token
   counts. Treat them as a sense of scale, not a bill.
-- **Not released yet.** There is no tag and nothing on the KDE Store; install
-  from source for now. [`CHANGELOG.md`](CHANGELOG.md) tracks what the first
-  release will contain.
 
 ## Prior art
 
