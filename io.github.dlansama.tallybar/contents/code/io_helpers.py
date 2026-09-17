@@ -15,6 +15,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 # Orphaned atomic-write temps take two shapes: a bare ``mkstemp`` leftover (``tmp`` + 8
 # random chars, from a crashed default-prefix mkstemp) and the current atomic_write_text
@@ -144,7 +145,7 @@ def atomic_write_text(path: Path | str, text: str, mode: int = 0o600) -> None:
         raise
 
 
-def to_daemon_thread(func, *args):
+def to_daemon_thread(func: Any, *args: Any) -> asyncio.Future[Any]:
     """Run blocking ``func(*args)`` in a DAEMON thread; return an awaitable Future.
 
     A drop-in for ``asyncio.to_thread`` with one load-bearing difference: the worker thread
@@ -159,11 +160,18 @@ def to_daemon_thread(func, *args):
     awaiter has already gone (cancelled, or the loop closed), the late result is dropped.
     Same family as the non-blocking-flock guard in ``flock_with_timeout`` (CLAUDE.md): never
     let a thread blocked in the kernel gate the interpreter.
+
+    Deliberately ONE THREAD PER CALL, not a pool. The backend is a one-shot process with a
+    handful of call sites, so there is no thread storm to bound — and a shared pool makes
+    every call's latency depend on every other call's. A bounded pool was tried and
+    serialized whole bursts onto a single worker (8 x 0.5s tasks took 4.0s instead of 0.5s),
+    which turns slow providers into spurious ``timeout`` statuses.
+    -> tests/test_io_durability.py::test_to_daemon_thread_burst_runs_concurrently
     """
     loop = asyncio.get_running_loop()
-    fut = loop.create_future()
+    fut: asyncio.Future[Any] = loop.create_future()
 
-    def _deliver(result, exc):
+    def _deliver(result: Any, exc: BaseException | None) -> None:
         # Runs on the loop thread. The future may already be cancelled/resolved (the awaiter
         # timed out) — in which case the late result/exception is simply discarded.
         if fut.cancelled() or fut.done():
@@ -173,7 +181,9 @@ def to_daemon_thread(func, *args):
         else:
             fut.set_result(result)
 
-    def _runner():
+    def _runner() -> None:
+        result: Any
+        exc: BaseException | None
         try:
             result, exc = func(*args), None
         except BaseException as err:  # propagate ANY failure back, like asyncio.to_thread

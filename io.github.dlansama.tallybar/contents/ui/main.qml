@@ -76,7 +76,7 @@ PlasmoidItem {
     }
 
     function shellQuote(text) {
-        return "'" + String(text).replace(/'/g, "'\"'\"'") + "'";
+        return "'" + String(text).replace(/\0/g, "").replace(/'/g, "'\"'\"'") + "'";
     }
 
     // The plasmoid ships no config/main.xml declaring a pythonPath key, so the interpreter
@@ -98,7 +98,8 @@ PlasmoidItem {
 
     function configCommand(minutes) {
         const backend = root.localPath(Qt.resolvedUrl("../code/backend.py"));
-        return root.pythonExec + " " + root.shellQuote(backend) + " --set-refresh-interval " + Number(minutes);
+        const safeMinutes = (isFinite(Number(minutes)) && Number(minutes) > 0) ? Number(minutes) : 5;
+        return root.pythonExec + " " + root.shellQuote(backend) + " --set-refresh-interval " + safeMinutes;
     }
 
     function lastSnapshotCommand() {

@@ -9,6 +9,8 @@ import sys
 import urllib.error
 from pathlib import Path
 
+import pytest
+
 CODE_DIR = Path(__file__).parent.parent / "io.github.dlansama.tallybar" / "contents" / "code"
 sys.path.insert(0, str(CODE_DIR))
 
@@ -76,3 +78,35 @@ def test_atomic_write_text_perms_and_no_leftovers(tmp_path):
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
     assert stat.S_IMODE(target.parent.stat().st_mode) == 0o700
     assert [p.name for p in target.parent.iterdir()] == ["file.json"]
+
+
+@pytest.mark.asyncio
+async def test_to_daemon_thread_burst_runs_concurrently():
+    # Regression: a bounded worker pool once replaced thread-per-call and serialized a
+    # whole burst onto ONE worker whenever an idle worker already existed (its stale
+    # idle-count check never spawned a second) — 8 x 0.5s tasks took 4.0s, not 0.5s.
+    # In the backend that turns slow-but-healthy providers into spurious "timeout"s.
+    import asyncio
+    import threading
+    import time
+
+    seen_daemon = []
+
+    def task_fn(val):
+        seen_daemon.append(threading.current_thread().daemon)
+        time.sleep(0.2)
+        return val * 2
+
+    # Warm-up first: the bug only bit once a previous call had left a worker idle.
+    assert await io_helpers.to_daemon_thread(task_fn, 21) == 42
+    await asyncio.sleep(0.05)
+
+    start = time.monotonic()
+    results = await asyncio.gather(*[io_helpers.to_daemon_thread(task_fn, i) for i in range(8)])
+    elapsed = time.monotonic() - start
+
+    assert results == [i * 2 for i in range(8)]
+    # Serialized would be 1.6s; concurrent is ~0.2s. 0.8s leaves slack for a loaded CI box.
+    assert elapsed < 0.8, f"burst took {elapsed:.2f}s — to_daemon_thread is serializing calls"
+    # Every worker must be a daemon so a stuck one can never gate interpreter exit.
+    assert seen_daemon and all(seen_daemon)
