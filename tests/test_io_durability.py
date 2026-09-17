@@ -81,23 +81,32 @@ def test_atomic_write_text_perms_and_no_leftovers(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_to_daemon_thread_bounded_pool_reuse_and_concurrency():
+async def test_to_daemon_thread_burst_runs_concurrently():
+    # Regression: a bounded worker pool once replaced thread-per-call and serialized a
+    # whole burst onto ONE worker whenever an idle worker already existed (its stale
+    # idle-count check never spawned a second) — 8 x 0.5s tasks took 4.0s, not 0.5s.
+    # In the backend that turns slow-but-healthy providers into spurious "timeout"s.
     import asyncio
     import threading
     import time
 
+    seen_daemon = []
+
     def task_fn(val):
-        time.sleep(0.01)
+        seen_daemon.append(threading.current_thread().daemon)
+        time.sleep(0.2)
         return val * 2
 
-    # Launch 25 concurrent tasks
-    futs = [io_helpers.to_daemon_thread(task_fn, i) for i in range(25)]
-    results = await asyncio.gather(*futs)
-    assert results == [i * 2 for i in range(25)]
+    # Warm-up first: the bug only bit once a previous call had left a worker idle.
+    assert await io_helpers.to_daemon_thread(task_fn, 21) == 42
+    await asyncio.sleep(0.05)
 
-    # All tallybar-workers must be daemon threads
-    workers = [t for t in threading.enumerate() if t.name == "tallybar-worker"]
-    assert workers
-    assert all(t.daemon for t in workers)
-    # Total live workers must not exceed _MAX_DAEMON_WORKERS
-    assert len(workers) <= io_helpers._MAX_DAEMON_WORKERS
+    start = time.monotonic()
+    results = await asyncio.gather(*[io_helpers.to_daemon_thread(task_fn, i) for i in range(8)])
+    elapsed = time.monotonic() - start
+
+    assert results == [i * 2 for i in range(8)]
+    # Serialized would be 1.6s; concurrent is ~0.2s. 0.8s leaves slack for a loaded CI box.
+    assert elapsed < 0.8, f"burst took {elapsed:.2f}s — to_daemon_thread is serializing calls"
+    # Every worker must be a daemon so a stuck one can never gate interpreter exit.
+    assert seen_daemon and all(seen_daemon)

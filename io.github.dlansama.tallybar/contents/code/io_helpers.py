@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import os
-import queue
 import re
 import stat
 import tempfile
@@ -146,113 +145,53 @@ def atomic_write_text(path: Path | str, text: str, mode: int = 0o600) -> None:
         raise
 
 
-_MAX_DAEMON_WORKERS = 10
-_WORKER_IDLE_TIMEOUT = 15.0
-
-_pool_lock = threading.Lock()
-_work_queue: queue.Queue[tuple[Any, tuple[Any, ...], asyncio.AbstractEventLoop, asyncio.Future[Any]]] = queue.Queue()
-_total_workers = 0
-_idle_workers = 0
-
-
-def _deliver_result(fut: asyncio.Future[Any], result: Any, exc: BaseException | None) -> None:
-    # Runs on the loop thread. The future may already be cancelled/resolved (the awaiter
-    # timed out) — in which case the late result/exception is simply discarded.
-    if fut.cancelled() or fut.done():
-        return
-    if exc is not None:
-        fut.set_exception(exc)
-    else:
-        fut.set_result(result)
-
-
-def _worker_loop() -> None:
-    global _total_workers, _idle_workers
-    while True:
-        with _pool_lock:
-            _idle_workers += 1
-        try:
-            try:
-                task = _work_queue.get(timeout=_WORKER_IDLE_TIMEOUT)
-            except queue.Empty:
-                with _pool_lock:
-                    _idle_workers -= 1
-                    _total_workers -= 1
-                    return
-        except BaseException:
-            with _pool_lock:
-                _idle_workers -= 1
-            raise
-
-        with _pool_lock:
-            _idle_workers -= 1
-
-        func, args, loop, fut = task
-        try:
-            try:
-                result, exc = func(*args), None
-            except BaseException as err:  # propagate ANY failure back, like asyncio.to_thread
-                result, exc = None, err
-            try:
-                loop.call_soon_threadsafe(_deliver_result, fut, result, exc)
-            except RuntimeError:
-                pass  # loop already closed — the awaiter is gone; drop the late result
-        finally:
-            _work_queue.task_done()
-
-
-_watchdog_active = False
-
-
-def _ensure_watchdog() -> None:
-    global _watchdog_active
-    with _pool_lock:
-        if _watchdog_active:
-            return
-        _watchdog_active = True
-
-    def _watchdog_loop() -> None:
-        global _watchdog_active, _total_workers
-        while True:
-            time.sleep(1.0)
-            with _pool_lock:
-                if _work_queue.empty():
-                    _watchdog_active = False
-                    return
-                if _idle_workers == 0:
-                    _total_workers += 1
-                    threading.Thread(target=_worker_loop, name="tallybar-worker", daemon=True).start()
-
-    threading.Thread(target=_watchdog_loop, name="tallybar-pool-watchdog", daemon=True).start()
-
-
 def to_daemon_thread(func: Any, *args: Any) -> asyncio.Future[Any]:
     """Run blocking ``func(*args)`` in a DAEMON thread; return an awaitable Future.
 
-    A drop-in for ``asyncio.to_thread`` with two load-bearing properties:
-    1. Worker threads are DAEMONS, so if the awaiter is cancelled or times out,
-       orphaned threads cannot gate interpreter or test exit. Standard
-       ``concurrent.futures.ThreadPoolExecutor`` registers an ``atexit`` hook that
-       joins workers at exit, hanging the process if a thread is stuck in kernel I/O.
-    2. Concurrency is bounded to ``_MAX_DAEMON_WORKERS`` (with dynamic idle reuse)
-       to avoid thread-burst storms during parallel cookie store and provider scans.
-       A watchdog guarantees starvation resistance if all current workers are hung.
+    A drop-in for ``asyncio.to_thread`` with one load-bearing difference: the worker thread
+    is a DAEMON, so if the awaiter is cancelled — e.g. an outer ``asyncio.wait_for`` times
+    out — the orphaned thread can NOT gate interpreter exit. ``asyncio.to_thread`` runs on the
+    loop's default ThreadPoolExecutor, whose threads are non-daemon and are JOINED at exit; a
+    provider stuck on slow I/O (notably DNS resolution, which urllib's timeout does NOT bound)
+    therefore stalls the one-shot backend's exit — and pytest's — until the OS resolver gives
+    up. With a daemon worker the process exits promptly and the stuck thread is abandoned.
+
+    Result and exception propagate to the awaiter exactly like ``asyncio.to_thread``. If the
+    awaiter has already gone (cancelled, or the loop closed), the late result is dropped.
+    Same family as the non-blocking-flock guard in ``flock_with_timeout`` (CLAUDE.md): never
+    let a thread blocked in the kernel gate the interpreter.
+
+    Deliberately ONE THREAD PER CALL, not a pool. The backend is a one-shot process with a
+    handful of call sites, so there is no thread storm to bound — and a shared pool makes
+    every call's latency depend on every other call's. A bounded pool was tried and
+    serialized whole bursts onto a single worker (8 x 0.5s tasks took 4.0s instead of 0.5s),
+    which turns slow providers into spurious ``timeout`` statuses.
+    -> tests/test_io_durability.py::test_to_daemon_thread_burst_runs_concurrently
     """
-    global _total_workers
     loop = asyncio.get_running_loop()
     fut: asyncio.Future[Any] = loop.create_future()
 
-    _work_queue.put((func, args, loop, fut))
+    def _deliver(result: Any, exc: BaseException | None) -> None:
+        # Runs on the loop thread. The future may already be cancelled/resolved (the awaiter
+        # timed out) — in which case the late result/exception is simply discarded.
+        if fut.cancelled() or fut.done():
+            return
+        if exc is not None:
+            fut.set_exception(exc)
+        else:
+            fut.set_result(result)
 
-    spawn = False
-    with _pool_lock:
-        if _idle_workers == 0 and _total_workers < _MAX_DAEMON_WORKERS:
-            _total_workers += 1
-            spawn = True
+    def _runner() -> None:
+        result: Any
+        exc: BaseException | None
+        try:
+            result, exc = func(*args), None
+        except BaseException as err:  # propagate ANY failure back, like asyncio.to_thread
+            result, exc = None, err
+        try:
+            loop.call_soon_threadsafe(_deliver, result, exc)
+        except RuntimeError:
+            pass  # loop already closed — the awaiter is gone; drop the late result
 
-    if spawn:
-        threading.Thread(target=_worker_loop, name="tallybar-worker", daemon=True).start()
-    elif _idle_workers == 0:
-        _ensure_watchdog()
-
+    threading.Thread(target=_runner, name="tallybar-worker", daemon=True).start()
     return fut
