@@ -28,7 +28,7 @@ python3 io.github.dlansama.tallybar/contents/code/backend.py --once --timeout 12
 python3 io.github.dlansama.tallybar/contents/code/backend.py --once --no-network --pretty   # skip remote API calls
 
 # Package, install, upgrade, remove the plasmoid (kpackagetool6)
-make build      # produces io.github.dlansama.tallybar.plasmoid (tarball)
+make build      # produces io.github.dlansama.tallybar.plasmoid (a ZIP — the only container KPackage 6 opens)
 make install    # first install
 make upgrade    # reinstall after changes — use this during dev
 make remove
