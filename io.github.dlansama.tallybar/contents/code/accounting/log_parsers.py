@@ -15,6 +15,7 @@ from parsers import as_dict
 from .formatting import parse_timestamp
 from .pricing import (
     DEFAULT_MODEL_FOR_PROVIDER,
+    slim_usage,
     usage_cost_usd,
     usage_token_total,
     usage_token_total_and_breakdown,
@@ -34,10 +35,10 @@ _UNSET = object()
 
 _PARSE_CACHE_DIR = Path.home() / ".tallybar" / "cache"
 _CACHE_SCHEMA_VERSION = 1          # bump to invalidate ALL parse caches at once
-_CLAUDE_PARSE_VERSION = 1          # bump when _parse_claude_file's output shape changes
-_CODEX_PARSE_VERSION = 1           # bump when _parse_codex_file's output shape changes
-_GROK_PARSE_VERSION = 2            # bump when _parse_grok_file's output shape changes
-_GEMINI_PARSE_VERSION = 1          # bump when _parse_gemini_file's output shape changes
+_CLAUDE_PARSE_VERSION = 2          # bump when _parse_claude_file's output shape changes
+_CODEX_PARSE_VERSION = 2           # bump when _parse_codex_file's output shape changes
+_GROK_PARSE_VERSION = 3            # bump when _parse_grok_file's output shape changes
+_GEMINI_PARSE_VERSION = 2          # bump when _parse_gemini_file's output shape changes
 
 
 def _load_parse_cache(cache_path: Path, parse_version: int) -> dict[str, dict[str, Any]]:
@@ -131,7 +132,7 @@ def _parse_claude_file(path: Path) -> list[dict[str, Any]] | None:
             out.append({
                 "t": record.get("timestamp"),
                 "m": message.get("model") or record.get("model"),
-                "u": usage,
+                "u": slim_usage(usage),
                 "r": str(record.get("requestId") or record.get("uuid") or ""),
             })
     return out
@@ -167,7 +168,7 @@ def _parse_codex_file(path: Path) -> list[dict[str, Any]] | None:
             usage = info.get("last_token_usage") or info.get("total_token_usage") or {}
             if usage_token_total(usage) <= 0:
                 continue
-            out.append({"t": record.get("timestamp"), "m": current_model, "u": usage})
+            out.append({"t": record.get("timestamp"), "m": current_model, "u": slim_usage(usage)})
     return out
 
 
@@ -313,7 +314,7 @@ def _parse_grok_file(path: Path) -> list[dict[str, Any]] | None:
             out.append({
                 "t": record.get("ts"),
                 "m": model,
-                "u": usage,
+                "u": slim_usage(usage),
                 "r": dedup,
             })
     return out
@@ -742,7 +743,7 @@ def _parse_gemini_file(path: Path) -> list[dict[str, Any]] | None:
             continue
         if usage_token_total(tokens_data) <= 0:
             continue
-        out.append({"t": ts, "m": msg.get("model"), "u": tokens_data})
+        out.append({"t": ts, "m": msg.get("model"), "u": slim_usage(tokens_data)})
     return out
 
 

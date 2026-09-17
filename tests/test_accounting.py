@@ -1,6 +1,7 @@
 import pytest
 import datetime as dt
 import json
+import re
 import os
 import time
 from pathlib import Path
@@ -1286,3 +1287,86 @@ def test_window_classification_bands():
 
     # A money lane with no window is neither.
     assert accounting._is_weekly_window({"label": "Monthly", "unit": "USD"}) is False
+
+
+# --- slim_usage: the parse caches store only what the math reads --------------------
+# The caches keep one record per assistant message for ALL time and the summarizer
+# re-applies its window every refresh, so a byte stored here is re-read and re-decoded on
+# every 5-minute tick forever. slim_usage drops the metadata providers attach to each
+# message. It is only safe while it is LOSSLESS for both readers — that is what these pin.
+
+# Real shapes, one per provider, with the metadata each actually ships.
+_USAGE_CORPUS = [
+    # Anthropic: cache fields additive; the 5m/1h split drives two different write rates.
+    {"input_tokens": 4231, "output_tokens": 812, "cache_creation_input_tokens": 19004,
+     "cache_read_input_tokens": 145233, "service_tier": "standard", "inference_geo": "us",
+     "cache_creation": {"ephemeral_5m_input_tokens": 19004, "ephemeral_1h_input_tokens": 0},
+     "server_tool_use": {"web_search_requests": 0}, "iterations": 3, "speed": "fast",
+     "output_tokens_details": {"reasoning_tokens": 0}},
+    # Anthropic with a 1h cache write (billed at 2x input, not 1.25x).
+    {"input_tokens": 900, "output_tokens": 120, "cache_creation_input_tokens": 8000,
+     "cache_read_input_tokens": 0, "service_tier": "batch",
+     "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 8000}},
+    # OpenAI/Codex: subsets, plus an explicit total and reasoning already inside output.
+    {"input_tokens": 12000, "cached_input_tokens": 9000, "output_tokens": 640,
+     "reasoning_output_tokens": 512, "total_tokens": 12640},
+    # Gemini: thoughts + tool are additive (a 2026-05-28 audit wrongly called tool a dupe).
+    {"input": 5000, "output": 300, "cached": 1200, "thoughts": 450, "tool": 90, "total": 5840},
+    # Grok: already minimal — slimming must be a no-op on the values that matter.
+    {"input_tokens": 700, "cached_input_tokens": 200, "output_tokens": 90},
+    # Degenerate shapes.
+    {}, {"service_tier": "standard"}, {"input_tokens": 0, "output_tokens": 0},
+]
+
+
+@pytest.mark.parametrize("usage", _USAGE_CORPUS)
+@pytest.mark.parametrize("model", ["claude-opus-4-5", "gpt-5-codex", "gemini-3-pro",
+                                   "grok-build-0.1", "", None])
+def test_slim_usage_is_lossless_for_cost_and_totals(usage, model):
+    slim = accounting.slim_usage(usage)
+    assert accounting.usage_cost_usd(slim, model) == accounting.usage_cost_usd(usage, model)
+    assert (accounting.usage_token_total_and_breakdown(slim)
+            == accounting.usage_token_total_and_breakdown(usage))
+    assert accounting.usage_token_total(slim) == accounting.usage_token_total(usage)
+
+
+def test_slim_usage_actually_drops_the_metadata():
+    """A no-op projection would pass the losslessness test above vacuously."""
+    fat = _USAGE_CORPUS[0]
+    slim = accounting.slim_usage(fat)
+    for dropped in ("service_tier", "inference_geo", "server_tool_use", "iterations",
+                    "speed", "output_tokens_details"):
+        assert dropped in fat and dropped not in slim, dropped
+    assert len(json.dumps(slim)) < len(json.dumps(fat)) / 2
+    # Non-positive values are dropped too: every reader guards with `v > 0`.
+    assert "cache_read_input_tokens" in slim          # 145233
+    assert accounting.slim_usage({"input_tokens": 0}) == {}
+
+
+def test_slim_usage_is_idempotent_and_passes_through_non_dicts():
+    for usage in _USAGE_CORPUS:
+        once = accounting.slim_usage(usage)
+        assert accounting.slim_usage(once) == once
+    for junk in (None, 42, "x", [1, 2]):
+        assert accounting.slim_usage(junk) is junk
+
+
+def test_slim_usage_covers_every_key_the_readers_consume():
+    """Guards the cross-module drift this design is meant to prevent: a key added to
+    usage_cost_usd/usage_token_breakdown/_explicit_total but not to the keep-set would be
+    silently zeroed out of every cached record."""
+    import inspect
+    from accounting import pricing
+    keep = set(pricing._USAGE_SCALAR_FIELDS) | set(pricing._USAGE_CACHE_CREATION_FIELDS)
+    source = "".join(inspect.getsource(fn) for fn in
+                     (pricing.usage_cost_usd, pricing.usage_token_breakdown,
+                      pricing._explicit_total))
+    # Every string literal fetched out of the usage dict inside those three readers.
+    consumed = set(re.findall(r'(?:get|usage\.get)\(\s*"([a-zA-Z_][\w]*)"', source))
+    consumed |= set(re.findall(r'"([a-zA-Z_][\w]*)"(?=\s*,\s*")', source))
+    missing = {k for k in consumed if k.endswith(("tokens", "Tokens", "Count", "_input_tokens"))
+               or k in {"input", "output", "cached", "thoughts", "tool", "tools", "total"}} - keep
+    assert not missing, (
+        f"these usage keys are read by the token/cost math but slim_usage would discard "
+        f"them: {sorted(missing)} — add them to _USAGE_SCALAR_FIELDS in pricing.py"
+    )

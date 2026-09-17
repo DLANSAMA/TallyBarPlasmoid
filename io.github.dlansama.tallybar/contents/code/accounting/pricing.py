@@ -123,6 +123,61 @@ def usage_cost_usd(usage: Any, model: str | None) -> float:
     return cost / 1_000_000.0
 
 
+# Every usage key the three readers below actually look at: usage_cost_usd,
+# usage_token_breakdown and _explicit_total. Anything else in a provider's usage dict is
+# metadata the math never touches (Anthropic ships service_tier, inference_geo,
+# server_tool_use, iterations, speed and output_tokens_details on EVERY assistant message;
+# OpenAI ships reasoning_output_tokens, which is deliberately not added — it is already
+# inside output_tokens).
+#
+# This set lives here, beside its consumers, so that adding a key to usage_cost_usd without
+# adding it here is a one-file mistake rather than a silent cross-module drift. The
+# round-trip is pinned by tests/test_accounting.py::test_slim_usage_*.
+_USAGE_SCALAR_FIELDS = frozenset({
+    "input_tokens", "inputTokens", "promptTokenCount", "input",
+    "output_tokens", "outputTokens", "candidatesTokenCount", "output",
+    "tool", "tools", "toolTokens", "toolUsePromptTokenCount", "tool_use_prompt_token_count",
+    "cache_creation_input_tokens", "cacheCreationInputTokens",
+    "cache_read_input_tokens", "cacheReadInputTokens",
+    "cached_input_tokens", "cachedInputTokens", "cachedContentTokenCount", "cached",
+    "thoughtsTokenCount", "thoughts",
+    "total_tokens", "totalTokens", "totalTokenCount", "total",
+})
+# usage_cost_usd reads the Anthropic 5m/1h split out of this nested dict.
+_USAGE_CACHE_CREATION_FIELDS = frozenset({
+    "ephemeral_1h_input_tokens", "ephemeral_5m_input_tokens",
+})
+
+
+def slim_usage(usage: Any) -> Any:
+    """Project a provider usage dict onto only the fields the token/cost math reads.
+
+    The parse caches under ~/.tallybar/cache/ store one record per assistant message for
+    ALL time, and the summarizer re-applies its window on every refresh. Keeping the raw
+    usage dict meant ~55% of a 52 MB claude_logs.json was metadata that is loaded, decoded
+    into Python objects and re-serialised on every 5-minute refresh, and never read.
+
+    Every consumer treats a missing key and a zero/negative key identically (each uses a
+    ``v > 0`` guard), so non-positive values are dropped rather than stored. Non-dict input
+    is returned unchanged.
+    """
+    if not isinstance(usage, dict):
+        return usage
+    out: dict[str, Any] = {
+        k: v for k, v in usage.items()
+        if k in _USAGE_SCALAR_FIELDS and isinstance(v, (int, float)) and v > 0
+    }
+    detail = usage.get("cache_creation")
+    if isinstance(detail, dict):
+        kept = {
+            k: v for k, v in detail.items()
+            if k in _USAGE_CACHE_CREATION_FIELDS and isinstance(v, (int, float)) and v > 0
+        }
+        if kept:
+            out["cache_creation"] = kept
+    return out
+
+
 def _explicit_total(usage: Any) -> int | None:
     """The record's own total-token field, if it carries a positive one."""
     if not isinstance(usage, dict):
