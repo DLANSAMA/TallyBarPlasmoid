@@ -39,7 +39,9 @@ jobs:
 
       - name: QML static analysis (qmllint)
         run: |
-          sudo apt-get update && sudo apt-get install -y qt6-declarative-dev-tools || true
+          # No `|| true`: if the linter can't be installed the gate must fail, not skip.
+          # The Makefile resolves the off-PATH Qt6 binary (/usr/lib/qt6/bin/qmllint).
+          sudo apt-get update && sudo apt-get install -y qt6-declarative-dev-tools
           make qmllint
 
       - name: Type-check (mypy)

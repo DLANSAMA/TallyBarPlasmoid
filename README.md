@@ -185,7 +185,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 make test         # 530 tests
 make lint         # pyflakes (what CI runs)
-make check        # lint + qmllint + advisory mypy
+make check        # flake8 + Qt6 qmllint (fails on QML errors) + mypy
 make preview      # load a UI component in a standalone window, no Plasma needed
 make screenshots  # re-render docs/screenshots/ offscreen from a mock fixture
 make build        # package io.github.dlansama.tallybar.plasmoid
