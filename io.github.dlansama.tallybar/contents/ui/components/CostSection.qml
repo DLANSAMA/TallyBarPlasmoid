@@ -34,6 +34,7 @@ Item {
         font.family: root.uiFont
         font.pixelSize: 13
         font.weight: Font.DemiBold
+        textFormat: Text.PlainText
         text: costSection.cost.title || i18n("Cost")
     }
 
@@ -46,6 +47,7 @@ Item {
         color: costMouse.containsMouse ? root.primaryTextColor() : root.mutedTextColor(0.58)
         font.family: root.uiFont
         font.pixelSize: 24
+        textFormat: Text.PlainText
         text: root.costDrawerOpen ? "‹" : "›"
 
         Behavior on color {
@@ -97,6 +99,7 @@ Item {
         elide: Text.ElideRight
         font.family: root.uiFont
         font.pixelSize: 11
+        textFormat: Text.PlainText
         text: costSection.hasRealCost ? root.todayCostText(costSection.cost) : i18n("Local estimate unavailable")
     }
 
@@ -111,6 +114,7 @@ Item {
         elide: Text.ElideRight
         font.family: root.uiFont
         font.pixelSize: 11
+        textFormat: Text.PlainText
         text: costSection.hasRealCost ? root.weekCostText(costSection.cost) : ""
         // Hide when a summary carries no 7-day row so there's no empty gap.
         visible: text.length > 0
@@ -127,6 +131,7 @@ Item {
         elide: Text.ElideRight
         font.family: root.uiFont
         font.pixelSize: 11
+        textFormat: Text.PlainText
         text: costSection.hasRealCost ? root.monthCostText(costSection.cost) : i18n("No local token cost summary found")
         // Hide the second line when a summary has no 30-day row so there's no empty gap.
         visible: text.length > 0
@@ -144,6 +149,7 @@ Item {
         font.family: root.uiFont
         font.pixelSize: 11
         // Per-type token breakdown (Input · Output · Cached) for the 30-day window.
+        textFormat: Text.PlainText
         text: String(costSection.cost.breakdown || "")
         visible: costSection.hasBreakdown
     }

@@ -132,6 +132,7 @@ Item {
                     font.pixelSize: root.providerTabFontSize(providerTab.providerKey)
                     font.weight: providerTab.selected ? Font.DemiBold : Font.Medium
                     horizontalAlignment: Text.AlignHCenter
+                    textFormat: Text.PlainText
                     text: root.tabLabel(providerTab.providerKey)
                 }
 

@@ -157,6 +157,7 @@ Item {
         font.family: (root && root.uiFont) ? root.uiFont : ""
         font.pixelSize: 11
         font.weight: Font.Normal
+        textFormat: Text.PlainText
         text: (root && root.metricUsedText) ? root.metricUsedText(modelData) : ""
     }
 
@@ -171,6 +172,7 @@ Item {
         font.family: (root && root.uiFont) ? root.uiFont : ""
         font.pixelSize: 11
         horizontalAlignment: Text.AlignRight
+        textFormat: Text.PlainText
         text: (modelData && modelData.reset) ? modelData.reset : ""
     }
 
@@ -187,6 +189,7 @@ Item {
         font.family: (root && root.uiFont) ? root.uiFont : ""
         font.pixelSize: 11
         visible: row.hasSplitDetail
+        textFormat: Text.PlainText
         text: row.detailLeft
     }
 
@@ -202,6 +205,7 @@ Item {
         font.pixelSize: 11
         horizontalAlignment: Text.AlignRight
         visible: row.hasSplitDetail
+        textFormat: Text.PlainText
         text: row.detailRight
     }
 
@@ -217,6 +221,7 @@ Item {
         font.family: (root && root.uiFont) ? root.uiFont : ""
         font.pixelSize: 11
         visible: row.hasDetailLine
+        textFormat: Text.PlainText
         text: row.detailText
     }
 }

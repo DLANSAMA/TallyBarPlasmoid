@@ -176,6 +176,7 @@ PlasmaCore.PopupPlasmaWindow {
                             color: parent.sel ? root.primaryTextColor() : root.primaryTextColor(0.7)
                             font.family: root.uiFont
                             font.pixelSize: 11
+                            textFormat: Text.PlainText
                             text: modelData.l
                         }
 
@@ -228,6 +229,7 @@ PlasmaCore.PopupPlasmaWindow {
                             color: parent.sel ? root.primaryTextColor() : root.primaryTextColor(0.7)
                             font.family: root.uiFont
                             font.pixelSize: 11
+                            textFormat: Text.PlainText
                             text: modelData + "m"
                         }
 
@@ -278,6 +280,7 @@ PlasmaCore.PopupPlasmaWindow {
                             color: parent.act ? root.primaryTextColor() : root.primaryTextColor(0.55)
                             font.family: root.uiFont
                             font.pixelSize: 11
+                            textFormat: Text.PlainText
                             text: root.providerShortLabel(modelData)
                         }
 
@@ -330,6 +333,7 @@ PlasmaCore.PopupPlasmaWindow {
                             color: parent.act ? root.primaryTextColor() : root.primaryTextColor(0.55)
                             font.family: root.uiFont
                             font.pixelSize: 11
+                            textFormat: Text.PlainText
                             text: root.providerShortLabel(modelData)
                         }
 
@@ -477,6 +481,7 @@ PlasmaCore.PopupPlasmaWindow {
                             color: parent.act ? root.primaryTextColor() : root.primaryTextColor(0.6)
                             font.family: root.uiFont
                             font.pixelSize: 11
+                            textFormat: Text.PlainText
                             text: modelData + "%"
                         }
 
@@ -531,6 +536,7 @@ PlasmaCore.PopupPlasmaWindow {
                             color: parent.sel ? root.primaryTextColor() : root.primaryTextColor(0.7)
                             font.family: root.uiFont
                             font.pixelSize: 11
+                            textFormat: Text.PlainText
                             text: modelData.l
                         }
 
@@ -574,6 +580,7 @@ PlasmaCore.PopupPlasmaWindow {
                         color: parent.sel ? root.primaryTextColor() : root.primaryTextColor(0.7)
                         font.family: root.uiFont
                         font.pixelSize: 11
+                        textFormat: Text.PlainText
                         text: settingsPopout.budgetIsCustom ? ("$" + root.monthlyBudgetValue()) : i18n("Custom…")
                     }
 
