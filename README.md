@@ -155,9 +155,8 @@ python3 io.github.dlansama.tallybar/contents/code/backend.py --cost
 back to the last cached snapshot rather than exiting silently, because a crash
 that prints nothing would blank the widget.
 
-Design notes, incident history and the reasoning behind the less obvious
-invariants are in [`docs/DEVNOTES.md`](docs/DEVNOTES.md); the contracts a change
-must not break are in [`CLAUDE.md`](CLAUDE.md).
+The contracts a change must not break — and the test that guards each one — are
+in [`CLAUDE.md`](CLAUDE.md).
 
 ## Privacy and security
 

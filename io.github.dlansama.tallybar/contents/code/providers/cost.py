@@ -274,7 +274,7 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
 
         # 1) Live RPC — authoritative for conversations loaded in the language server's memory.
         # Incremental harvest: load persisted lastModifiedTime watermarks so unchanged cascades
-        # are skipped (see ``rpcWatermarks`` contract in CLAUDE.md / docs/DEVNOTES.md).
+        # are skipped (see the ``rpcWatermarks`` contract in CLAUDE.md).
         marks = ledger.get("rpcWatermarks")
         if not isinstance(marks, dict):
             marks = {}
