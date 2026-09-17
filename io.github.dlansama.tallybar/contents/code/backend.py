@@ -790,6 +790,19 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     }
     diagnostics: dict[str, Any] = {}
 
+    # Per-phase wall clock, surfaced as diagnostics.timings. The refresh is a one-shot
+    # process on a 5-minute timer, so a phase that quietly grows costs the user battery and
+    # disk on every tick with nothing in the snapshot to show it — exactly how the 2026-06-07
+    # "Cost scan timed out" regression (110+ cascades re-queried per run) stayed invisible
+    # until it started tripping the deadline. Monotonic, so a clock step can't produce a
+    # negative. These do NOT sum to `total`: the cost scan deliberately overlaps the provider
+    # fetches, and `cost_scan` measures launch -> clean await, not CPU time.
+    phase_start = time.monotonic()
+    timings: dict[str, int] = {}
+
+    def mark(name: str, since: float) -> None:
+        timings[name] = int((time.monotonic() - since) * 1000)
+
     # Load the last-known-good snapshot ONCE up front and reuse it for: (1) the Claude
     # credit/overage throttle (prev creditBalance.fetchedAt gates the two slow GETs), (2)
     # the Antigravity partial-lane carry-forward, and (3) the transient-failure carry-forward
@@ -814,6 +827,7 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     # exactly like the old serial version: the outer asyncio.wait_for(timeout) here, plus a
     # cooperative wall-clock `deadline` threaded into the Antigravity ledger's per-DB loop.
     cost_deadline = time.time() + args.timeout
+    cost_scan_start = time.monotonic()
     cost_scan = asyncio.ensure_future(
         asyncio.wait_for(
             to_daemon_thread(compute_local_cost_summaries, cost_deadline),
@@ -823,7 +837,7 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
 
     cookie_task = asyncio.create_task(collect_browser_sessions(args.timeout, args.background))
 
-
+    cookie_start = time.monotonic()
     try:
         cookies, browser_stats = await asyncio.wait_for(cookie_task, timeout=args.timeout + 1.0)
         diagnostics["browser"] = browser_stats
@@ -833,7 +847,9 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     except Exception as exc:
         cookies = []
         diagnostics["browser"] = {"status": "error", "message": scrub_credentials(str(exc))[:160]}
+    mark("cookies", cookie_start)
 
+    provider_start = time.monotonic()
     api_tasks = {}
     local_tasks = {}
     to_expired = False
@@ -948,6 +964,7 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
             raise base_part
     except Exception as exc:
         diagnostics["orchestrator_error"] = scrub_credentials(f"{exc.__class__.__name__}: {str(exc)}")[:160]
+    mark("providers", provider_start)
 
     def get_task_result(task: asyncio.Task | None, fallback: dict[str, Any], label: str) -> dict[str, Any]:
         if task is None:
@@ -1101,7 +1118,11 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         # would let it slip past and crash build_snapshot, printing NO JSON for the whole
         # refresh. Record it and ship the freshly-computed provider data unenriched.
         diagnostics["cost_summary_error"] = scrub_credentials(f"{exc.__class__.__name__}: {str(exc)}")[:160]
+    mark("cost_scan", cost_scan_start)
     enrich_ui_formatting(providers)
+
+    mark("total", phase_start)
+    diagnostics["timings"] = timings
 
     return {
         "ok": True,
