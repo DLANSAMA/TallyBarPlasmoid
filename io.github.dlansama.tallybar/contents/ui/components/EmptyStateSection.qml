@@ -5,9 +5,14 @@ ColumnLayout {
     id: emptyStateSection
 
     property var root
+    // Height of the VIEWPORT (the host's metricsScroller), passed in by the host. NOT
+    // `parent.height`: the parent is the scroller's content column, whose height derives from
+    // its children, so that collapses to the 120 floor and the message + action button bunch
+    // up at the top instead of filling the body.
+    property real availableHeight: 0
 
     Layout.fillWidth: true
-    Layout.preferredHeight: Math.max(120, parent.height)
+    Layout.preferredHeight: Math.max(120, availableHeight)
     visible: root.providerLimits().length === 0 && !root.hasCostSection() && !root.hasExtraUsage()
     spacing: 12
 
