@@ -9,6 +9,8 @@ import sys
 import urllib.error
 from pathlib import Path
 
+import pytest
+
 CODE_DIR = Path(__file__).parent.parent / "io.github.dlansama.tallybar" / "contents" / "code"
 sys.path.insert(0, str(CODE_DIR))
 
@@ -76,3 +78,26 @@ def test_atomic_write_text_perms_and_no_leftovers(tmp_path):
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
     assert stat.S_IMODE(target.parent.stat().st_mode) == 0o700
     assert [p.name for p in target.parent.iterdir()] == ["file.json"]
+
+
+@pytest.mark.asyncio
+async def test_to_daemon_thread_bounded_pool_reuse_and_concurrency():
+    import asyncio
+    import threading
+    import time
+
+    def task_fn(val):
+        time.sleep(0.01)
+        return val * 2
+
+    # Launch 25 concurrent tasks
+    futs = [io_helpers.to_daemon_thread(task_fn, i) for i in range(25)]
+    results = await asyncio.gather(*futs)
+    assert results == [i * 2 for i in range(25)]
+
+    # All tallybar-workers must be daemon threads
+    workers = [t for t in threading.enumerate() if t.name == "tallybar-worker"]
+    assert workers
+    assert all(t.daemon for t in workers)
+    # Total live workers must not exceed _MAX_DAEMON_WORKERS
+    assert len(workers) <= io_helpers._MAX_DAEMON_WORKERS

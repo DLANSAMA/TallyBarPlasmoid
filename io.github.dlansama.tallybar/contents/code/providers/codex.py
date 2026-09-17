@@ -336,7 +336,7 @@ async def run_codex_rpc(timeout: float) -> dict[str, Any]:
         result.update(status="timeout", message="Codex JSON-RPC timed out")
         return result
     except Exception as exc:
-        result.update(status="error", message=scrub_credentials(str(exc))[:160])
+        result.update(status="api-error", message=scrub_credentials(str(exc))[:160])
         return result
     finally:
         if child is not None:

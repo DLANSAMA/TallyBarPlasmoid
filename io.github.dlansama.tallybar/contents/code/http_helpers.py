@@ -136,11 +136,11 @@ async def run_threaded_provider(
             result.update(status="timeout", message=f"{fallback['label']} telemetry timed out")
             return result
         result = dict(fallback)
-        result.update(status="error", message=scrub_credentials(str(exc))[:160])
+        result.update(status="api-error", message=scrub_credentials(str(exc))[:160])
         return result
     except Exception as exc:
         result = dict(fallback)
-        result.update(status="error", message=scrub_credentials(str(exc))[:160])
+        result.update(status="api-error", message=scrub_credentials(str(exc))[:160])
         return result
 
 
@@ -153,5 +153,5 @@ async def bounded_provider(coro: Any, timeout: float, fallback: dict[str, Any]) 
         return result
     except Exception as exc:
         result = dict(fallback)
-        result.update(status="error", message=scrub_credentials(str(exc))[:160])
+        result.update(status="api-error", message=scrub_credentials(str(exc))[:160])
         return result

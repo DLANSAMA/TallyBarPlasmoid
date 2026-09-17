@@ -294,9 +294,10 @@ def run_gemini_web(cookies: list[BrowserCookie], timeout: float) -> dict[str, An
     except Exception as exc:
         result.update(status="api-error", message=f"Gemini usage parse failed: {scrub_credentials(str(exc))[:120]}")
         return result
-    # The POST succeeded and parsed, so these scraped tokens are known-good — cache them so
-    # the next refresh can skip this HTML GET.
-    _save_gemini_tokens(at, bl, sid)
+    # If the POST succeeded and parsed limits, these scraped tokens are known-good — cache
+    # them so the next refresh can skip this HTML GET.
+    if limits:
+        _save_gemini_tokens(at, bl, sid)
     # Show only the Code Assist quota windows (Session + Weekly). The consumer
     # gemini.google.com web-app quota ("Gemini Apps" etc.) is a different metric
     # and was confusing mixed in here, so it is intentionally not merged.

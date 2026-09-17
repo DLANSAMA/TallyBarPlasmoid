@@ -21,34 +21,73 @@ import time
 from pathlib import Path
 from typing import Any
 
-# Re-export everything from submodules so ``import backend; backend.X`` works.
-from crypto import *   # noqa: F401,F403
-from cookies import *  # noqa: F401,F403
-from http_helpers import *  # noqa: F401,F403
-from accounting import *   # noqa: F401,F403
-from providers import *    # noqa: F401,F403
-
-# Explicit imports for names used in this file.
-from accounting import default_provider, now_iso, enrich_ui_formatting
+from accounting import default_provider, enrich_ui_formatting, now_iso
 from cookies import collect_browser_sessions, host_matches_any
-from io_helpers import atomic_write_text as _atomic_write_text, flock_with_timeout, to_daemon_thread
 from http_helpers import bounded_provider, run_threaded_provider, scrub_credentials
+from io_helpers import atomic_write_text as _atomic_write_text, flock_with_timeout, to_daemon_thread
 from providers import (
     GEMINI_DOMAINS,
-    compute_local_cost_summaries,
     apply_cost_summaries,
     apply_google_one_credits,
     choose_antigravity_result,
+    compute_local_cost_summaries,
+    google_one_credit_fresh,
     run_antigravity_local,
     run_antigravity_remote,
     run_claude_api,
     run_codex_rpc,
     run_gemini_web,
     run_google_one_credits,
-    google_one_credit_fresh,
     run_grok_local,
     run_openai_cookie_api,
 )
+
+__all__ = [
+    "CONFIG_PATH",
+    "DEFAULT_NOTIFY_THRESHOLDS",
+    "GEMINI_DOMAINS",
+    "NOTIFY_STATE_PATH",
+    "PROVIDER_ORDER",
+    "SNAPSHOT_PATH",
+    "all_ai_month_to_date_cost",
+    "all_ai_projected_month_cost",
+    "apply_cost_summaries",
+    "apply_google_one_credits",
+    "bounded_provider",
+    "build_snapshot",
+    "carry_forward_partial_antigravity_lanes",
+    "carry_forward_provider_last_good",
+    "choose_antigravity_result",
+    "collect_browser_sessions",
+    "compute_local_cost_summaries",
+    "compute_notifications",
+    "cost_export",
+    "default_provider",
+    "enrich_ui_formatting",
+    "flock_with_timeout",
+    "google_one_credit_fresh",
+    "host_matches_any",
+    "load_config",
+    "load_snapshot",
+    "main",
+    "now_iso",
+    "public_config",
+    "run_antigravity_local",
+    "run_antigravity_remote",
+    "run_claude_api",
+    "run_codex_rpc",
+    "run_gemini_web",
+    "run_google_one_credits",
+    "run_grok_local",
+    "run_openai_cookie_api",
+    "run_threaded_provider",
+    "save_config",
+    "save_snapshot",
+    "scrub_credentials",
+    "to_daemon_thread",
+    "update_config_values",
+    "update_refresh_interval",
+]
 
 PROVIDER_ORDER = ("codex", "claude", "gemini", "antigravity", "grok")
 CONFIG_PATH = Path.home() / ".tallybar" / "config.json"
@@ -72,7 +111,7 @@ _BUDGET_THRESHOLDS = (80, 100)
 # the browser cookies were unreadable this run, not that the user signed out.
 _ACTIONABLE_BAD_STATUSES = frozenset((
     "missing-cookies", "unauthorized", "wallet-locked", "wallet-state-unknown",
-    "timeout", "api-error",
+    "timeout", "api-error", "error",
 ))
 
 
@@ -516,7 +555,7 @@ def carry_forward_partial_antigravity_lanes(provider: dict[str, Any],
 # challenge, one-off timeout) — safe to paper over with the last-known-good reading for
 # a bounded grace window. A genuinely-expired cookie also surfaces as "unauthorized",
 # so the window is deliberately short: after it elapses the real error resurfaces.
-_TRANSIENT_PROVIDER_STATUSES = frozenset(("timeout", "api-error", "unauthorized"))
+_TRANSIENT_PROVIDER_STATUSES = frozenset(("timeout", "api-error", "unauthorized", "error"))
 
 
 def carry_forward_provider_last_good(provider: dict[str, Any], cached: Any,
@@ -918,16 +957,16 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         # is guaranteed done() (result, exception, or cancelled). This branch is
         # therefore unreachable in practice; kept only to fail safe if that ever changes.
         if not task.done():
-            status = "timeout" if to_expired else "error"
+            status = "timeout" if to_expired else "api-error"
             msg = f"{label} telemetry timed out" if to_expired else f"{label} telemetry failed"
             return {**fallback, "status": status, "message": msg}
         if task.cancelled():
-            status = "timeout" if to_expired else "error"
+            status = "timeout" if to_expired else "api-error"
             msg = f"{label} telemetry timed out" if to_expired else f"{label} telemetry cancelled"
             return {**fallback, "status": status, "message": msg}
         exc = task.exception()
         if exc is not None:
-            return {**fallback, "status": "error", "message": scrub_credentials(str(exc))[:160]}
+            return {**fallback, "status": "api-error", "message": scrub_credentials(str(exc))[:160]}
         return task.result()
 
     providers["antigravity"] = get_task_result(
