@@ -59,11 +59,25 @@ a silent success.
 
 ## Limitations
 
-**`CostPopout.qml` and `SettingsPopout.qml` cannot be screenshotted offscreen.**
-Both inherit `PlasmaCore.PopupPlasmaWindow`, so each is a separate window with
-its own scene. `grabToImage` on an item in another window's scene fails with
-*"cannot call function with argument created in a different engine"*. Those two
-need a live Plasma session and a real screen grab (`spectacle -a`).
+**`CostPopout.qml` CAN be screenshotted** — `make screenshots` writes all three of
+its tabs (`component=CostPopout graphMode=day|week|month`). It took two
+non-obvious steps, both now handled in `screenshot.qml`:
+
+- It inherits `PlasmaCore.PopupPlasmaWindow`, and `grabToImage` refuses an item
+  whose *window is not visible*. Creating the object is not enough — the harness
+  drives the widget's real `costDrawerOpen` state (gated by `drawerExpanded =
+  costDrawerOpen && hasCostSection()`) so the window actually maps.
+- Grab the `mainItem`, never its parent: the window's `QQuickRootItem` has no QML
+  engine and `grabToImage` refuses it. The card paints no background of its own —
+  Plasma's translucent surface normally supplies one and does not exist offscreen —
+  so a backdrop `Rectangle` is injected *into* the `mainItem` at a low `z`.
+
+**`SettingsPopout.qml` is not wired up for screenshots.** The same approach should
+work (it is the same `PopupPlasmaWindow` shape), but nothing publishes it today.
+
+**Window PLACEMENT still can't be verified offscreen.** KWin positions each flyout
+beside the widget; that needs a live session and a real grab (`spectacle -a`). The
+screenshots capture card *contents* only.
 
 **`main.qml` is a `PlasmoidItem` root** — it inherits a Plasma C++ type that is
 only registered inside Plasma, so it can't be loaded standalone either.

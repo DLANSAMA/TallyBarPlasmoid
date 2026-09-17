@@ -10,15 +10,27 @@
 //
 // Arguments (positional key=value after `--`, read from Qt.application.arguments):
 //   out=<path>        PNG destination                  (default ./shot.png)
-//   component=<name>  FullRepresentation | CompactRepresentation
+//   component=<name>  FullRepresentation | CompactRepresentation | CostPopout
 //   provider=<key>    provider tab to select           (default claude)
+//   graphMode=<key>   CostPopout only: day | week | month  (default week)
 //   scale=<n>         pixel ratio the grab renders at  (default 2)
 //
-// Only the two in-widget components can be captured. The Cost and Settings
-// flyouts are each a separate PopupPlasmaWindow, and grabbing an item that lives
-// in another window's scene from here fails with "cannot call function with
-// argument created in a different engine" — those two need a live Plasma session
-// and a real screen grab.
+// The Cost flyout IS capturable, with two constraints that took a while to find:
+//
+//   1. It is a PopupPlasmaWindow, so its mainItem only becomes grabbable once the
+//      window is actually visible — that means driving the real state the widget
+//      uses (`costDrawerOpen`, gated by `drawerExpanded = costDrawerOpen &&
+//      hasCostSection()`), not just creating the object. Before that, grabToImage
+//      refuses with "item's window is not visible".
+//   2. Grab the mainItem, never its parent: the window's QQuickRootItem has no QML
+//      engine and grabToImage refuses it. The card paints no background of its own
+//      (Plasma's translucent surface normally supplies it, and that surface does not
+//      exist offscreen), so a backdrop Rectangle is injected INTO the mainItem at a
+//      low z rather than behind it.
+//
+// Window PLACEMENT still cannot be verified this way — KWin positions the flyout
+// beside the widget and that needs a live session (see CLAUDE.md). This captures the
+// card's contents only.
 
 import QtQuick
 import QtQuick.Window
@@ -42,8 +54,14 @@ Window {
     readonly property string outFile: argValue("out", "shot.png")
     readonly property string componentName: argValue("component", "FullRepresentation")
     readonly property string provider: argValue("provider", "claude")
+    readonly property string graphMode: argValue("graphMode", "week")
     readonly property real grabScale: Number(argValue("scale", "2"))
     readonly property bool compact: componentName === "CompactRepresentation"
+    // The cost flyout is hosted BY FullRepresentation (it needs root's helpers, cost data
+    // and costGraphMode state), so this mode loads the full widget and then opens the
+    // flyout against it — the same path the running widget takes.
+    readonly property bool popout: componentName === "CostPopout"
+    property var popoutItem: null
 
     // Repo root = two levels up from tools/preview/.
     readonly property string repoRoot: {
@@ -130,9 +148,53 @@ Window {
         return snap;
     }
 
+    // ---------------------------------------------------------------------
+    // Cost flyout. Driven through the SAME state the running widget uses —
+    // costGraphMode for the Day/Week/Month tab, costDrawerOpen to open it — so a
+    // screenshot can't show a configuration the widget can't actually reach.
+    // ---------------------------------------------------------------------
+    function openCostPopout(host) {
+        host.costGraphMode = shot.graphMode;
+        host.costDrawerOpen = true;
+        if (!host.drawerExpanded) {
+            // drawerExpanded = costDrawerOpen && hasCostSection(); a provider with no cost
+            // data would leave the window hidden and grabToImage would refuse it.
+            console.error("cost flyout stayed closed for provider=" + shot.provider
+                          + " (no cost section in the fixture?)");
+            Qt.exit(6);
+            return;
+        }
+        const component = Qt.createComponent(
+            repoRoot + "/io.github.dlansama.tallybar/contents/ui/CostPopout.qml");
+        if (component.status === Component.Error) {
+            console.error("failed to load CostPopout.qml: " + component.errorString());
+            Qt.exit(3);
+            return;
+        }
+        const win = component.createObject(shot, { root: host, anchorItem: flyoutAnchor });
+        if (!win || !win.mainItem) {
+            console.error("CostPopout did not instantiate");
+            Qt.exit(3);
+            return;
+        }
+        // The card paints no background of its own — Plasma's translucent surface normally
+        // supplies it, and offscreen there is no such surface, so the light-on-dark palette
+        // would land on transparent black. Inject the same backdrop the widget shots use,
+        // INSIDE the mainItem (its parent is a QQuickRootItem, which grabToImage refuses).
+        Qt.createQmlObject(
+            'import QtQuick; Rectangle { anchors.fill: parent; z: -1000; radius: 18; '
+            + 'color: "#1c1c1e"; border.width: 1; border.color: Qt.rgba(1, 1, 1, 0.08) }',
+            win.mainItem, "costPopoutBackdrop");
+        shot.popoutItem = win.mainItem;
+    }
+
+    // Stand-in for FullRepresentation's invisible 1x1 left-edge anchor.
+    Item { id: flyoutAnchor; width: 1; height: 1 }
+
     Component.onCompleted: {
         loadTelemetry();
-        loader.setSource(repoRoot + "/io.github.dlansama.tallybar/contents/ui/" + componentName + ".qml");
+        loader.setSource(repoRoot + "/io.github.dlansama.tallybar/contents/ui/"
+                         + (popout ? "FullRepresentation" : componentName) + ".qml");
     }
 
     // ---------------------------------------------------------------------
@@ -185,6 +247,8 @@ Window {
                     shot.width = item.implicitWidth;
                     shot.height = item.implicitHeight;
                 }
+                if (shot.popout)
+                    shot.openCostPopout(item);
             }
         }
     }
@@ -199,9 +263,15 @@ Window {
         running: true
         repeat: false
         onTriggered: {
-            const size = Qt.size(backdrop.width * shot.grabScale,
-                                 backdrop.height * shot.grabScale);
-            const requested = backdrop.grabToImage(function (result) {
+            const target = shot.popout ? shot.popoutItem : backdrop;
+            if (!target) {
+                console.error("nothing to grab for component=" + shot.componentName);
+                Qt.exit(6);
+                return;
+            }
+            const size = Qt.size(target.width * shot.grabScale,
+                                 target.height * shot.grabScale);
+            const requested = target.grabToImage(function (result) {
                 if (!result.saveToFile(shot.outFile)) {
                     console.error("saveToFile failed: " + shot.outFile);
                     Qt.exit(4);

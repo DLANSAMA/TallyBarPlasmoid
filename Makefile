@@ -112,6 +112,12 @@ screenshots:
 	@mkdir -p docs/screenshots
 	@$(SHOT_ENV) qml6 $(SHOT) -- provider=claude      out=docs/screenshots/widget-claude.png
 	@$(SHOT_ENV) qml6 $(SHOT) -- provider=antigravity out=docs/screenshots/widget-antigravity.png
+	@# Cost flyout — one shot per Day/Week/Month tab. Driven through the widget's own
+	@# costGraphMode/costDrawerOpen state, so these can only show a view the widget can
+	@# actually reach. Placement beside the widget still needs a live session to verify.
+	@$(SHOT_ENV) qml6 $(SHOT) -- component=CostPopout graphMode=day   out=docs/screenshots/cost-day.png
+	@$(SHOT_ENV) qml6 $(SHOT) -- component=CostPopout graphMode=week  out=docs/screenshots/cost-week.png
+	@$(SHOT_ENV) qml6 $(SHOT) -- component=CostPopout graphMode=month out=docs/screenshots/cost-month.png
 	@echo "Wrote docs/screenshots/*.png"
 
 # Regenerate the translation template from the i18n() calls in the QML.

@@ -36,9 +36,9 @@
       "accentColor": "#10a37f",
       "costSummary": {
         "title": "Cost (if pay-per-use)",
-        "today": "Today: $1.42 \u00b7 4.3M tok",
-        "last7Days": "Last 7 days: $8.00 \u00b7 33M tok",
-        "last30Days": "Last 30 days: $26.85 \u00b7 121M tok",
+        "today": "Today: $1.42 · 4.3M tok",
+        "last7Days": "Last 7 days: $8.00 · 33M tok",
+        "last30Days": "Last 30 days: $26.85 · 121M tok",
         "source": "local-codex-logs",
         "weeklyTokenUsage": [
           {
@@ -663,7 +663,7 @@
             "tokens": 121000000
           }
         ],
-        "breakdown": "Input 14.2M \u00b7 Output 2.1M \u00b7 Cached 105M"
+        "breakdown": "Input 14.2M · Output 2.1M · Cached 105M"
       }
     },
     "claude": {
@@ -713,9 +713,9 @@
       "accentColor": "#c07f63",
       "costSummary": {
         "title": "Cost (if pay-per-use)",
-        "today": "Today: $4.12 \u00b7 13.1M tok",
-        "last7Days": "Last 7 days: $26.08 \u00b7 84M tok",
-        "last30Days": "Last 30 days: $98.44 \u00b7 312M tok",
+        "today": "Today: $4.12 · 13.1M tok",
+        "last7Days": "Last 7 days: $26.08 · 84M tok",
+        "last30Days": "Last 30 days: $98.44 · 312M tok",
         "source": "local-claude-logs",
         "weeklyTokenUsage": [
           {
@@ -845,338 +845,800 @@
           {
             "date": "2026-02-22",
             "inMonth": false,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 4100000,
+            "cost": 1.273929,
+            "label": "4.1M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 2542000,
+                "cost": 0.789836
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 1558000,
+                "cost": 0.484093
+              }
+            ]
           },
           {
             "date": "2026-02-23",
             "inMonth": false,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 13100000,
+            "cost": 4.070357,
+            "label": "13.1M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 8122000,
+                "cost": 2.523621
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 4978000,
+                "cost": 1.546736
+              }
+            ]
           },
           {
             "date": "2026-02-24",
             "inMonth": false,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 17200000,
+            "cost": 5.344286,
+            "label": "17.2M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 10664000,
+                "cost": 3.313457
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 6536000,
+                "cost": 2.030829
+              }
+            ]
           },
           {
             "date": "2026-02-25",
             "inMonth": false,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 21300000,
+            "cost": 6.618214,
+            "label": "21.3M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 13206000,
+                "cost": 4.103293
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 8094000,
+                "cost": 2.514921
+              }
+            ]
           },
           {
             "date": "2026-02-26",
             "inMonth": false,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 25100000,
+            "cost": 7.798929,
+            "label": "25.1M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 15562000,
+                "cost": 4.835336
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 9538000,
+                "cost": 2.963593
+              }
+            ]
           },
           {
             "date": "2026-02-27",
             "inMonth": false,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 17600000,
+            "cost": 5.468571,
+            "label": "17.6M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 10912000,
+                "cost": 3.390514
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 6688000,
+                "cost": 2.078057
+              }
+            ]
           },
           {
             "date": "2026-02-28",
             "inMonth": false,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 7000000,
+            "cost": 2.175,
+            "label": "7M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 4340000,
+                "cost": 1.3485
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 2660000,
+                "cost": 0.8265
+              }
+            ]
           },
           {
             "date": "2026-03-01",
             "inMonth": true,
-            "tokens": 2329,
-            "cost": 0.00722,
-            "label": "0.0M",
-            "models": []
+            "tokens": 5500000,
+            "cost": 1.708929,
+            "label": "5.5M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 3410000,
+                "cost": 1.059536
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 2090000,
+                "cost": 0.649393
+              }
+            ]
           },
           {
             "date": "2026-03-02",
             "inMonth": true,
-            "tokens": 4658,
-            "cost": 0.01444,
-            "label": "0.0M",
-            "models": []
+            "tokens": 14500000,
+            "cost": 4.505357,
+            "label": "14.5M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 8990000,
+                "cost": 2.793321
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 5510000,
+                "cost": 1.712036
+              }
+            ]
           },
           {
             "date": "2026-03-03",
             "inMonth": true,
-            "tokens": 6987,
-            "cost": 0.02166,
-            "label": "0.0M",
-            "models": []
+            "tokens": 18600000,
+            "cost": 5.779286,
+            "label": "18.6M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 11532000,
+                "cost": 3.583157
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 7068000,
+                "cost": 2.196129
+              }
+            ]
           },
           {
             "date": "2026-03-04",
             "inMonth": true,
-            "tokens": 9316,
-            "cost": 0.02888,
-            "label": "0.0M",
-            "models": []
+            "tokens": 19200000,
+            "cost": 5.965714,
+            "label": "19.2M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 11904000,
+                "cost": 3.698743
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 7296000,
+                "cost": 2.266971
+              }
+            ]
           },
           {
             "date": "2026-03-05",
             "inMonth": true,
-            "tokens": 11645,
-            "cost": 0.036099,
-            "label": "0.0M",
-            "models": []
+            "tokens": 23000000,
+            "cost": 7.146429,
+            "label": "23M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 14260000,
+                "cost": 4.430786
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 8740000,
+                "cost": 2.715643
+              }
+            ]
           },
           {
             "date": "2026-03-06",
             "inMonth": true,
-            "tokens": 13974,
-            "cost": 0.043319,
-            "label": "0.0M",
-            "models": []
+            "tokens": 19000000,
+            "cost": 5.903571,
+            "label": "19M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 11780000,
+                "cost": 3.660214
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 7220000,
+                "cost": 2.243357
+              }
+            ]
           },
           {
             "date": "2026-03-07",
             "inMonth": true,
-            "tokens": 16303,
-            "cost": 0.050539,
-            "label": "0.0M",
-            "models": []
+            "tokens": 8400000,
+            "cost": 2.61,
+            "label": "8.4M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 5208000,
+                "cost": 1.6182
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 3192000,
+                "cost": 0.9918
+              }
+            ]
           },
           {
             "date": "2026-03-08",
             "inMonth": true,
-            "tokens": 2329,
-            "cost": 0.00722,
-            "label": "0.0M",
-            "models": []
+            "tokens": 6900000,
+            "cost": 2.143929,
+            "label": "6.9M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 4278000,
+                "cost": 1.329236
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 2622000,
+                "cost": 0.814693
+              }
+            ]
           },
           {
             "date": "2026-03-09",
             "inMonth": true,
-            "tokens": 4658,
-            "cost": 0.01444,
-            "label": "0.0M",
-            "models": []
+            "tokens": 12400000,
+            "cost": 3.852857,
+            "label": "12.4M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 7688000,
+                "cost": 2.388771
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 4712000,
+                "cost": 1.464086
+              }
+            ]
           },
           {
             "date": "2026-03-10",
             "inMonth": true,
-            "tokens": 6987,
-            "cost": 0.02166,
-            "label": "0.0M",
-            "models": []
+            "tokens": 16500000,
+            "cost": 5.126786,
+            "label": "16.5M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 10230000,
+                "cost": 3.178607
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 6270000,
+                "cost": 1.948179
+              }
+            ]
           },
           {
             "date": "2026-03-11",
             "inMonth": true,
-            "tokens": 9316,
-            "cost": 0.02888,
-            "label": "0.0M",
-            "models": []
+            "tokens": 20600000,
+            "cost": 6.400714,
+            "label": "20.6M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 12772000,
+                "cost": 3.968443
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 7828000,
+                "cost": 2.432271
+              }
+            ]
           },
           {
             "date": "2026-03-12",
             "inMonth": true,
-            "tokens": 11645,
-            "cost": 0.036099,
-            "label": "0.0M",
-            "models": []
+            "tokens": 24400000,
+            "cost": 7.581429,
+            "label": "24.4M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 15128000,
+                "cost": 4.700486
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 9272000,
+                "cost": 2.880943
+              }
+            ]
           },
           {
             "date": "2026-03-13",
             "inMonth": true,
-            "tokens": 13974,
-            "cost": 0.043319,
-            "label": "0.0M",
-            "models": []
+            "tokens": 20400000,
+            "cost": 6.338571,
+            "label": "20.4M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 12648000,
+                "cost": 3.929914
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 7752000,
+                "cost": 2.408657
+              }
+            ]
           },
           {
             "date": "2026-03-14",
             "inMonth": true,
-            "tokens": 16303,
-            "cost": 0.050539,
-            "label": "0.0M",
-            "models": []
+            "tokens": 6300000,
+            "cost": 1.9575,
+            "label": "6.3M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 3906000,
+                "cost": 1.21365
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 2394000,
+                "cost": 0.74385
+              }
+            ]
           },
           {
             "date": "2026-03-15",
             "inMonth": true,
-            "tokens": 2329,
-            "cost": 0.00722,
-            "label": "0.0M",
-            "models": []
+            "tokens": 4800000,
+            "cost": 1.491429,
+            "label": "4.8M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 2976000,
+                "cost": 0.924686
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 1824000,
+                "cost": 0.566743
+              }
+            ]
           },
           {
             "date": "2026-03-16",
             "inMonth": true,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 13800000,
+            "cost": 4.287857,
+            "label": "13.8M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 8556000,
+                "cost": 2.658471
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 5244000,
+                "cost": 1.629386
+              }
+            ]
           },
           {
             "date": "2026-03-17",
             "inMonth": true,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 17900000,
+            "cost": 5.561786,
+            "label": "17.9M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 11098000,
+                "cost": 3.448307
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 6802000,
+                "cost": 2.113479
+              }
+            ]
           },
           {
             "date": "2026-03-18",
             "inMonth": true,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 22000000,
+            "cost": 6.835714,
+            "label": "22M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 13640000,
+                "cost": 4.238143
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 8360000,
+                "cost": 2.597571
+              }
+            ]
           },
           {
             "date": "2026-03-19",
             "inMonth": true,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 22300000,
+            "cost": 6.928929,
+            "label": "22.3M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 13826000,
+                "cost": 4.295936
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 8474000,
+                "cost": 2.632993
+              }
+            ]
           },
           {
             "date": "2026-03-20",
             "inMonth": true,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 18300000,
+            "cost": 5.686071,
+            "label": "18.3M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 11346000,
+                "cost": 3.525364
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 6954000,
+                "cost": 2.160707
+              }
+            ]
           },
           {
             "date": "2026-03-21",
             "inMonth": true,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 7700000,
+            "cost": 2.3925,
+            "label": "7.7M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 4774000,
+                "cost": 1.48335
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 2926000,
+                "cost": 0.90915
+              }
+            ]
           },
           {
             "date": "2026-03-22",
             "inMonth": true,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 6200000,
+            "cost": 1.926429,
+            "label": "6.2M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 3844000,
+                "cost": 1.194386
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 2356000,
+                "cost": 0.732043
+              }
+            ]
           },
           {
             "date": "2026-03-23",
             "inMonth": true,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 15200000,
+            "cost": 4.722857,
+            "label": "15.2M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 9424000,
+                "cost": 2.928171
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 5776000,
+                "cost": 1.794686
+              }
+            ]
           },
           {
             "date": "2026-03-24",
             "inMonth": true,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 15800000,
+            "cost": 4.909286,
+            "label": "15.8M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 9796000,
+                "cost": 3.043757
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 6004000,
+                "cost": 1.865529
+              }
+            ]
           },
           {
             "date": "2026-03-25",
             "inMonth": true,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 19900000,
+            "cost": 6.183214,
+            "label": "19.9M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 12338000,
+                "cost": 3.833593
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 7562000,
+                "cost": 2.349621
+              }
+            ]
           },
           {
             "date": "2026-03-26",
             "inMonth": true,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 23700000,
+            "cost": 7.363929,
+            "label": "23.7M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 14694000,
+                "cost": 4.565636
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 9006000,
+                "cost": 2.798293
+              }
+            ]
           },
           {
             "date": "2026-03-27",
             "inMonth": true,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 19700000,
+            "cost": 6.121071,
+            "label": "19.7M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 12214000,
+                "cost": 3.795064
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 7486000,
+                "cost": 2.326007
+              }
+            ]
           },
           {
             "date": "2026-03-28",
             "inMonth": true,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 9100000,
+            "cost": 2.8275,
+            "label": "9.1M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 5642000,
+                "cost": 1.75305
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 3458000,
+                "cost": 1.07445
+              }
+            ]
           },
           {
             "date": "2026-03-29",
             "inMonth": true,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 4100000,
+            "cost": 1.273929,
+            "label": "4.1M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 2542000,
+                "cost": 0.789836
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 1558000,
+                "cost": 0.484093
+              }
+            ]
           },
           {
             "date": "2026-03-30",
             "inMonth": true,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 13100000,
+            "cost": 4.070357,
+            "label": "13.1M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 8122000,
+                "cost": 2.523621
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 4978000,
+                "cost": 1.546736
+              }
+            ]
           },
           {
             "date": "2026-03-31",
             "inMonth": true,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 17200000,
+            "cost": 5.344286,
+            "label": "17.2M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 10664000,
+                "cost": 3.313457
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 6536000,
+                "cost": 2.030829
+              }
+            ]
           },
           {
             "date": "2026-04-01",
             "inMonth": false,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 21300000,
+            "cost": 6.618214,
+            "label": "21.3M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 13206000,
+                "cost": 4.103293
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 8094000,
+                "cost": 2.514921
+              }
+            ]
           },
           {
             "date": "2026-04-02",
             "inMonth": false,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 25100000,
+            "cost": 7.798929,
+            "label": "25.1M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 15562000,
+                "cost": 4.835336
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 9538000,
+                "cost": 2.963593
+              }
+            ]
           },
           {
             "date": "2026-04-03",
             "inMonth": false,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 17600000,
+            "cost": 5.468571,
+            "label": "17.6M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 10912000,
+                "cost": 3.390514
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 6688000,
+                "cost": 2.078057
+              }
+            ]
           },
           {
             "date": "2026-04-04",
             "inMonth": false,
-            "tokens": 0,
-            "cost": 0.0,
-            "label": "0",
-            "models": []
+            "tokens": 7000000,
+            "cost": 2.175,
+            "label": "7M",
+            "models": [
+              {
+                "model": "claude-opus-4-5",
+                "tokens": 4340000,
+                "cost": 1.3485
+              },
+              {
+                "model": "claude-sonnet-4-5",
+                "tokens": 2660000,
+                "cost": 0.8265
+              }
+            ]
           }
         ],
         "hourlyTokenUsage": [
@@ -1374,7 +1836,7 @@
             "tokens": 22000000
           }
         ],
-        "breakdown": "Input 3.1M \u00b7 Output 9.4M \u00b7 Cached 299M"
+        "breakdown": "Input 3.1M · Output 9.4M · Cached 299M"
       }
     },
     "gemini": {
@@ -1425,15 +1887,15 @@
           "formattedDetailText": "",
           "formattedDetailLeft": "",
           "formattedDetailRight": "",
-          "sublabel": "Claude \u00b7 GPT"
+          "sublabel": "Claude · GPT"
         }
       ],
       "tier": "Google AI Pro",
       "costSummary": {
         "title": "Cost (if pay-per-use)",
-        "today": "Today: $0.68 \u00b7 2.2M tok",
-        "last7Days": "Last 7 days: $4.91 \u00b7 19M tok",
-        "last30Days": "Last 30 days: $17.32 \u00b7 63M tok",
+        "today": "Today: $0.68 · 2.2M tok",
+        "last7Days": "Last 7 days: $4.91 · 19M tok",
+        "last30Days": "Last 30 days: $17.32 · 63M tok",
         "source": "antigravity-token-ledger",
         "weeklyTokenUsage": [
           {
@@ -2087,7 +2549,7 @@
             "tokens": 12300000
           }
         ],
-        "breakdown": "Input 8.9M \u00b7 Output 1.4M \u00b7 Cached 53.1M"
+        "breakdown": "Input 8.9M · Output 1.4M · Cached 53.1M"
       }
     },
     "grok": {
@@ -2103,10 +2565,10 @@
           "unit": "percent",
           "isExtraUsage": false,
           "formattedUsedText": "57% used",
-          "formattedDetailText": "This week: 18.4M tokens \u00b7 $11.62",
+          "formattedDetailText": "This week: 18.4M tokens · $11.62",
           "formattedDetailLeft": "",
           "formattedDetailRight": "",
-          "detailText": "This week: 18.4M tokens \u00b7 $11.62"
+          "detailText": "This week: 18.4M tokens · $11.62"
         }
       ],
       "tier": "SuperGrok",

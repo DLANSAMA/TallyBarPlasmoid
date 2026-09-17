@@ -76,6 +76,34 @@ def test_offscreen_render_matches_committed_screenshot(provider, tmp_path):
     )
 
 
+@pytest.mark.parametrize("mode", ["day", "week", "month"])
+def test_cost_popout_render_matches_committed_screenshot(mode, tmp_path):
+    """Same guard as above for the cost flyout's three tabs.
+
+    The flyout is a separate PopupPlasmaWindow and used to be uncapturable offscreen, so it
+    was the one large piece of UI with no render regression test at all — the component that
+    would most easily go silently empty. It is capturable once the window is actually made
+    visible through the widget's own costDrawerOpen state; see tools/preview/screenshot.qml.
+    """
+    qml6 = shutil.which("qml6")
+    if qml6 is None or os.environ.get("CI"):
+        pytest.skip("qml6/QtQuick not available; offscreen render test skipped")
+    out = tmp_path / f"cost-{mode}.png"
+    env = dict(os.environ, QML_XHR_ALLOW_FILE_READ="1", QT_FORCE_STDERR_LOGGING="1",
+               QT_QPA_PLATFORM="offscreen", QT_QUICK_BACKEND="software",
+               XDG_ICON_THEME="breeze-dark", QT_QPA_PLATFORMTHEME="kde")  # mirrors Makefile SHOT_ENV
+    proc = subprocess.run([qml6, "tools/preview/screenshot.qml", "--", "component=CostPopout",
+                           f"graphMode={mode}", f"out={out}"],
+                          cwd=REPO, env=env, capture_output=True, text=True, timeout=120)
+    if not out.is_file():
+        pytest.skip(f"offscreen render unavailable here: {proc.stderr[-200:]}")
+    assert "TypeError" not in proc.stderr and "ReferenceError" not in proc.stderr, proc.stderr[-600:]
+    assert out.read_bytes() == (SHOTS / f"cost-{mode}.png").read_bytes(), (
+        f"offscreen render of the cost flyout '{mode}' tab no longer matches "
+        f"docs/screenshots/cost-{mode}.png. Open BOTH images and compare before regenerating."
+    )
+
+
 def test_extracted_components_do_not_size_themselves_from_parent():
     # Regression: EmptyStateSection was extracted with
     # `Layout.preferredHeight: Math.max(120, parent.height)` where the original read
