@@ -3,7 +3,7 @@
 Two concerns the rest of the suite (which drives ``main()`` in-process) can't cover:
 
 1. The shipped ``.plasmoid`` must carry its own license/attribution. ``make build``
-   tars ``io.github.dlansama.tallybar/`` (``tar -C <applet> .``), so the repo-root
+   zips ``io.github.dlansama.tallybar/`` (entries relative to the applet root), so the repo-root
    ``LICENSE`` never lands in the package on its own — a copy has to live under the
    applet dir. These tests pin that copy byte-identical to the root so the two can't
    silently drift, and assert the third-party brand-mark ``NOTICE`` ships too.
@@ -19,7 +19,7 @@ import os
 import shutil
 import subprocess
 import sys
-import tarfile
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -30,7 +30,7 @@ BACKEND_PY = APPLET_DIR / "contents" / "code" / "backend.py"
 
 
 def test_packaged_license_is_byte_identical_to_repo_root():
-    # `make build` tars only the applet dir, so the root LICENSE never ships; the copy
+    # `make build` packages only the applet dir, so the root LICENSE never ships; the copy
     # beside contents/ is what lands in the .plasmoid. Guard against drift byte-for-byte.
     root = REPO_ROOT / "LICENSE"
     packaged = APPLET_DIR / "LICENSE"
@@ -89,10 +89,10 @@ def test_built_plasmoid_ships_no_developer_caches():
     # the shipped package: `make typecheck` used to drop a 5 MB .mypy_cache/ into
     # contents/code/, which tripled the .plasmoid and shipped absolute paths from the
     # build machine to every user. mypy.ini now parks its cache at the repo root AND the
-    # tar excludes it — this pins both.
+    # archive excludes it — this pins both.
     make = shutil.which("make")
-    if make is None or shutil.which("tar") is None:
-        pytest.skip("make/tar not available")
+    if make is None or shutil.which("zip") is None:
+        pytest.skip("make/zip not available")
 
     build = subprocess.run(
         [make, "build"], cwd=REPO_ROOT, capture_output=True, text=True, timeout=60
@@ -102,22 +102,26 @@ def test_built_plasmoid_ships_no_developer_caches():
     package = REPO_ROOT / "io.github.dlansama.tallybar.plasmoid"
     assert package.is_file(), "make build produced no package"
 
-    with tarfile.open(package, "r:gz") as archive:
-        names = archive.getnames()
+    # KPackage 6 opens a .plasmoid with KZip only: kpackagetool6 (and the Plasma
+    # "Get New Widgets" installer behind it) rejects a tarball outright with "Could
+    # not open package file". Pin the container format, not just the contents.
+    assert zipfile.is_zipfile(package), "the .plasmoid must be a ZIP archive, not a tarball"
+    with zipfile.ZipFile(package) as archive:
+        names = archive.namelist()
 
-    # The package root is "." — every other member must be a real applet file, not a
-    # dot-directory (.mypy_cache, .ruff_cache, .pytest_cache, .git, ...) or a bytecode
-    # artifact.
+    # Every member must be a real applet file relative to the applet root — no
+    # "./" prefix (KPackage wants metadata.json at the top level), no dot-directory
+    # (.mypy_cache, .ruff_cache, .pytest_cache, .git, ...), no bytecode artifact.
     offenders = [
         name for name in names
-        if name != "."
-        and (any(part.startswith(".") for part in name.lstrip("./").split("/"))
-             or name.endswith((".pyc", ".pyo")))
+        if name.startswith("./")
+        or any(part.startswith(".") for part in name.split("/"))
+        or name.endswith((".pyc", ".pyo"))
     ]
     assert not offenders, f"developer artifacts in the shipped package: {offenders[:10]}"
 
     # And the things that MUST ship still do.
-    for required in ("./metadata.json", "./LICENSE", "./NOTICE", "./contents/code/backend.py"):
+    for required in ("metadata.json", "LICENSE", "NOTICE", "contents/code/backend.py"):
         assert required in names, f"{required} missing from the package"
 
 

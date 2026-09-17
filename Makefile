@@ -17,11 +17,16 @@ remove:
 build:
 	@echo "Building $(APPLET).plasmoid..."
 	@rm -f $(APPLET).plasmoid
-	@tar --exclude="__pycache__" --exclude="*.pyc" --exclude="*.pyo" --exclude="*.bak-*" \
-	     --exclude=".mypy_cache" --exclude=".ruff_cache" --exclude=".pytest_cache" \
-	     --exclude=".DS_Store" --exclude="requirements.txt" \
-	     -czf $(APPLET).plasmoid -C $(APPLET) .
-	@tar tzf $(APPLET).plasmoid | grep -q "metadata.json" || { echo "ERROR: $(APPLET).plasmoid is missing metadata.json" >&2; exit 1; }
+	@# A .plasmoid must be a ZIP archive: KPackage 6 (kpackagetool6, the Plasma
+	@# "Get New Widgets" installer) opens packages with KZip only and rejects a
+	@# tarball with "Could not open package file". Entries are relative to the
+	@# applet root (metadata.json at the top level), with no leading "./".
+	@cd $(APPLET) && zip -q -r -X ../$(APPLET).plasmoid . \
+	     -x "*/__pycache__/*" "__pycache__/*" "*.pyc" "*.pyo" "*.bak-*/*" \
+	        ".mypy_cache/*" "*/.mypy_cache/*" ".ruff_cache/*" "*/.ruff_cache/*" \
+	        ".pytest_cache/*" "*/.pytest_cache/*" "*/.DS_Store" ".DS_Store" \
+	        "requirements.txt"
+	@unzip -l $(APPLET).plasmoid | grep -q " metadata.json$$" || { echo "ERROR: $(APPLET).plasmoid is missing metadata.json" >&2; exit 1; }
 	@echo "Build complete."
 
 # Run the test suite exactly as CI does (uses the .venv pytest).
