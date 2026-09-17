@@ -21,7 +21,7 @@ Item {
     property bool loading: false
     property string lastError: ""
     // True once a live fetch has painted (mirrors main.qml's liveLoaded). When false the
-    // body is showing the cold-start cache, so the subtitle prefixes "Cached · " (Item 2).
+    // body is showing the cold-start cache, so the subtitle prefixes "Cached · ".
     property bool liveLoaded: false
     property bool configSaving: false
     property string configError: ""
@@ -88,7 +88,7 @@ Item {
     signal refreshIntervalRequested(real minutes)
     signal configChangeRequested(var changes)
     signal testNotificationRequested()
-    // Item 1: request a FOREGROUND refresh (backend run without --background) so a locked
+    // Request a FOREGROUND refresh (backend run without --background) so a locked
     // KWallet pops its native unlock dialog. main.qml builds the flag conditionally.
     signal unlockWalletRequested()
 
@@ -425,7 +425,7 @@ Item {
     }
 
     // The site the user logs into for a given provider's cookies (used by the
-    // missing-cookies remediation hint, Item 1).
+    // missing-cookies remediation hint).
     function providerLoginSite(providerKey) {
         return UIHelpers.providerLoginSite(providerKey);
     }
@@ -457,7 +457,7 @@ Item {
 
     // Actionable hint for a missing-cookies state: name the browser/profile to log into,
     // or say no profiles were found. Reads the per-store stats the backend already ships in
-    // diagnostics.browser.stores ({browser, profile, rows, decrypted, matched}). Item 1.
+    // diagnostics.browser.stores ({browser, profile, rows, decrypted, matched}).
     function cookieHint() {
         const d = root.telemetry && root.telemetry.diagnostics;
         const browser = d && d.browser ? d.browser : null;
@@ -477,7 +477,7 @@ Item {
     }
 
     // True when the selected provider's empty state is a locked/unreadable KWallet — the
-    // states that get the "Unlock KWallet" button (Item 1). wallet-state-unknown (the wallet
+    // states that get the "Unlock KWallet" button. wallet-state-unknown (the wallet
     // couldn't be checked during a background refresh) is treated like wallet-locked here:
     // unlocking and a foreground refresh is the same remedy.
     function emptyStateShowsUnlock() {
@@ -485,7 +485,7 @@ Item {
         return s === "wallet-locked" || s === "wallet-state-unknown";
     }
 
-    // The empty-state message, enriched with a remediation hint per status (Item 1). Falls
+    // The empty-state message, enriched with a remediation hint per status. Falls
     // back to the provider message / generic "No usage data".
     function emptyStateMessage() {
         if (root.lastError.length > 0)
@@ -513,7 +513,7 @@ Item {
         return String(p.message || "") || i18n("No usage data");
     }
 
-    // Feature 3: the backend attaches an actionUrl to some bad states (e.g. Gemini/Claude
+    // The backend attaches an actionUrl to some bad states (e.g. Gemini/Claude
     // unauthorized → a sign-in page). When present, the empty-state message becomes a clickable
     // link that opens it. Empty string = no link.
     function providerActionUrl() {
@@ -528,13 +528,13 @@ Item {
     }
 
     // A provider tab whose live status is bad while it may still show cached limits — the
-    // message is otherwise invisible, so the tab gets a warning glyph + tooltip (Item 1).
+    // message is otherwise invisible, so the tab gets a warning glyph + tooltip.
     function tabStatusBad(providerKey) {
         const providers = root.telemetry && root.telemetry.providers ? root.telemetry.providers : ({});
         const p = providers[providerKey];
         if (!p)
             return false;
-        // Feature 7: a muted provider never shows the amber warning glyph / bad-status badge.
+        // A muted provider never shows the amber warning glyph / bad-status badge.
         if (root.providerMuted(providerKey))
             return false;
         const s = String(p.status || "");
@@ -867,7 +867,7 @@ Item {
             "providers": ordered
         });
     }
-    // Feature 7: per-provider mute. A muted provider raises no notifications and is dropped
+    // Per-provider mute. A muted provider raises no notifications and is dropped
     // from the panel's badge/attention logic; it stays visible in the popup with a muted hint.
     function mutedProvidersValue() {
         const m = root.configValue("mutedProviders", []);
@@ -1011,7 +1011,7 @@ Item {
         onTriggered: root.nowTick = root.nowTick + 1
     }
 
-    // Feature 5: the last background refresh was skipped because the screen was locked, so the
+    // The last background refresh was skipped because the screen was locked, so the
     // painted snapshot is deliberately stale ("paused"), not a failure.
     function refreshPaused() {
         const d = root.telemetry && root.telemetry.diagnostics;
@@ -1059,7 +1059,7 @@ Item {
             // Distinguish a cold-cache paint from live data: the cache keeps its original
             // (older) timestamp, so this prefix plus the relative age tells the honest story.
             const prefix = root.liveLoaded ? "" : i18n("Cached · ");
-            // Feature 5: a screen-lock-paused refresh keeps the old snapshot on purpose — say so.
+            // A screen-lock-paused refresh keeps the old snapshot on purpose — say so.
             // Per-provider carry-forward (this provider's live fetch failed, its last-known-good
             // is being shown) gets a subtle honest "(cached)" tag — but not when the whole paint
             // is already a cold-cache one (the "Cached · " prefix would say it twice).
@@ -1169,7 +1169,7 @@ Item {
             parts.push(root.costSectionHeight());
 
         if (parts.length === 0)
-            // Empty state. The "Unlock KWallet" / "Sign in" button (Item 1) needs ~44px more
+            // Empty state. The "Unlock KWallet" / "Sign in" button needs ~44px more
             // than the bare message — keep this mirror in lockstep with the empty-state
             // ColumnLayout. (The two buttons are mutually exclusive by status, so one 44px add.)
             return (root.emptyStateShowsUnlock() || root.emptyStateShowsSignIn()) ? 174 : 130;

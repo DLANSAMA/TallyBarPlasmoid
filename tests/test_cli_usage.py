@@ -514,7 +514,7 @@ def _make_steps_db(path, indices, blob=_USAGE_BLOB_F6_24):
 
 
 def test_real_temp_db_two_phase_scan_short_circuits(monkeypatch, tmp_path):
-    """[AUDIT-22] A real on-disk steps DB is parsed exactly once: the first update captures the
+    """A real on-disk steps DB is parsed exactly once: the first update captures the
     usage entry, and a SECOND update must NOT re-run _pb_find_usage on the already-seen blob
     (the `key in entries` short-circuit that keeps the SQLite read lock window minimal and avoids
     re-parsing every step's protobuf on every widget poll)."""
@@ -551,7 +551,7 @@ def test_real_temp_db_two_phase_scan_short_circuits(monkeypatch, tmp_path):
 
 
 def test_deadline_break_abandons_scan_early(monkeypatch, tmp_path):
-    """[AUDIT-20] A deadline already in the past makes update_antigravity_token_ledger abandon the
+    """A deadline already in the past makes update_antigravity_token_ledger abandon the
     on-disk scan before capturing anything (the OUTER conversation-dir guard breaks immediately),
     returning cleanly with no exception — so a huge conversation set can't hard-hang the snapshot."""
     import time
@@ -571,7 +571,7 @@ def test_deadline_break_abandons_scan_early(monkeypatch, tmp_path):
 
 
 def test_deadline_break_skips_remaining_db_connects(monkeypatch, tmp_path):
-    """[AUDIT-9] Pins the INNER per-DB pre-connect guard specifically: once the deadline trips
+    """Pins the INNER per-DB pre-connect guard specifically: once the deadline trips
     mid-scan, the remaining DBs must be abandoned WITHOUT paying a connect + index query each.
 
     The previous test uses an already-expired deadline, so the outer conv-dir guard fires first and
@@ -613,7 +613,7 @@ def test_deadline_break_skips_remaining_db_connects(monkeypatch, tmp_path):
 
 
 def test_hourly_residual_fold(monkeypatch, tmp_path):
-    """[AUDIT-21] hourlyTokenUsage buckets today's usage by local hour: an entry carrying a valid
+    """hourlyTokenUsage buckets today's usage by local hour: an entry carrying a valid
     "h" lands in that hour, while a today entry with NO "h" (disk first-seen / CLI / pre-hour RPC)
     is folded into the CURRENT local hour — so the Day bars always sum to the Today total."""
     from providers import cost as cm
@@ -750,7 +750,7 @@ def test_pb_find_usage_accepts_both_markers_rejects_missing_input(monkeypatch):
 
 
 def test_rpc_local_hour(monkeypatch):
-    """[AUDIT-23] _rpc_local_hour mirrors _rpc_local_date: empty/garbage -> None; a nanosecond UTC
+    """_rpc_local_hour mirrors _rpc_local_date: empty/garbage -> None; a nanosecond UTC
     createdAt yields an int hour in 0..23; localisation IS applied (not naive UTC-hour slicing) —
     a just-past-midnight UTC instant must read as its local hour, not 0."""
     assert agmod._rpc_local_hour("") is None

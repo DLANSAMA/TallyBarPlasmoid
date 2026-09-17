@@ -16,7 +16,7 @@ PlasmaCore.PopupPlasmaWindow {
     property var root
     property Item anchorItem
 
-    // Item 5: free-entry monthly budget. The presets row stays; a "Custom…" chip reveals a
+    // Free-entry monthly budget. The presets row stays; a "Custom…" chip reveals a
     // numeric field. budgetIsCustom is true when the saved value isn't one of the presets —
     // that case used to leave NO chip selected.
     readonly property var budgetPresets: [0, 50, 100, 250, 500]
@@ -296,7 +296,7 @@ PlasmaCore.PopupPlasmaWindow {
                 }
             }
 
-            // --- Mute alerts per provider (Feature 7) --------------------------
+            // --- Mute alerts per provider --------------------------
             Text {
                 color: root.mutedTextColor(0.55)
                 font.family: root.uiFont
@@ -546,7 +546,7 @@ PlasmaCore.PopupPlasmaWindow {
                 }
             }
 
-            // Item 5: Custom… chip + inline numeric field. The chip reads selected when a
+            // Custom… chip + inline numeric field. The chip reads selected when a
             // non-preset value is saved (and shows it), fixing the "no chip selected" bug.
             Row {
                 Layout.fillWidth: true

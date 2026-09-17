@@ -1,4 +1,4 @@
-"""Item 7: monthly cost-rollup archive.
+"""Monthly cost-rollup archive.
 
 Drives the REAL loader/saver/lock/change-gate (not mocks) so a regression that drops the
 .bak recovery, the change-gate, or the past-month freeze fails here instead of silently.

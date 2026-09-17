@@ -49,7 +49,7 @@ PlasmaCore.PopupPlasmaWindow {
             event.accepted = true;
         }
 
-        // Feature 4: copy a bucket's full breakdown (date + total + per-model rows) to the
+        // Copy a bucket's full breakdown (date + total + per-model rows) to the
         // clipboard on right-click. QML has no clipboard API, so route the text through an
         // off-screen TextEdit and use its selectAll()/copy().
         TextEdit {

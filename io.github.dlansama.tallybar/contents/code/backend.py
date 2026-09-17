@@ -120,7 +120,7 @@ def _open_lock_0600(lock_path: Path):
 
     A plain ``lock_path.open("a")`` creates the lockfile at 0644 under the default umask,
     leaving these ~/.tallybar coordination files group/world-readable. Create with an
-    explicit 0600 mode via ``os.open`` (O_APPEND, never truncate — DATA-4), and best-effort
+    explicit 0600 mode via ``os.open`` (O_APPEND, never truncate), and best-effort
     tighten a pre-existing lockfile to 0600. flock semantics are unchanged."""
     fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
@@ -193,7 +193,7 @@ def public_config(config: dict[str, Any]) -> dict[str, Any]:
         "notificationThresholds": config.get("notificationThresholds", list(DEFAULT_NOTIFY_THRESHOLDS)),
         "panelDisplayMode": config.get("panelDisplayMode", "percent"),
         "monthlyBudget": config.get("monthlyBudget", 0),
-        # Feature 7: per-provider mute. A muted provider is dropped from the panel's
+        # Per-provider mute. A muted provider is dropped from the panel's
         # attention/badge logic and from desktop notifications, but stays visible in the popup.
         "mutedProviders": config.get("mutedProviders", []),
     }
@@ -292,8 +292,8 @@ def compute_notifications(providers: dict[str, Any], config: dict[str, Any]) -> 
     NOTIFY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     lock_path = NOTIFY_STATE_PATH.parent / ".notify.lock"
     # "a" not "w": opening for write truncates the lockfile to 0 bytes BEFORE the lock is
-    # held (DATA-4 TOCTOU, same as config.json's .config.lock). Bounded non-blocking wait
-    # (ARCH-1 class) so two concurrent --once invocations can't lost-update the armed-set
+    # held (a TOCTOU, same as config.json's .config.lock). Bounded non-blocking wait
+    # so two concurrent --once invocations can't lost-update the armed-set
     # (a process that loses the race raises, caught by main()'s post-snapshot tail guard,
     # which degrades to notifications=[] for that run rather than crashing stdout).
     with _open_lock_0600(lock_path) as lock_fd:
@@ -310,7 +310,7 @@ def compute_notifications(providers: dict[str, Any], config: dict[str, Any]) -> 
             # indistinguishable from "dropped below threshold" and replayed an already-sent alert.
             now_fired: set[str] = set(previously_fired)
             notifications: list[dict[str, Any]] = []
-            # Feature 7: muted providers raise no desktop notifications (status, usage
+            # Muted providers raise no desktop notifications (status, usage
             # thresholds, or the weekly-80 alert). Their armed-set keys are simply left
             # untouched (like a transient failure), so unmuting doesn't replay old crossings.
             raw_muted = config.get("mutedProviders")
@@ -447,7 +447,7 @@ def compute_notifications(providers: dict[str, Any], config: dict[str, Any]) -> 
                                       else f"All AI: {top}% of monthly budget"),
                             "body": f"${mtd:,.2f} of ${budget:,.0f} this month ({pct:.0f}%).",
                         })
-                # Predictive crossing (Item 3): warn ONCE when projected full-month spend first
+                # Predictive crossing: warn ONCE when projected full-month spend first
                 # crosses the budget while actual spend is still under it — the real-spend 100%
                 # alert above owns the crossing once mtd reaches budget. Calendar-pace projection
                 # (all_ai_projected_month_cost). Hysteresis: arm at projected >= budget, re-arm
@@ -697,8 +697,8 @@ def update_refresh_interval(minutes: float) -> dict[str, Any]:
     CONFIG_PATH.parent.chmod(0o700)
     lock_path = CONFIG_PATH.parent / ".config.lock"
     # "a" not "w": opening for write truncates the lockfile to 0 bytes BEFORE the lock is held
-    # (DATA-4 TOCTOU). Acquire non-blocking with a bounded wait so a stuck holder can't hang this
-    # one-shot config-write process forever (ARCH-1 class).
+    # (a TOCTOU). Acquire non-blocking with a bounded wait so a stuck holder can't hang this
+    # one-shot config-write process forever.
     with _open_lock_0600(lock_path) as lock_fd:
         if not flock_with_timeout(lock_fd, 5.0):
             raise TimeoutError("could not acquire config lock (another write in progress)")
@@ -722,8 +722,8 @@ def update_config_values(updates: dict[str, Any]) -> dict[str, Any]:
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.parent.chmod(0o700)
     lock_path = CONFIG_PATH.parent / ".config.lock"
-    with _open_lock_0600(lock_path) as lock_fd:  # 0600 + "a" (no truncate before locking, DATA-4)
-        if not flock_with_timeout(lock_fd, 5.0):  # bounded, non-blocking (ARCH-1 class)
+    with _open_lock_0600(lock_path) as lock_fd:  # 0600 + "a" (no truncate before locking)
+        if not flock_with_timeout(lock_fd, 5.0):  # bounded, non-blocking
             raise TimeoutError("could not acquire config lock (another write in progress)")
         try:
             config = load_config()
@@ -755,7 +755,7 @@ def update_config_values(updates: dict[str, Any]) -> dict[str, Any]:
                     if chosen:
                         config["providers"] = chosen
             if "mutedProviders" in updates:
-                # Feature 7: whitelist to known providers, keep canonical order, drop dupes.
+                # Whitelist to known providers, keep canonical order, drop dupes.
                 raw = updates["mutedProviders"]
                 if isinstance(raw, list):
                     config["mutedProviders"] = [p for p in PROVIDER_ORDER if p in raw]
@@ -942,7 +942,7 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         # asyncio.TaskGroup bundles child failures into a group. An ExceptionGroup (all-Exception
         # leaves) subclasses Exception, but a BaseExceptionGroup (any BaseException leaf — e.g.
         # CancelledError, KeyboardInterrupt) does NOT, so it would slip past a plain `except
-        # Exception` and crash build_snapshot (ARCH-3). Catch the group base, record the Exception
+        # Exception` and crash build_snapshot. Catch the group base, record the Exception
         # leaves as diagnostics, and re-raise any BaseException leaves so cancellation/shutdown
         # still propagates correctly instead of being silently dropped.
         if "to" in locals():
@@ -1142,7 +1142,7 @@ def _screen_locked() -> bool:
     interface (owned by kscreenlocker on Plasma 6). FAIL-OPEN: any error — missing
     ``busctl``, no D-Bus, a non-KDE locker with different semantics, a timeout — returns
     False so a refresh is never wrongly suppressed. Used only to skip background refreshes
-    while locked (Item 9); a foreground/manual refresh always runs."""
+    while locked; a foreground/manual refresh always runs."""
     try:
         proc = subprocess.run(
             ["busctl", "--user", "--timeout=1", "call",
@@ -1228,11 +1228,11 @@ def main() -> int:
     if not args.once:
         parser.error("only --once is supported by the Plasma executable datasource")
 
-    # Item 9: skip background (widget-timer) refreshes while the screen is locked — no
+    # Skip background (widget-timer) refreshes while the screen is locked — no
     # network, disk, or ledger work happens behind a locked screen. Gated to
-    # ``--background`` only so manual/foreground refreshes (including Item 1's KWallet
+    # ``--background`` only so manual/foreground refreshes (including the KWallet
     # unlock path, which omits --background) always run. Re-paint the cached snapshot so
-    # the widget keeps showing last-known values (Item 2's staleness line explains the age);
+    # the widget keeps showing last-known values (the staleness line explains the age);
     # do NOT save_snapshot (mustn't clobber last-known-good) and emit no notifications.
     if args.background and _screen_locked():
         cached = load_snapshot() or {"ok": False, "timestamp": now_iso(), "providers": {}}

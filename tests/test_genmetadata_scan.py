@@ -1,4 +1,4 @@
-"""Item 4: post-2.0 Antigravity ``gen_metadata`` disk-scan.
+"""Post-2.0 Antigravity ``gen_metadata`` disk-scan.
 
 After Antigravity 2.0 the usage records moved out of ``steps.metadata`` (marker field6==24)
 and into a ``gen_metadata`` table (marker field6==26); steps rows carry no usage. These tests
@@ -452,7 +452,7 @@ def test_scan_memo_does_not_block_ownership_flip(monkeypatch, tmp_path):
 
 
 def test_dominant_enum_picks_max_token_record():
-    # DATA-8 guard: a single blob is one model in practice (verified 748/748 on-disk), so
+    # Guard: a single blob is one model in practice (verified 748/748 on-disk), so
     # this equals found[0]. But IF records ever mixed models, the summed entry attributes to
     # the DOMINANT (max-token) model, not whichever parsed first.
     assert costmod._dominant_enum([]) == 0

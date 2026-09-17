@@ -221,7 +221,7 @@ def test_group_agy_model_quota():
 
 
 # ---------------------------------------------------------------------------
-# Additional coverage (audit finding A0528-TEST-5).
+# Additional coverage.
 # Functions not exercised above: extract_limits_from_json,
 # antigravity_model_entries, plus extra branches of parse_claude_usage,
 # parse_gemini_usage_info, parse_google_one_credits, and relative_reset.

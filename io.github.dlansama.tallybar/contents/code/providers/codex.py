@@ -119,10 +119,10 @@ class JsonRpcChild:
                 if not chunk:
                     break
                 buffer += chunk.decode("utf-8", errors="replace")
-                # SEC-3: cap buffer to prevent memory exhaustion from malformed streams
+                # Cap buffer to prevent memory exhaustion from malformed streams
                 if len(buffer) > 16_000_000:
                     buffer = buffer[-4_000_000:]
-                    # ERR-4: a blind tail-slice can cut mid-message, leaving an undecodable
+                    # A blind tail-slice can cut mid-message, leaving an undecodable
                     # partial at the head that raw_decode fails on forever (the parser then
                     # never recovers and the RPC hangs until timeout). Messages are newline-
                     # delimited (see _write), so realign to the next message boundary; if the
@@ -152,7 +152,7 @@ class JsonRpcChild:
             self._fail_pending(RuntimeError("JSON-RPC child stdout closed"))
 
     async def _read_stderr(self) -> None:
-        # ERR-1: read fixed-size chunks and split on newlines ourselves rather than
+        # Read fixed-size chunks and split on newlines ourselves rather than
         # StreamReader.readline() — a child that emits a long burst without a newline makes
         # readline raise LimitOverrunError (default 64 KiB stream limit) and kills the reader,
         # losing all subsequent stderr. Chunked reads keep a bounded working buffer and keep

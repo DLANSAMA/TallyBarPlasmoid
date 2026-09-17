@@ -8,9 +8,9 @@
 #           an older qmllint emits thousands of "not resolved" warnings about valid code
 #           and exits non-zero on them.
 #
-# Every run first SELF-TESTS the linter against a known-bad file. This gate has already
-# rotted silently twice (binary off PATH -> skipped; Qt5 binary -> accepted anything), so
-# "the linter ran and said nothing" is not accepted as evidence without it.
+# Every run first SELF-TESTS the linter against a known-bad file. A misconfigured linter
+# fails open (binary off PATH -> step skipped; a Qt5 binary -> accepts anything), so
+# "the linter ran and said nothing" is not accepted as evidence without the self-test.
 set -u
 QMLLINT=$1; MODE=$2; shift 2
 

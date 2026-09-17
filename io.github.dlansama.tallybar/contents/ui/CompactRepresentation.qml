@@ -6,7 +6,7 @@ Item {
     id: root
 
     signal toggleRequested()
-    // Feature 1: panel-icon interactions. The mouse wheel and middle-click cycle the panel
+    // Panel-icon interactions. The mouse wheel and middle-click cycle the panel
     // display MODE (percent → reset → cost → pace → percent); the choice is persisted by
     // main.qml via the config-write DataSource. tabs is kept for Accessible naming.
     property var tabs: []
@@ -92,7 +92,7 @@ Item {
             return false;
         }
     }
-    // Feature 7: a muted provider is dropped from the badge/dim logic (still visible in popup).
+    // A muted provider is dropped from the badge/dim logic (still visible in popup).
     function isMuted() {
         const cfg = root.telemetry && root.telemetry.config;
         const muted = cfg && Array.isArray(cfg.mutedProviders) ? cfg.mutedProviders : [];

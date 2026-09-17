@@ -57,7 +57,7 @@ ANTIGRAVITY_LEDGER_PATH = Path.home() / ".tallybar" / "antigravity_token_ledger.
 # the IDE ledger; keys namespaced "cli:<session>" so they never collide with the IDE's
 # "<db_stem>:<idx>" keys when the two are merged for costing.
 ANTIGRAVITY_CLI_USAGE_PATH = Path.home() / ".tallybar" / "antigravity_cli_usage.json"
-# Append-only per-month per-provider cost/token rollup (Item 7). Survives the 35-day
+# Append-only per-month per-provider cost/token rollup. Survives the 35-day
 # Antigravity ledger prune — only Antigravity is lossy; the other providers' parse caches
 # are all-time. Past months freeze once written so the prune can't erode them.
 COST_ARCHIVE_PATH = Path.home() / ".tallybar" / "cost_archive.json"
@@ -225,7 +225,7 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
     current = now.astimezone() if now is not None else dt.datetime.now(dt.timezone.utc).astimezone()
     today_iso = current.date().isoformat()
 
-    # Acquire exclusive lock on the ledger to prevent concurrent read-modify-write races (DATA-2).
+    # Acquire exclusive lock on the ledger to prevent concurrent read-modify-write races.
     ANTIGRAVITY_LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
     try:
         ANTIGRAVITY_LEDGER_PATH.parent.chmod(0o700)  # match the other ~/.tallybar writers
@@ -233,7 +233,7 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
         pass
     lock_path = ANTIGRAVITY_LEDGER_PATH.with_suffix(".lock")
     lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
-    # Acquire NON-blocking with a bounded retry (ARCH-1). A plain blocking LOCK_EX is unsafe here:
+    # Acquire NON-blocking with a bounded retry. A plain blocking LOCK_EX is unsafe here:
     # this runs inside a to_daemon_thread worker, so if another process holds the lock the outer
     # asyncio.wait_for cancels the awaiting task but CANNOT unblock this thread. The daemon worker
     # is abandoned at interpreter exit (so it won't hang the --once process the way the old
@@ -291,11 +291,11 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
             rpc_covered.add(cascade_id)
             # The RPC supersedes the on-disk scan for this conversation: drop any legacy DB-sourced
             # entries (plain ``<cascadeId>:<int>`` keys) so RPC + disk never double-count it.
-            # Use strict prefix_len slicing (DATA-6) instead of split(":", 1) to handle colons in cascade IDs.
+            # Use strict prefix_len slicing instead of split(":", 1) to handle colons in cascade IDs.
             # NB the RPC is authoritative PER CONVERSATION and counts per-generation, while the disk
             # scan counts per-step — so the RPC legitimately having FEWER records than the disk did is
             # the normal case (one generation spans several steps), NOT a data-loss signal. Gating the
-            # purge on a record-count comparison (audit DATA-13) is therefore WRONG: it would block
+            # purge on a record-count comparison is therefore WRONG: it would block
             # superseding in the common case and reintroduce double-counting. Disk entries are an
             # approximation the authoritative RPC replaces wholesale.
             prefix_len = len(cascade_id) + 1
@@ -356,7 +356,7 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
 
         # 2) On-disk trajectory DBs — fallback for conversations the RPC didn't cover. Skip any
         # conversation the RPC owns now or owned on a prior run (its ``<id>#…`` entries persist).
-        # rsplit, not split (DATA-6): keys are "<cascadeId>#<stepKey>" and stepKey never contains
+        # rsplit, not split: keys are "<cascadeId>#<stepKey>" and stepKey never contains
         # '#', so the LAST '#' is always the real separator — rsplit recovers the full cascade id
         # even in the (pathological) case where a cascade id itself contains a '#'.
         rpc_stems = rpc_covered | {k.rsplit("#", 1)[0] for k in entries if "#" in k}
@@ -507,7 +507,7 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                         seen_memo[stem] = sig  # steps pass IS the complete scan here
                     continue
 
-                # Item 4: post-2.0 ``gen_metadata`` pass for the SAME DB. Marker-26 usage records
+                # Post-2.0 ``gen_metadata`` pass for the SAME DB. Marker-26 usage records
                 # live ONLY here (after 2.0 the steps rows carry no usage); the 24-marked records
                 # that also appear here duplicate the steps scan above, so we gate strictly on
                 # marker 26. Keys "<stem>@<idx>.<gi>" (idx.generation-index) are disjoint from steps
@@ -957,7 +957,7 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
     #                               across turns → group by stem, apply max-c de-inflation.
     #                               Suffix <idx> is a SQLite integer row id (never contains ':'),
     #                               so rsplit(":", 1) cleanly recovers the cascade id even when
-    #                               the cascade id itself contains ':' (DATA-6 robustness).
+    #                               the cascade id itself contains ':'.
     #   "<cascadeId>@<idx>[.gi]"  — gen_metadata rows: each entry is one INDEPENDENT generation's
     #                               cache-read snapshot — not cumulative across turns — so treat
     #                               as singletons (same reasoning as '#' RPC entries).
@@ -1099,7 +1099,7 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
 
 
 # ---------------------------------------------------------------------------
-# Monthly cost-rollup archive (Item 7)
+# Monthly cost-rollup archive
 # ---------------------------------------------------------------------------
 
 def _load_cost_archive() -> dict[str, Any]:
@@ -1255,7 +1255,7 @@ def compute_local_cost_summaries(deadline: float | None = None) -> dict[str, dic
         # data, so the cost section stays off rather than showing the subscription price.
         "antigravity": antigravity_ledger_cost_summary(deadline=deadline),
     }
-    # Item 7: roll the current month's per-provider totals into the append-only archive.
+    # Roll the current month's per-provider totals into the append-only archive.
     # Best-effort — enrichment must never break the snapshot.
     try:
         update_cost_archive(summaries, deadline=deadline)

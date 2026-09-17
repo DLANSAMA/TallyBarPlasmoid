@@ -144,7 +144,7 @@ def extract_embedded_config_value(html: str, key: str) -> str | None:
 
 
 _SIGNIN_URL_RE = re.compile(r"accounts\.google\.com/(?:v3/signin|ServiceLogin|AccountChooser)")
-# Feature 3: pull the full sign-in URL out of the logged-out shell so the UI can open it.
+# Pull the full sign-in URL out of the logged-out shell so the UI can open it.
 _SIGNIN_FULL_URL_RE = re.compile(
     r"https://accounts\.google\.com/(?:v3/signin|ServiceLogin|AccountChooser)[^\s\"'\\<>]*"
 )

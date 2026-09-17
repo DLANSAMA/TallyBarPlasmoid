@@ -366,7 +366,7 @@ async def test_cost_summary_timeout_leaves_providers_intact():
         assert "_SENTINEL_" not in (prov.get("costSummary") or {})  # apply was skipped on timeout
 
 
-# --- [AUDIT-3] Codex RPC -> cookie fallback selection in build_snapshot ---
+# --- Codex RPC -> cookie fallback selection in build_snapshot ---
 
 async def _build_snapshot_codex(codex_rpc_result, codex_cookie_result):
     """Drive build_snapshot with controllable codex RPC / cookie results.
@@ -413,7 +413,7 @@ async def _build_snapshot_codex(codex_rpc_result, codex_cookie_result):
 
 @pytest.mark.asyncio
 async def test_codex_falls_back_to_cookie_when_rpc_not_ok():
-    """[AUDIT-3] RPC non-ok + cookie ok => providers['codex'] becomes the cookie result."""
+    """RPC non-ok + cookie ok => providers['codex'] becomes the cookie result."""
     rpc = {"status": "not-running", "label": "Codex", "limits": [], "source": "json-rpc"}
     cookie = {"status": "ok", "label": "Codex", "limits": [{"percent": 7}], "source": "browser-api"}
     res = await _build_snapshot_codex(rpc, cookie)
@@ -425,7 +425,7 @@ async def test_codex_falls_back_to_cookie_when_rpc_not_ok():
 
 @pytest.mark.asyncio
 async def test_codex_keeps_rpc_result_when_rpc_ok():
-    """[AUDIT-3] Mirror: RPC ok => the cookie result is ignored, codex stays the RPC result."""
+    """Mirror: RPC ok => the cookie result is ignored, codex stays the RPC result."""
     rpc = {"status": "ok", "label": "Codex", "limits": [{"percent": 3}], "source": "json-rpc"}
     cookie = {"status": "ok", "label": "Codex", "limits": [{"percent": 99}], "source": "browser-api"}
     res = await _build_snapshot_codex(rpc, cookie)
@@ -498,7 +498,7 @@ async def test_codex_cookie_called_and_adopted_when_rpc_not_ok():
     assert res["providers"]["codex"]["limits"][0]["percent"] == 7
 
 
-# --- [AUDIT-24] KWallet-locked propagation to gemini/claude in build_snapshot ---
+# --- KWallet-locked propagation to gemini/claude in build_snapshot ---
 
 async def _build_snapshot_walletlocked(gemini_status, claude_status, wallet_status="wallet-locked"):
     """Drive build_snapshot with a given kwallet status in browser_stats and
@@ -543,7 +543,7 @@ async def _build_snapshot_walletlocked(gemini_status, claude_status, wallet_stat
 
 @pytest.mark.asyncio
 async def test_wallet_locked_flips_missing_cookies_to_wallet_locked():
-    """[AUDIT-24] kwallet wallet-locked => gemini & claude 'missing-cookies' both flip to 'wallet-locked'."""
+    """kwallet wallet-locked => gemini & claude 'missing-cookies' both flip to 'wallet-locked'."""
     res = await _build_snapshot_walletlocked("missing-cookies", "missing-cookies")
     assert res["providers"]["gemini"]["status"] == "wallet-locked"
     assert res["providers"]["claude"]["status"] == "wallet-locked"
@@ -553,7 +553,7 @@ async def test_wallet_locked_flips_missing_cookies_to_wallet_locked():
 
 @pytest.mark.asyncio
 async def test_wallet_locked_does_not_overwrite_ok_provider():
-    """[AUDIT-24] Guard: a provider already 'ok' is NOT clobbered to 'wallet-locked'."""
+    """Guard: a provider already 'ok' is NOT clobbered to 'wallet-locked'."""
     res = await _build_snapshot_walletlocked("ok", "missing-cookies")
     assert res["providers"]["gemini"]["status"] == "ok"        # ok untouched
     assert res["providers"]["claude"]["status"] == "wallet-locked"  # missing-cookies flipped
@@ -802,22 +802,22 @@ def test_carry_forward_staleAsOf_survives_save_load_roundtrip(tmp_path, monkeypa
     assert rl_claude["limits"] == [{"label": "Session", "percent": 40}]
 
 
-# --- [AUDIT-10] _snapshot_has_live_data helper ---
+# --- _snapshot_has_live_data helper ---
 
 def test_snapshot_has_live_data_true_for_ok_status():
-    """[AUDIT-10] Any provider with status 'ok' marks the snapshot as live."""
+    """Any provider with status 'ok' marks the snapshot as live."""
     snap = {"providers": {"codex": {"status": "timeout"}, "gemini": {"status": "ok"}}}
     assert backend._snapshot_has_live_data(snap) is True
 
 
 def test_snapshot_has_live_data_true_for_cookies_ready_status():
-    """[AUDIT-10] 'cookies-ready' (the --no-network healthy status) also counts as live."""
+    """'cookies-ready' (the --no-network healthy status) also counts as live."""
     snap = {"providers": {"claude": {"status": "cookies-ready"}}}
     assert backend._snapshot_has_live_data(snap) is True
 
 
 def test_snapshot_has_live_data_false_for_all_degraded():
-    """[AUDIT-10] An all-timeout/error snapshot is NOT live (don't clobber the good cache)."""
+    """An all-timeout/error snapshot is NOT live (don't clobber the good cache)."""
     snap = {"providers": {
         "codex": {"status": "timeout"},
         "gemini": {"status": "api-error"},
@@ -827,7 +827,7 @@ def test_snapshot_has_live_data_false_for_all_degraded():
 
 
 def test_snapshot_has_live_data_false_for_non_dict_and_missing_providers():
-    """[AUDIT-10] Non-dict input, missing 'providers', or non-dict providers => False (no crash)."""
+    """Non-dict input, missing 'providers', or non-dict providers => False (no crash)."""
     assert backend._snapshot_has_live_data(None) is False
     assert backend._snapshot_has_live_data("not a dict") is False
     assert backend._snapshot_has_live_data({}) is False              # missing providers
@@ -836,7 +836,7 @@ def test_snapshot_has_live_data_false_for_non_dict_and_missing_providers():
 
 
 
-# --- Item 9: screen-lock refresh gate ---------------------------------------
+# --- Screen-lock refresh gate ---------------------------------------
 
 def test_screen_locked_parses_busctl_boolean(monkeypatch):
     class _P:
@@ -881,7 +881,7 @@ def test_screenlock_skips_background_refresh(monkeypatch, capsys):
 
 
 def test_screenlock_ignored_for_foreground_refresh(monkeypatch, capsys):
-    # A foreground run (no --background, e.g. Item 1's KWallet unlock) ALWAYS refreshes,
+    # A foreground run (no --background, e.g. the KWallet-unlock path) ALWAYS refreshes,
     # even while locked.
     monkeypatch.setattr(backend, "_screen_locked", lambda: True)
     built = []

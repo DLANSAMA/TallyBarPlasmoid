@@ -124,7 +124,7 @@ def test_kwallet_client_mock_dbus():
         assert b"mysecretpassword" in passwords["generic"]
 
 
-# [AUDIT-2] Background refresh must never trigger a GUI wallet-unlock prompt: a
+# Background refresh must never trigger a GUI wallet-unlock prompt: a
 # locked wallet (isOpen -> False) reports wallet-locked and skips open() entirely.
 def test_kwallet_background_locked_skips_open():
     mock_gio = MagicMock()
@@ -156,7 +156,7 @@ def test_kwallet_background_locked_skips_open():
         assert called_methods == ["isEnabled", "localWallet", "isOpen"]
 
 
-# Item 1: a FOREGROUND run (background=False, the "Unlock KWallet" path) must NOT
+# A FOREGROUND run (background=False, the "Unlock KWallet" path) must NOT
 # short-circuit on a locked wallet — it proceeds to open(), which is exactly what pops
 # the native KWallet unlock dialog. (The widget always passes --background; this path is
 # reached only via main.qml's deliberate foreground refresh.)
@@ -186,7 +186,7 @@ def test_kwallet_foreground_locked_attempts_open():
         assert called_methods == ["isEnabled", "localWallet", "isOpen", "open"]
 
 
-# [AUDIT-2] If isOpen RAISES during a background refresh, we cannot know the lock
+# If isOpen RAISES during a background refresh, we cannot know the lock
 # state, so report wallet-state-unknown and likewise skip open() (no GUI prompt).
 def test_kwallet_background_isopen_raises_state_unknown():
     mock_gio = MagicMock()
@@ -217,7 +217,7 @@ def test_kwallet_background_isopen_raises_state_unknown():
         assert called_methods == ["isEnabled", "localWallet", "isOpen"]
 
 
-# [AUDIT-15/32] Length validation happens BEFORE libcrypto so a short key/IV/nonce/tag
+# Length validation happens BEFORE libcrypto so a short key/IV/nonce/tag
 # can't make OpenSSL over-read adjacent heap — each bad length raises CryptoError.
 def test_crypto_length_validation_rejects_bad_sizes():
     evp = OpenSslEvp()

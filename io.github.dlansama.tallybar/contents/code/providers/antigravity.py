@@ -753,8 +753,8 @@ def save_antigravity_credentials(path: Path, raw_data: dict[str, Any], credentia
     else:
         data = credentials
     # Atomic 0600 write via the shared io_helpers recipe: unique 0600 mkstemp (no
-    # world/group-readable window for the OAuth credentials — SEC-6), fsync + dir-fsync so a
-    # torn write can't 0-byte the token file (SEC-2), parent chmod'd 0700 (dir listing would
+    # world/group-readable window for the OAuth credentials), fsync + dir-fsync so a
+    # torn write can't 0-byte the token file, parent chmod'd 0700 (dir listing would
     # leak "this user authed Antigravity, last refreshed at T"), temp unlinked on failure.
     payload = json.dumps(data, indent=2, sort_keys=True)
     # Resolve through any symlink before the atomic os.replace: ~/.tallybar/antigravity/

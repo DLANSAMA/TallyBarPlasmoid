@@ -1,13 +1,13 @@
-"""Codex JSON-RPC subprocess reader robustness (ERR-1 / ERR-4).
+"""Codex JSON-RPC subprocess reader robustness.
 
 Drives JsonRpcChild's stdout/stderr readers against a fake process stream so the
 two hardening fixes are regression-guarded:
 
-- ERR-4: when the stdout buffer is force-truncated past 16MB, a blind tail-slice
+- When the stdout buffer is force-truncated past 16MB, a blind tail-slice
   can cut mid-message and leave an undecodable partial that raw_decode fails on
   forever (the RPC then never resolves). The reader must realign to the next
   newline boundary and recover the following valid message.
-- ERR-1: the stderr reader must drain in fixed chunks (not StreamReader.readline,
+- The stderr reader must drain in fixed chunks (not StreamReader.readline,
   which dies on a >64KiB no-newline burst), keeping the tail bounded.
 """
 

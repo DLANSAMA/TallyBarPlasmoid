@@ -88,7 +88,7 @@ PlasmoidItem {
     property string pythonExec: "/usr/bin/env python3"
 
     // background defaults true (the widget's normal timer refresh). Pass false for the
-    // Item 1 "Unlock KWallet" path: dropping --background lets the backend's KWallet open()
+    // "Unlock KWallet" path: dropping --background lets the backend's KWallet open()
     // pop the native unlock dialog (and runs the documented GUI-prompt credential action).
     function backendCommand(background) {
         const backend = root.localPath(Qt.resolvedUrl("../code/backend.py"));
@@ -208,7 +208,7 @@ PlasmoidItem {
         if (limits.length === 0)
             return provider.label + ": " + (provider.message || provider.status || i18n("No usage data"));
 
-        // Feature 2: one line per usage window — "<label> <pct>% · <reset>" — so the tooltip
+        // One line per usage window — "<label> <pct>% · <reset>" — so the tooltip
         // shows the pace/reset breakdown for the selected provider without opening the popup.
         let lines = [provider.label];
         for (let i = 0; i < limits.length; ++i) {
@@ -236,7 +236,7 @@ PlasmoidItem {
         executable.exec(root.backendCommand());
     }
 
-    // Item 1: a foreground refresh (no --background) so a locked KWallet pops its native
+    // A foreground refresh (no --background) so a locked KWallet pops its native
     // unlock dialog; the normal onNewData path paints full data once the user unlocks.
     // Guarded by the same `loading` flag. The 25s refreshWatchdog may fire while the dialog
     // is still up — that just re-enables the button (a fresh click retries), which is fine.
@@ -301,7 +301,7 @@ PlasmoidItem {
 
     Plasmoid.backgroundHints: PlasmaCore.Types.NoBackground
     Plasmoid.icon: "utilities-system-monitor"
-    // Feature 7: providers the user has muted are dropped from the panel's attention/badge
+    // Providers the user has muted are dropped from the panel's attention/badge
     // logic (they stay visible in the popup). Reads config.mutedProviders written via the
     // config-write DataSource.
     function providerMuted(provider) {
@@ -547,7 +547,7 @@ PlasmoidItem {
         onToggleRequested: () => {
             root.expanded = !root.expanded;
         }
-        // Feature 1: wheel / middle-click cycle the panel display mode and persist it via the
+        // Wheel / middle-click cycle the panel display mode and persist it via the
         // config-write DataSource (same path SettingsPopout uses). writeConfig no-ops while a
         // config write is already in flight, so a rapid scroll settles on the last landed mode.
         onCycleModeRequested: (direction) => {
