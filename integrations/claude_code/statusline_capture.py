@@ -11,8 +11,8 @@ https://code.claude.com/docs/en/statusline:
     rate_limits.spend_limit.used_percentage / .resets_at   (gateway only; may exceed 100)
 
 Why this exists: TallyBar's normal Claude path scrapes claude.ai with browser
-cookies, which is what tripped Cloudflare into 403/429 flapping (commit c6748d5
-cut the call volume). This route is official, needs no cookies, no network and no
+cookies, a path Cloudflare rate-limits (403/429) when polled too often. This route
+is official, needs no cookies, no network and no
 credentials of its own — Claude Code hands us the numbers it already has. It is a
 COMPLEMENT, not a replacement: the blob only appears for Pro/Max subscribers, and
 only after the first API response in a session, so it goes quiet whenever Claude
