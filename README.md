@@ -19,6 +19,15 @@ burned would have cost on the API.
 
 TallyBar puts all of it in the panel: one bar per limit, one number per bill.
 
+Clicking the cost row opens a flyout with the spend graph — by hour, by day, or
+as a month heat grid. Clicking any bar or day expands it into a per-model breakdown.
+
+<p align="center">
+  <img src="docs/screenshots/cost-day.png" alt="Cost flyout, Day tab: token usage per hour across today" width="230">
+  <img src="docs/screenshots/cost-week.png" alt="Cost flyout, Week tab: daily token usage bars for the last seven days" width="230">
+  <img src="docs/screenshots/cost-month.png" alt="Cost flyout, Month tab: a calendar heat grid of daily spend for the current month" width="230">
+</p>
+
 ## What it shows
 
 | Provider        | Quota / limits                                    | Where that comes from                                                  |
