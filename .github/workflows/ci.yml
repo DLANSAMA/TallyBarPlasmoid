@@ -1,7 +1,9 @@
 name: CI
 
-# Gate every PR and every push to main with the same flake8 + tests the release
-# workflow runs — so a broken change is caught before merge, not only at release time.
+# Gate every PR and every push to main with the SAME four gates the release workflow
+# runs (flake8, qmllint, mypy, pytest) — so a broken change is caught before merge, not
+# only at release time. Keep the two step lists in lockstep: a gate that runs here but
+# not in release-plasmoid.yml lets a v* tag ship what CI would have rejected.
 on:
   pull_request:
   push:

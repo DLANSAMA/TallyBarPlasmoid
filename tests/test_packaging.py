@@ -141,3 +141,40 @@ def test_packaged_metadata_exposes_no_personal_mailbox():
                 f"author email {email!r} is not a noreply alias — metadata.json is published "
                 "in every package; use a GitHub noreply address or drop the Email key"
             )
+
+
+# --- CI / release gate parity ----------------------------------------------------
+
+REPO_ROOT = Path(__file__).parent.parent
+WORKFLOWS = REPO_ROOT / ".github" / "workflows"
+
+# The four gates that must run before ANY artifact is produced. ci.yml gates merges;
+# release-plasmoid.yml gates the v* tag that becomes the store.kde.org download. They
+# drifted once — release ran only flake8 + pytest, so a tag could ship QML that CI had
+# already rejected. Keep both lists in lockstep; this test is what stops the re-drift.
+REQUIRED_GATES = {
+    "flake8": "flake8 --select=F",
+    "qmllint": "make qmllint",
+    "mypy": "make typecheck",
+    "pytest": "pytest tests/",
+}
+
+
+@pytest.mark.parametrize("workflow", ["ci.yml", "release-plasmoid.yml"])
+@pytest.mark.parametrize("gate", sorted(REQUIRED_GATES))
+def test_workflow_runs_every_gate(workflow, gate):
+    text = (WORKFLOWS / workflow).read_text()
+    needle = REQUIRED_GATES[gate]
+    assert needle in text, (
+        f"{workflow} does not run the {gate} gate ({needle!r}). A gate that runs in one "
+        f"workflow but not the other lets a release ship what the other would reject."
+    )
+
+
+def test_release_gates_precede_the_build():
+    """Order matters: every gate must run BEFORE `make build`, or a failing gate would
+    still have produced the .plasmoid artifact it was supposed to block."""
+    text = (WORKFLOWS / "release-plasmoid.yml").read_text()
+    build_at = text.index("make build")
+    for gate, needle in sorted(REQUIRED_GATES.items()):
+        assert text.index(needle) < build_at, f"{gate} gate runs after `make build`"
