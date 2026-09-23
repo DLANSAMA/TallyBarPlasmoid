@@ -462,3 +462,53 @@ def test_dominant_enum_picks_max_token_record():
     assert costmod._dominant_enum(mixed) == 1133
     # Order-independent: dominant wins regardless of parse order.
     assert costmod._dominant_enum(list(reversed(mixed))) == 1133
+
+
+# --- Undated gen_metadata blobs must not be double-counted ---
+
+def _ld(fn: int, payload: bytes) -> bytes:
+    """A length-delimited (wiretype 2) protobuf field."""
+    return _varint((fn << 3) | 2) + _varint(len(payload)) + payload
+
+
+def _undated_generation_blob(**usage) -> bytes:
+    """Real gen_metadata shape: root.field1 = generation; the generation's usage record sits
+    at field4 AND is duplicated at field17.2; no field9 timestamp (the undated case)."""
+    rec = _usage_blob(26, **usage)
+    return _ld(1, _ld(4, rec) + _ld(17, _ld(2, rec)))
+
+
+def test_undated_generation_record_counted_once_unit():
+    from proto_wire import _dedupe_usage_records, _pb_find_usage, _pb_generations
+    blob = _undated_generation_blob(model=1026, u=200, o=80, c=30)
+    assert len(_pb_find_usage(blob, marker=26)) == 2          # field4 + its field17.2 copy
+    assert len(_dedupe_usage_records(_pb_find_usage(blob, marker=26))) == 1
+    assert _pb_generations(blob) == []                         # undated -> the fallback path
+    [g] = _pb_generations(blob, require_timestamp=False)       # structural read, field4 only
+    assert (g["u"], g["c"], g["o"], g["me"], g["mk"], g["secs"]) == (200, 30, 80, 1026, 26, None)
+
+
+def test_undated_generation_blob_ingested_once(monkeypatch, tmp_path):
+    """End to end: the undated fallback used to take _pb_find_usage's two copies and store
+    u=400/o=160 for a 200/80 generation."""
+    conv = tmp_path / "convs"
+    conv.mkdir()
+    _make_db(conv / "cas.db", gen=[(0, _undated_generation_blob(model=1026, u=200, o=80, c=30))])
+    _set_mtime(conv / "cas.db", "2026-06-01")
+    _wire(monkeypatch, tmp_path, conv)
+    e = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)["entries"]
+    assert (e["cas@0"]["u"], e["cas@0"]["c"], e["cas@0"]["o"]) == (200, 30, 80)
+
+
+def test_unknown_layout_fallback_dedupes_exact_copies(monkeypatch, tmp_path):
+    """A layout neither structural read recognizes still falls to the recursive scan —
+    with exact duplicate records dropped."""
+    rec = _usage_blob(26, model=1026, u=200, o=80, c=30)
+    blob = _ld(7, rec) + _ld(8, rec)
+    conv = tmp_path / "convs"
+    conv.mkdir()
+    _make_db(conv / "cas.db", gen=[(0, blob)])
+    _set_mtime(conv / "cas.db", "2026-06-01")
+    _wire(monkeypatch, tmp_path, conv)
+    e = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)["entries"]
+    assert e["cas@0"]["u"] == 200

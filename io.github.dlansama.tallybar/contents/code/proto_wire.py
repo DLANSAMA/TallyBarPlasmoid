@@ -6,6 +6,8 @@ infinite varints, and schema drift.
 """
 from __future__ import annotations
 
+from typing import Any
+
 
 def _pb_read_varint(buf: bytes, i: int) -> tuple[int, int]:
     """Read an unsigned LEB128 varint from buf[i:].
@@ -142,7 +144,24 @@ def _pb_find_usage(
     return out
 
 
-def _pb_generations(buf: bytes) -> list[dict[str, int]]:
+def _dedupe_usage_records(found: list[dict[int, int]]) -> list[dict[int, int]]:
+    """Drop exact duplicate usage records, keeping first-seen order.
+
+    A gen_metadata generation stores its usage record TWICE — at ``field4`` and again at
+    ``field17.2`` — so the recursive ``_pb_find_usage`` returns each one twice (measured on
+    real undated CLI blobs: 28 records, 14 unique). Distinct generations with identical
+    token counts are vanishingly unlikely within one blob; double-counting every one is not."""
+    seen: set[tuple[tuple[int, int], ...]] = set()
+    out: list[dict[int, int]] = []
+    for rec in found:
+        key = tuple(sorted(rec.items()))
+        if key not in seen:
+            seen.add(key)
+            out.append(rec)
+    return out
+
+
+def _pb_generations(buf: bytes, require_timestamp: bool = True) -> list[dict[str, Any]]:
     """Extract per-generation usage from a ``gen_metadata.data`` blob.
 
     Each row is a root wrapping its generation(s) under field 1; each generation carries:
@@ -153,10 +172,13 @@ def _pb_generations(buf: bytes) -> list[dict[str, int]]:
         ONLY, never both, or the totals double.
       - a ``google.protobuf.Timestamp`` at ``generation.field9.field4``, seconds in its field 1.
 
-    Returns ``[{u, c, o, me, secs}]`` — one entry per usage-bearing generation. Dating by this
-    EMBEDDED timestamp (not the DB file mtime) is what makes the per-day buckets correct: re-scanning
-    a file never re-stamps old generations as "today", and a late-flushed generation lands on its
-    real day. A generation missing either the usage record or the timestamp is skipped.
+    Returns ``[{u, c, o, me, mk, secs}]`` — one entry per usage-bearing generation (``mk`` is the
+    record's field-6 marker, 24 or 26). Dating by this EMBEDDED timestamp (not the DB file mtime)
+    is what makes the per-day buckets correct: re-scanning a file never re-stamps old generations
+    as "today", and a late-flushed generation lands on its real day. A generation missing the
+    usage record is skipped; one missing the timestamp is skipped too unless
+    ``require_timestamp=False``, which returns it with ``secs: None`` (the caller dates it) —
+    still reading field 4 only, so it never picks up the field-17.2 duplicate.
     """
     out: list[dict[str, int]] = []
     _, root_subs = _pb_fields(buf)
@@ -180,12 +202,13 @@ def _pb_generations(buf: bytes) -> list[dict[str, int]]:
                         if 1 in tva:
                             secs = tva[1]
                             break
-        if usage is not None and secs is not None:
+        if usage is not None and (secs is not None or not require_timestamp):
             out.append({
                 "u": usage.get(2, 0),
                 "c": usage.get(5, 0),
                 "o": usage.get(3, 0),
                 "me": usage.get(1, 0),
+                "mk": usage.get(6, 0),
                 "secs": secs,
             })
     return out

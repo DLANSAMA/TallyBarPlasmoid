@@ -94,6 +94,7 @@ def google_ai_subscription_tier(providers: dict[str, dict[str, Any]]) -> str | N
 # ---------------------------------------------------------------------------
 
 from proto_wire import (  # noqa: F401
+    _dedupe_usage_records,
     _dominant_enum,
     _pb_fields,
     _pb_find_usage,
@@ -571,8 +572,17 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                         # (the accuracy fix: date by embedded secs, not file mtime).
                         gens = _pb_generations(bytes(blob))
                         if not gens:
-                            # Fall back to _pb_find_usage for blobs _pb_generations can't parse.
-                            found = _pb_find_usage(bytes(blob), marker=26)
+                            # Undated blob. Prefer the same structural read without the
+                            # timestamp requirement (field-4 records only, marker 26 — the
+                            # 24-records here duplicate the steps scan). Only an unknown layout
+                            # falls to the recursive scan, which sees every record TWICE (field 4
+                            # + its field-17.2 copy), so exact duplicates are dropped first.
+                            undated = [g for g in _pb_generations(bytes(blob), require_timestamp=False)
+                                       if g.get("mk") == 26]
+                            if undated:
+                                found = [{1: g["me"], 2: g["u"], 3: g["o"], 5: g["c"]} for g in undated]
+                            else:
+                                found = _dedupe_usage_records(_pb_find_usage(bytes(blob), marker=26))
                             if not found:
                                 continue
                             # Use today_iso for new records in a known stem (the stem already has
