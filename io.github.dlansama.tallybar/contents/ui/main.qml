@@ -2,6 +2,7 @@ import QtQuick
 import org.kde.plasma.plasma5support as Plasma5Support
 import org.kde.plasma.plasmoid
 import org.kde.plasma.core as PlasmaCore
+import "lib/ui_helpers.js" as UIHelpers
 
 PlasmoidItem {
     id: root
@@ -318,27 +319,12 @@ PlasmoidItem {
         return muted.indexOf(provider) >= 0;
     }
 
-    Plasmoid.status: {
-        const provider = root.providerData(root.selectedProvider);
-        if (root.providerMuted(root.selectedProvider))
-            return PlasmaCore.Types.ActiveStatus;
-        // A provider needing explicit user action (sign in / unlock the wallet) raises the
-        // tray to NeedsAttention so an outage is noticed without opening the popup. Kept
-        // conservative: ONLY these actionable states, not transient timeout/api-error (which
-        // would flap the badge) — keyed off status, never usage percent.
-        const status = String(provider.status || "");
-        if (status === "missing-cookies" || status === "unauthorized"
-                || status === "wallet-locked" || status === "wallet-state-unknown")
-            return PlasmaCore.Types.NeedsAttentionStatus;
-
-        const limits = provider.limits || [];
-        for (let i = 0; i < limits.length; ++i) {
-            if (Number(limits[i].percent || 0) >= 90)
-                return PlasmaCore.Types.NeedsAttentionStatus;
-
-        }
-        return PlasmaCore.Types.ActiveStatus;
-    }
+    // NeedsAttention for an actionable status (sign in / unlock) or a capacity window at
+    // >= 90% — never for extra-usage rows (Claude overage, credit pools), which the
+    // backend's notifications skip too. Rule lives in ui_helpers.needsAttention (node-tested).
+    Plasmoid.status: UIHelpers.needsAttention(root.providerData(root.selectedProvider),
+                                              root.providerMuted(root.selectedProvider))
+        ? PlasmaCore.Types.NeedsAttentionStatus : PlasmaCore.Types.ActiveStatus
     Plasmoid.title: "TallyBar"
     toolTipMainText: "TallyBar"
     toolTipSubText: root.tooltipText()

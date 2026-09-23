@@ -87,6 +87,40 @@ function statusIsBad(status) {
     }
 }
 
+// The limit rows that are real capacity windows — everything except the extra-usage /
+// credit / spend rows the backend flags isExtraUsage (Claude overage, Codex/Antigravity
+// credit pools). Badges, pulses and panel bars key off these only, matching the backend's
+// notifications, which skip isExtraUsage rows too. Loops on .length (not Array.isArray)
+// so a QVariantList that crossed a Repeater boundary still works.
+function usageLimits(limits) {
+    const out = [];
+    const src = limits || [];
+    for (let i = 0; i < src.length; ++i) {
+        if (src[i] && !src[i].isExtraUsage)
+            out.push(src[i]);
+    }
+    return out;
+}
+
+// The statuses that need the user to act (sign in / unlock the wallet). Deliberately NOT
+// transient timeout/api-error, which would flap the tray badge.
+const ATTENTION_STATUSES = ["missing-cookies", "unauthorized", "wallet-locked", "wallet-state-unknown"];
+
+// Whether the panel should raise NeedsAttention for this provider: an actionable status,
+// or a capacity window at >= 90%. Muted providers never do; extra-usage rows never count.
+function needsAttention(provider, muted) {
+    if (muted || !provider)
+        return false;
+    if (ATTENTION_STATUSES.indexOf(String(provider.status || "")) >= 0)
+        return true;
+    const rows = usageLimits(provider.limits);
+    for (let i = 0; i < rows.length; ++i) {
+        if (Number(rows[i].percent || 0) >= 90)
+            return true;
+    }
+    return false;
+}
+
 function menuMoneySpacing(text) {
     return String(text || "").replace(/\$(?=\d)/g, "$ ");
 }
@@ -181,6 +215,8 @@ if (typeof module !== 'undefined') {
         dashboardUrl: dashboardUrl,
         statusUrl: statusUrl,
         statusIsBad: statusIsBad,
+        usageLimits: usageLimits,
+        needsAttention: needsAttention,
         menuMoneySpacing: menuMoneySpacing,
         normalizedCostLine: normalizedCostLine,
         costLineValue: costLineValue,

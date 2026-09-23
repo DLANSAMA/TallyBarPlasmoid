@@ -113,3 +113,24 @@ def test_pretty_model_name():
 ])
 def test_parse_locale_amount(text, dp, gs, expected):
     assert _run_js_fn("parseLocaleAmount", text, dp, gs) == expected
+
+
+def test_usage_limits_drops_extra_usage_rows():
+    rows = [{"label": "Session", "percent": 10}, {"label": "Credits", "percent": 99, "isExtraUsage": True},
+            {"label": "Weekly", "percent": 20}]
+    assert [r["label"] for r in _run_js_fn("usageLimits", rows)] == ["Session", "Weekly"]
+    assert _run_js_fn("usageLimits", None) == []
+
+
+@pytest.mark.parametrize("provider, muted, expected", [
+    ({"status": "ok", "limits": [{"percent": 95}]}, False, True),                         # capacity window
+    ({"status": "ok", "limits": [{"percent": 50}, {"percent": 97, "isExtraUsage": True}]}, False, False),  # overage row ignored
+    ({"status": "ok", "limits": [{"percent": 89.9}]}, False, False),
+    ({"status": "unauthorized", "limits": []}, False, True),                             # actionable status
+    ({"status": "wallet-state-unknown", "limits": []}, False, True),
+    ({"status": "timeout", "limits": []}, False, False),                                 # transient: no flap
+    ({"status": "unauthorized", "limits": [{"percent": 99}]}, True, False),              # muted never
+    (None, False, False),
+])
+def test_needs_attention(provider, muted, expected):
+    assert _run_js_fn("needsAttention", provider, muted) is expected

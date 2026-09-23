@@ -35,6 +35,9 @@ Notable changes to TallyBar. Format follows
 - A slow but healthy refresh (e.g. a sluggish claude.ai plus the Codex cookie
   fallback) is no longer abandoned by the widget at 25 s and its result dropped;
   the watchdog now sits above the backend's guaranteed worst case.
+- The tray attention badge and the panel's bars and warning pulse ignore
+  extra-usage and credit rows (e.g. Claude overage spend), matching the
+  notifications, so a nearly-spent overage cap no longer reads as a full usage window.
 
 ## [0.1.0] — 2026-09-17
 
