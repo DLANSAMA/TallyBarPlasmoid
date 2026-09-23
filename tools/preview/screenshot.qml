@@ -14,6 +14,11 @@
 //   provider=<key>    provider tab to select           (default claude)
 //   graphMode=<key>   CostPopout only: day | week | month  (default week)
 //   scale=<n>         pixel ratio the grab renders at  (default 2)
+//   today=<YYYY-MM-DD> reference day the fixture's week/month buckets are rebased onto
+//                     (default: the real today). The committed screenshots and
+//                     tests/test_qml_render.py pin it, so a render is byte-stable on any
+//                     day — rebasing onto the real today made the week labels and month
+//                     grid (and so the PNG bytes) change daily.
 //
 // The Cost flyout IS capturable, with two constraints that took a while to find:
 //
@@ -108,9 +113,20 @@ Window {
         return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
     }
 
+    // Noon on the requested day, so no timezone offset can push it across midnight.
+    function referenceDay() {
+        const arg = argValue("today", "");
+        const m = arg.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (!m)
+            return new Date();
+        return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0);
+    }
+
     function rebaseDates(snap) {
-        const today = new Date();
-        snap.timestamp = today.toISOString();
+        const today = referenceDay();
+        // The snapshot's own timestamp stays REAL now: the widget ages it against the
+        // live clock ("Updated just now"), so pinning it would make that line drift instead.
+        snap.timestamp = new Date().toISOString();
 
         const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
         for (const key in snap.providers) {

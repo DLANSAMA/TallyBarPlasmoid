@@ -106,21 +106,27 @@ preview:
 # usage data. QT_QUICK_BACKEND=software: the offscreen platform has no GL
 # surface. XDG_ICON_THEME=breeze-dark: without it Kirigami.Icon resolves the
 # light Breeze glyphs, which vanish against the widget's dark card.
+# XDG_CONFIG_HOME: a repo-local kdeglobals pins the icon theme (the kde platform theme
+# reads it from there, overriding XDG_ICON_THEME) so renders don't follow the developer's
+# desktop theme. SHOT_DAY pins the day the fixture's week/month buckets are rebased onto,
+# so the PNGs are byte-stable on any day. tests/test_qml_render.py mirrors both.
+SHOT_DAY := 2026-09-17
 SHOT_ENV := $(QML_ENV) QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
-            XDG_ICON_THEME=breeze-dark QT_QPA_PLATFORMTHEME=kde
+            XDG_ICON_THEME=breeze-dark QT_QPA_PLATFORMTHEME=kde \
+            XDG_CONFIG_HOME=$(CURDIR)/tools/preview/xdg-config
 SHOT := tools/preview/screenshot.qml
 screenshots:
 	@command -v qml6 > /dev/null 2>&1 || { \
 	    echo "qml6 not found — install qt6-declarative (qt6-tools)"; exit 1; }
 	@mkdir -p docs/screenshots
-	@$(SHOT_ENV) qml6 $(SHOT) -- provider=claude      out=docs/screenshots/widget-claude.png
-	@$(SHOT_ENV) qml6 $(SHOT) -- provider=antigravity out=docs/screenshots/widget-antigravity.png
+	@$(SHOT_ENV) qml6 $(SHOT) -- today=$(SHOT_DAY) provider=claude      out=docs/screenshots/widget-claude.png
+	@$(SHOT_ENV) qml6 $(SHOT) -- today=$(SHOT_DAY) provider=antigravity out=docs/screenshots/widget-antigravity.png
 	@# Cost flyout — one shot per Day/Week/Month tab. Driven through the widget's own
 	@# costGraphMode/costDrawerOpen state, so these can only show a view the widget can
 	@# actually reach. Placement beside the widget still needs a live session to verify.
-	@$(SHOT_ENV) qml6 $(SHOT) -- component=CostPopout graphMode=day   out=docs/screenshots/cost-day.png
-	@$(SHOT_ENV) qml6 $(SHOT) -- component=CostPopout graphMode=week  out=docs/screenshots/cost-week.png
-	@$(SHOT_ENV) qml6 $(SHOT) -- component=CostPopout graphMode=month out=docs/screenshots/cost-month.png
+	@$(SHOT_ENV) qml6 $(SHOT) -- today=$(SHOT_DAY) component=CostPopout graphMode=day   out=docs/screenshots/cost-day.png
+	@$(SHOT_ENV) qml6 $(SHOT) -- today=$(SHOT_DAY) component=CostPopout graphMode=week  out=docs/screenshots/cost-week.png
+	@$(SHOT_ENV) qml6 $(SHOT) -- today=$(SHOT_DAY) component=CostPopout graphMode=month out=docs/screenshots/cost-month.png
 	@echo "Wrote docs/screenshots/*.png"
 
 # Regenerate the translation template from the i18n() calls in the QML.

@@ -44,14 +44,23 @@ Arguments (positional `key=value`, after `--`):
 | `component=` | `FullRepresentation` | also accepts `CompactRepresentation` |
 | `provider=`  | `claude`             | which provider tab is selected       |
 | `scale=`     | `2`                  | pixel ratio the grab renders at      |
+| `today=`     | the real today       | day the fixture's week/month buckets are rebased onto (`make screenshots` pins `SHOT_DAY`) |
 
-Three environment variables are required and set by the Makefile:
+Four environment variables are required and set by the Makefile:
 
 - `QML_XHR_ALLOW_FILE_READ=1` — QML blocks `XMLHttpRequest` on `file://` URLs by
   default, which is how the fixture is read.
 - `QT_QUICK_BACKEND=software` — the offscreen platform plugin has no GL surface.
 - `XDG_ICON_THEME=breeze-dark` — otherwise `Kirigami.Icon` resolves the light
   Breeze glyphs, which are invisible against the widget's dark card.
+- `XDG_CONFIG_HOME=tools/preview/xdg-config` — its `kdeglobals` pins the icon
+  theme to breeze-dark. With `QT_QPA_PLATFORMTHEME=kde` the theme is read from
+  `kdeglobals`, so without this the renders follow your desktop's icon theme and
+  stop matching the committed PNGs whenever you switch themes.
+
+Renders are byte-stable across days and machines' desktop settings only with both
+`today=` and `XDG_CONFIG_HOME` pinned — `tests/test_qml_render.py` compares the
+committed PNGs byte for byte under exactly that environment.
 
 `QT_FORCE_STDERR_LOGGING=1` is also set: without it Qt routes `console.log` to
 the journal and the terminal stays silent, which makes a failed render look like
