@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from accounting import default_provider, enrich_ui_formatting, now_iso
-from cookies import collect_browser_sessions, host_matches_any
+from cookies import collect_browser_sessions, host_matches_any, select_session_cookies
 from http_helpers import bounded_provider, run_threaded_provider, scrub_credentials
 from io_helpers import atomic_write_text as _atomic_write_text, flock_with_timeout, to_daemon_thread
 from providers import (
@@ -1078,7 +1078,7 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
             "gemini": GEMINI_DOMAINS,
             "claude": ("claude.ai",),
         }.items():
-            count = sum(1 for cookie in cookies if host_matches_any(cookie.host, domains))
+            count = len(select_session_cookies(cookies, domains))
             providers[provider].update(
                 status="cookies-ready" if count else "missing-cookies",
                 source="browser-cookies",

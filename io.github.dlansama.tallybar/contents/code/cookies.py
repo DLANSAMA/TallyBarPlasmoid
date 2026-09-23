@@ -33,7 +33,10 @@ class BrowserCookie:
     path: str
     value: str
     secure: bool
-    expires_utc: int | None = None
+    expires_utc: int | None = None       # raw store value (browser-specific epoch/unit)
+    # Normalized to unix seconds by the readers (None = session cookie / unknown).
+    expires_unix: float | None = None
+    last_used_unix: float | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -88,6 +91,33 @@ def discover_firefox_cookie_stores(home: Path) -> list[Path]:
                 seen.add(path)
                 paths.append(path)
     return paths
+
+
+# Chromium stores times as MICROSECONDS since 1601-01-01 (the Windows FILETIME epoch).
+_CHROMIUM_EPOCH_OFFSET = 11_644_473_600
+
+
+def _chromium_time_unix(value: object) -> float | None:
+    """Chromium ``expires_utc``/``last_access_utc`` -> unix seconds; 0/absent -> None."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
+        return None
+    return float(value) / 1_000_000.0 - _CHROMIUM_EPOCH_OFFSET
+
+
+def _unix_time_any_unit(value: object) -> float | None:
+    """A unix-epoch timestamp in seconds, milliseconds or microseconds -> seconds.
+
+    Firefox changed ``moz_cookies.expiry`` from seconds to MILLISECONDS (observed live:
+    1.78e12) while ``lastAccessed``/``creationTime`` are microseconds, so the unit is taken
+    from the magnitude: any real date in s is < 1e11, in ms < 1e14, else us."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
+        return None
+    v = float(value)
+    if v < 1e11:
+        return v
+    if v < 1e14:
+        return v / 1_000.0
+    return v / 1_000_000.0
 
 
 def _cookie_tmp_base() -> str | None:
@@ -329,9 +359,11 @@ def read_chromium_cookies(
             value_col = "value" if "value" in columns else "'' as value"
             secure_col = "is_secure" if "is_secure" in columns else "0 as is_secure"
             expiry_col = "expires_utc" if "expires_utc" in columns else "0 as expires_utc"
+            access_col = "last_access_utc" if "last_access_utc" in columns else "0 as last_access_utc"
             rows = con.execute(
                 f"""
-                select host_key, name, path, {value_col}, encrypted_value, {secure_col}, {expiry_col}
+                select host_key, name, path, {value_col}, encrypted_value, {secure_col}, {expiry_col},
+                       {access_col}
                 from cookies
                 """
             )
@@ -362,6 +394,8 @@ def read_chromium_cookies(
                         value=value,
                         secure=bool(row["is_secure"]),
                         expires_utc=int(row["expires_utc"] or 0),
+                        expires_unix=_chromium_time_unix(row["expires_utc"]),
+                        last_used_unix=_chromium_time_unix(row["last_access_utc"]),
                     )
                 )
             return found
@@ -396,7 +430,9 @@ def read_firefox_cookies(path: Path, domain_filter: tuple[str, ...]) -> tuple[li
             stats["matched"] = 0
             stats["errors"] = 0
             found: list[BrowserCookie] = []
-            for row in con.execute("select host, name, path, value, isSecure, expiry from moz_cookies"):
+            columns = {r["name"] for r in con.execute("pragma table_info(moz_cookies)")}
+            access_col = "lastAccessed" if "lastAccessed" in columns else "0 as lastAccessed"
+            for row in con.execute(f"select host, name, path, value, isSecure, expiry, {access_col} from moz_cookies"):
                 stats["rows"] += 1
                 host = str(row["host"] or "")
                 if domain_filter and not host_matches_any(host, domain_filter):
@@ -414,6 +450,8 @@ def read_firefox_cookies(path: Path, domain_filter: tuple[str, ...]) -> tuple[li
                             value=value,
                             secure=bool(row["isSecure"]),
                             expires_utc=int(row["expiry"] or 0),
+                            expires_unix=_unix_time_any_unit(row["expiry"]),
+                            last_used_unix=_unix_time_any_unit(row["lastAccessed"]),
                         )
                     )
             return found
@@ -434,11 +472,46 @@ def host_matches_any(host: str, domains: tuple[str, ...]) -> bool:
     return False
 
 
-def cookiejar_for_domains(cookies: list[BrowserCookie], domains: tuple[str, ...]) -> CookieJar:
-    jar = CookieJar()
+def select_session_cookies(cookies: list[BrowserCookie], domains: tuple[str, ...],
+                           now: float | None = None) -> list[BrowserCookie]:
+    """The cookies to authenticate ``domains`` with: unexpired, and all from ONE browser
+    profile — the one used most recently for these domains.
+
+    A login session lives in one profile. Merging every profile into one jar made the
+    LAST store read win each (domain, path, name) collision — Firefox, read last — so a
+    profile abandoned months ago (observed: last used 4 months before the live Chrome one)
+    could shadow the live session, or splice two Google accounts' SID/HSID cookies into one
+    request; and expired cookies were sent anyway. Profile choice = the latest
+    ``last_used_unix`` among its matching cookies; ties (or stores without access times)
+    fall back to the most cookies, then discovery order."""
+    current = time.time() if now is None else now
+    stores: dict[tuple[str, str], list[BrowserCookie]] = {}
     for item in cookies:
         if not host_matches_any(item.host, domains):
             continue
+        if item.expires_unix is not None and item.expires_unix <= current:
+            continue
+        stores.setdefault((item.browser, item.profile), []).append(item)
+    if not stores:
+        return []
+    order = list(stores)
+
+    def rank(key: tuple[str, str]) -> tuple[float, int, int]:
+        items = stores[key]
+        last = max((c.last_used_unix or 0.0) for c in items)
+        return (last, len(items), -order.index(key))
+
+    return stores[max(order, key=rank)]
+
+
+def has_session_cookies(cookies: list[BrowserCookie], domains: tuple[str, ...]) -> bool:
+    """True when some profile holds unexpired cookies for ``domains``."""
+    return bool(select_session_cookies(cookies, domains))
+
+
+def cookiejar_for_domains(cookies: list[BrowserCookie], domains: tuple[str, ...]) -> CookieJar:
+    jar = CookieJar()
+    for item in select_session_cookies(cookies, domains):
         domain = item.host if item.host.startswith(".") else "." + item.host
         jar.set_cookie(
             Cookie(

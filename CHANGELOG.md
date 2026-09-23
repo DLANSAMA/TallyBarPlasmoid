@@ -21,6 +21,10 @@ Notable changes to TallyBar. Format follows
 - During a brief Claude/Gemini/Codex outage the widget keeps showing the last good
   usage bars, but the cost section now updates from this refresh's local logs
   instead of freezing at the cached figures for up to 15 minutes.
+- Browser sessions are read from the one browser profile you used most recently,
+  and expired cookies are skipped. Previously every profile was merged and the last
+  one read (Firefox) won, so a long-abandoned profile could shadow your live
+  session — or mix cookies from two Google accounts.
 
 ## [0.1.0] — 2026-09-17
 

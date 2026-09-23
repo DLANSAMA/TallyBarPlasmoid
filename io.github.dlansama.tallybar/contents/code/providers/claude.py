@@ -15,7 +15,7 @@ from accounting import (
     missing_cookie_provider,
     now_iso,
 )
-from cookies import BrowserCookie, cookiejar_for_domains, host_matches_any
+from cookies import BrowserCookie, cookiejar_for_domains, has_session_cookies
 from http_helpers import http_json_async, scrub_credentials
 from parsers import (
     add_pace_detail,
@@ -240,7 +240,7 @@ async def _claude_get(url: str, jar: Any, timeout: float) -> tuple[int, Any] | N
 async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
                          prev: dict[str, Any] | None = None) -> dict[str, Any]:
     domains = CLAUDE_DOMAINS
-    if not any(host_matches_any(cookie.host, domains) for cookie in cookies):
+    if not has_session_cookies(cookies, domains):
         return missing_cookie_provider("Claude")
     jar = cookiejar_for_domains(cookies, domains)
     # Zero-network fallback tier from the local OAuth creds file (read once). Stamped

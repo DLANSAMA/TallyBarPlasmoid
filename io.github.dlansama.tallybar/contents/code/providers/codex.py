@@ -16,7 +16,7 @@ from accounting import (
     codex_rate_limit_rows,
     missing_cookie_provider,
 )
-from cookies import BrowserCookie, cookiejar_for_domains, host_matches_any
+from cookies import BrowserCookie, cookiejar_for_domains, has_session_cookies
 from http_helpers import http_json_async, scrub_credentials
 from parsers import (
     as_dict,
@@ -36,7 +36,7 @@ OPENAI_ACCOUNT_CHECK_URL = "https://chatgpt.com/backend-api/accounts/check/v4-20
 
 async def run_openai_cookie_api(cookies: list[BrowserCookie], timeout: float) -> dict[str, Any]:
     domains = OPENAI_COOKIE_DOMAINS
-    if not any(host_matches_any(cookie.host, domains) for cookie in cookies):
+    if not has_session_cookies(cookies, domains):
         return missing_cookie_provider("Codex", "browser")
     jar = cookiejar_for_domains(cookies, domains)
     try:
