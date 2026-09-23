@@ -32,6 +32,9 @@ Notable changes to TallyBar. Format follows
   last week's percentage with "Reset due"; "This week" counts the current week.
 - Codex token history no longer counts repeated usage events twice (Codex
   re-emits a turn's usage without new tokens; about 0.2% of tokens on a real log).
+- A slow but healthy refresh (e.g. a sluggish claude.ai plus the Codex cookie
+  fallback) is no longer abandoned by the widget at 25 s and its result dropped;
+  the watchdog now sits above the backend's guaranteed worst case.
 
 ## [0.1.0] — 2026-09-17
 

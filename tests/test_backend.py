@@ -1317,3 +1317,62 @@ async def _build_snapshot_carry_forward_nocost(claude_status, cached_snapshot):
          patch("backend.run_claude_api", side_effect=fake_claude), \
          patch("pricing_data.refresh_pricing", noop_pricing):
         return await backend.build_snapshot(args)
+
+
+# --- The widget's refresh watchdog must outlast the backend's worst case ---
+
+def test_refresh_watchdog_covers_backend_worst_case():
+    """main.qml abandons a refresh after refreshWatchdogMs and DROPS its result, so the
+    watchdog must exceed the backend's bounded worst case plus interpreter startup."""
+    import re as _re
+    qml = (Path(__file__).parent.parent / "io.github.dlansama.tallybar" / "contents" / "ui" / "main.qml").read_text()
+    timeout = int(_re.search(r"readonly property int backendTimeoutSeconds: (\d+)", qml).group(1))
+    watchdog_ms = int(_re.search(r"readonly property int refreshWatchdogMs: (\d+)", qml).group(1))
+    assert '--once --timeout " + root.backendTimeoutSeconds' in qml   # one source for the flag
+    assert "interval: root.refreshWatchdogMs" in qml
+    startup_margin_s = 5
+    assert watchdog_ms >= (backend.refresh_worst_case_seconds(timeout) + startup_margin_s) * 1000
+
+
+@pytest.mark.asyncio
+async def test_build_snapshot_respects_worst_case_bound():
+    """Every phase stalls far past its timeout: the refresh still returns within
+    refresh_worst_case_seconds — the guarantee the widget's watchdog is sized against."""
+    import asyncio as _asyncio
+    import time as _time
+    args = MagicMock()
+    args.no_network = False
+    args.timeout = 0.3
+
+    async def slow_cookies(timeout, background=False):
+        await _asyncio.sleep(30)
+
+    async def slow_threaded(func, *a, **k):
+        await _asyncio.sleep(30)
+
+    async def failed_codex(timeout):
+        return {"status": "api-error", "label": "Codex", "limits": []}
+
+    async def slow_openai(cookies, timeout):
+        await _asyncio.sleep(30)
+
+    async def slow_claude(cookies, timeout, prev=None):
+        await _asyncio.sleep(30)
+
+    async def noop_pricing(*a, **k):
+        return
+
+    started = _time.monotonic()
+    with patch("backend.load_config", return_value={}), \
+         patch("backend.load_snapshot", return_value={}), \
+         patch("backend.collect_browser_sessions", side_effect=slow_cookies), \
+         patch("backend.run_threaded_provider", side_effect=slow_threaded), \
+         patch("backend.run_codex_rpc", side_effect=failed_codex), \
+         patch("backend.run_openai_cookie_api", side_effect=slow_openai), \
+         patch("backend.run_claude_api", side_effect=slow_claude), \
+         patch("backend.compute_local_cost_summaries", side_effect=lambda deadline=None: {}), \
+         patch("pricing_data.refresh_pricing", noop_pricing):
+        snap = await backend.build_snapshot(args)
+    elapsed = _time.monotonic() - started
+    assert snap["ok"] is True
+    assert elapsed <= backend.refresh_worst_case_seconds(args.timeout) + 0.5, elapsed

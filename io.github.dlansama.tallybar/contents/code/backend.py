@@ -76,6 +76,7 @@ __all__ = [
     "main",
     "now_iso",
     "public_config",
+    "refresh_worst_case_seconds",
     "run_antigravity_local",
     "run_antigravity_remote",
     "run_claude_api",
@@ -117,6 +118,18 @@ _ACTIONABLE_BAD_STATUSES = frozenset((
     "missing-cookies", "unauthorized", "wallet-locked", "wallet-state-unknown",
     "timeout", "api-error", "error",
 ))
+
+
+def refresh_worst_case_seconds(timeout: float) -> float:
+    """Upper bound on build_snapshot's wall time for a given per-provider ``timeout``.
+
+    The phases run in sequence: browser-cookie collection (bounded at ``timeout + 1``), the
+    provider TaskGroup (``timeout + 1``), then the lazy OpenAI cookie fallback, which is capped
+    to whatever remains of this budget (at most ``timeout``). The cost scan overlaps them and
+    is bounded from the start. The widget's refresh watchdog (main.qml ``refreshWatchdogMs``)
+    must exceed this plus interpreter startup — otherwise a slow-but-healthy refresh is
+    declared dead and its result dropped. → tests/test_backend.py::test_refresh_watchdog_*"""
+    return 3 * timeout + 2
 
 
 def _open_lock_0600(lock_path: Path):
@@ -816,6 +829,7 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     # negative. These do NOT sum to `total`: the cost scan deliberately overlaps the provider
     # fetches, and `cost_scan` measures launch -> clean await, not CPU time.
     phase_start = time.monotonic()
+    snapshot_deadline = phase_start + refresh_worst_case_seconds(args.timeout)
     timings: dict[str, int] = {}
 
     def mark(name: str, since: float) -> None:
@@ -1049,9 +1063,12 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         # its own timeout, so this post-group await is bounded even outside the
         # TaskGroup's asyncio.timeout wrapper (intended — it's the rare fallback path).
         if providers["codex"].get("status") != "ok":
+            # Capped to what's left of the refresh budget so refresh_worst_case_seconds is a
+            # guarantee the widget's watchdog can rely on, not just the usual case.
+            fallback_budget = min(args.timeout, max(0.1, snapshot_deadline - time.monotonic()))
             codex_cookie = await bounded_provider(
-                run_openai_cookie_api(cookies, args.timeout),
-                args.timeout,
+                run_openai_cookie_api(cookies, fallback_budget),
+                fallback_budget,
                 default_provider("Codex", "browser-api"),
             )
             if codex_cookie["status"] == "ok":
