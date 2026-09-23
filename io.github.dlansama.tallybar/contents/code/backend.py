@@ -1321,7 +1321,8 @@ def main() -> int:
         # never carries them — otherwise the cold-start cacheLoader would re-fire stale
         # alerts. Only this live --once path emits them (not --cost); the QML fires each via
         # KNotification. State de-dup lives in compute_notifications.
-        diags = snapshot.get("diagnostics") if isinstance(snapshot.get("diagnostics"), dict) else {}
+        diags_raw = snapshot.get("diagnostics")
+        diags = diags_raw if isinstance(diags_raw, dict) else {}
         cost_ok = not (diags.get("cost_summary_timeout") or diags.get("cost_summary_error"))
         snapshot["notifications"] = compute_notifications(snapshot.get("providers") or {}, snapshot.get("config") or {},
                                                           cost_available=cost_ok)
