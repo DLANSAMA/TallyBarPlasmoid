@@ -662,3 +662,51 @@ def test_gemini_unauthorized_carries_action_url():
     assert url.startswith("https://accounts.google.com/v3/signin")
     # No URL in the HTML -> Gemini home fallback.
     assert gemini._extract_signin_url("") == gemini.GEMINI_SIGNIN_FALLBACK
+
+
+def test_budget_alert_not_replayed_after_cost_scan_timeout(tmp_path, monkeypatch):
+    """A timed-out cost scan leaves no costSummary, which reads as $0 month-to-date.
+    Evaluating the budget against that re-armed every crossing, so the next good refresh
+    replayed "monthly budget reached". The budget armed-state must HOLD instead."""
+    monkeypatch.setattr(backend, "NOTIFY_STATE_PATH", tmp_path / "n.json")
+    monkeypatch.setattr(backend, "all_ai_projected_month_cost", lambda *a, **k: 0.0)
+    cfg = {"notificationsEnabled": True, "notificationThresholds": [100], "monthlyBudget": 100.0}
+    over = _cost_providers([{"inMonth": True, "cost": 120.0}])
+    no_cost = {"p0": {"label": "P0", "limits": []}}  # what a timed-out scan leaves behind
+
+    def budget_alerts(providers, **kw):
+        return [n for n in backend.compute_notifications(providers, cfg, **kw) if n["provider"] == "all"]
+
+    assert len(budget_alerts(over)) == 1                    # first crossing fires
+    assert budget_alerts(no_cost) == []                     # scan timed out: nothing, and no re-arm
+    assert budget_alerts(over) == []                        # next good run: NOT replayed
+    # Same with the explicit flag main() passes when diagnostics report a timeout, even if
+    # a (carried-forward, stale) costSummary happens to read low.
+    low = _cost_providers([{"inMonth": True, "cost": 1.0}])
+    assert budget_alerts(low, cost_available=False) == []
+    assert budget_alerts(over) == []
+    # A genuine drop (month rollover) with cost data present still re-arms normally.
+    assert budget_alerts(low) == []
+    assert len(budget_alerts(over)) == 1
+
+
+def test_main_passes_cost_timeout_to_notifications(tmp_path, monkeypatch, capsys):
+    """main() must tell compute_notifications when the cost scan timed out."""
+    import sys as _sys
+    seen = {}
+
+    async def fake_build(args):
+        return {"ok": True, "timestamp": "2026-09-22T12:00:00+00:00", "providers": {},
+                "diagnostics": {"cost_summary_timeout": True}, "config": {}}
+
+    def fake_notify(providers, config, cost_available=True):
+        seen["cost_available"] = cost_available
+        return []
+
+    monkeypatch.setattr(backend, "build_snapshot", fake_build)
+    monkeypatch.setattr(backend, "compute_notifications", fake_notify)
+    monkeypatch.setattr(backend, "save_snapshot", lambda s: None)
+    monkeypatch.setattr(backend, "load_snapshot", lambda: {})
+    monkeypatch.setattr(_sys, "argv", ["backend.py", "--once"])
+    assert backend.main() == 0
+    assert seen["cost_available"] is False

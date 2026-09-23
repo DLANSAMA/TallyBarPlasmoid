@@ -976,8 +976,9 @@ def test_pb_generations_counts_each_generation_once_dated_by_timestamp():
     ])
     gens = costmod._pb_generations(blob)
     assert len(gens) == 2  # each counted ONCE, not 4 (the field17.2 duplicate is ignored)
-    assert gens[0] == {"u": 100, "c": 10, "o": 50, "me": 1133, "secs": secs_a}
-    assert gens[1] == {"u": 200, "c": 20, "o": 80, "me": 1016, "secs": secs_b}
+    # "mk" is the record's field-6 marker (_encode_generation's default: the pre-2.0 24).
+    assert gens[0] == {"u": 100, "c": 10, "o": 50, "me": 1133, "mk": 24, "secs": secs_a}
+    assert gens[1] == {"u": 200, "c": 20, "o": 80, "me": 1016, "mk": 24, "secs": secs_b}
 
 
 def test_disk_scan_dates_by_embedded_timestamp_not_today(monkeypatch, tmp_path):
@@ -1171,7 +1172,7 @@ def test_antigravity_summary_burn_rate_uses_unbiased_denominator(tmp_path, monke
 
 
 # ---------------------------------------------------------------------------
-# Task 1: Cache-read de-inflation (per-conversation max, not cumulative sum)
+# Cache reads are billed per call, identically in every key namespace
 # ---------------------------------------------------------------------------
 
 def _write_ledger(tmp_path, entries: dict) -> None:
@@ -1183,24 +1184,21 @@ def _write_ledger(tmp_path, entries: dict) -> None:
     }))
 
 
-def _cost_summary(tmp_path, monkeypatch) -> dict:
+def _cost_summary(tmp_path, monkeypatch, pricing=None) -> dict:
     """Run antigravity_ledger_cost_summary with no live RPC and no conv dirs."""
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
-    # Use zero pricing so cost==0 and we can assert on token counts cleanly.
-    monkeypatch.setattr(costmod, "model_pricing",
-                        lambda *a, **k: {"input": 0.0, "output": 0.0, "cache_read": 0.0})
+    # Zero pricing by default so token counts can be asserted cleanly.
+    prices = pricing or {"input": 0.0, "output": 0.0, "cache_read": 0.0}
+    monkeypatch.setattr(costmod, "model_pricing", lambda *a, **k: dict(prices))
     return costmod.antigravity_ledger_cost_summary()
 
 
-def test_cache_read_not_inflated_across_steps(tmp_path, monkeypatch):
-    """A conversation with monotonically growing per-step cache reads must report
-    the MAX single-step value (peak context size), NOT the sum across all steps.
-
-    Scenario: 3-step conversation, steps read 10K/20K/30K cache tokens.
-    Sum would be 60K; correct de-inflated total is 30K (the max/final step).
-    """
+def test_cache_read_billed_per_call_steps_entries(tmp_path, monkeypatch):
+    """Every ':' steps entry is one API call that pays for the cache it re-reads, so a
+    conversation's cache volume is the SUM over its calls — not its peak. (Collapsing to
+    the peak once understated the agy CLI's 30-day cost by ~a third on a real ledger.)"""
     today = dt.date.today().isoformat()
     entries = {
         "conv:0": {"d": today, "me": 1016, "u": 500, "c": 10_000, "o": 100},
@@ -1209,21 +1207,33 @@ def test_cache_read_not_inflated_across_steps(tmp_path, monkeypatch):
     }
     _write_ledger(tmp_path, entries)
     s = _cost_summary(tmp_path, monkeypatch)
-    # tokensToday should be: u_total + max_c + o_total = (500+300+400) + 30000 + (100+80+90)
-    expected_tok = (500 + 300 + 400) + 30_000 + (100 + 80 + 90)
-    assert s["tokensToday"] == expected_tok, (
-        f"Expected {expected_tok} (de-inflated max-c), got {s['tokensToday']} "
-        f"(diff={s['tokensToday'] - expected_tok} would indicate sum-inflation)"
-    )
-    # Confirm the inflated (sum) value is distinct from the correct value, so the
-    # assertion above is non-trivial.
-    inflated_tok = (500 + 300 + 400) + 60_000 + (100 + 80 + 90)
-    assert s["tokensToday"] != inflated_tok, "tokensToday equals inflated sum — de-inflation not applied"
+    assert s["tokensToday"] == (500 + 300 + 400) + 60_000 + (100 + 80 + 90)
+
+
+def test_cache_read_billed_per_call_same_across_namespaces(tmp_path, monkeypatch):
+    """The SAME per-call records must cost the same whether captured by the disk steps
+    scan (':'), the gen_metadata scan ('@') or the live RPC ('#'). The agy RPC and the CLI
+    steps rows carry identical per-call values, and a CLI stem flips from '#' to ':' when
+    its session ends — so any namespace-specific accounting changes a conversation's cost
+    retroactively depending on which path happened to capture it."""
+    today = dt.date.today().isoformat()
+    calls = [(500, 10_000, 100), (300, 20_000, 80), (400, 30_000, 90)]
+    pricing = {"input": 2.0, "output": 12.0, "cache_read": 0.2}
+    results = []
+    for sep in (":", "@", "#"):
+        sub = tmp_path / sep.replace(":", "colon").replace("@", "at").replace("#", "hash")
+        sub.mkdir()
+        entries = {f"conv{sep}{i}": {"d": today, "me": 1016, "u": u, "c": c, "o": o}
+                   for i, (u, c, o) in enumerate(calls)}
+        _write_ledger(sub, entries)
+        s = _cost_summary(sub, monkeypatch, pricing)
+        results.append((s["tokensToday"], s["costToday"]))
+    assert results[0] == results[1] == results[2], results
+    expected_cost = sum(u * 2.0 + c * 0.2 + o * 12.0 for u, c, o in calls) / 1_000_000
+    assert results[0][1] == pytest.approx(expected_cost)
 
 
 def test_cache_read_single_step_unchanged(tmp_path, monkeypatch):
-    """A single-entry conversation (one step) is unaffected — its c value is both
-    max and sum, so the canonical key == the only key and eff_c == c."""
     today = dt.date.today().isoformat()
     entries = {"conv:0": {"d": today, "me": 1016, "u": 1000, "c": 65_000, "o": 200}}
     _write_ledger(tmp_path, entries)
@@ -1231,49 +1241,9 @@ def test_cache_read_single_step_unchanged(tmp_path, monkeypatch):
     assert s["tokensToday"] == 1000 + 65_000 + 200
 
 
-def test_cache_read_independent_conversations_unaffected(tmp_path, monkeypatch):
-    """Two different conversations must NOT have their cache reads merged — each
-    takes its own max independently."""
-    today = dt.date.today().isoformat()
-    entries = {
-        # Conversation A: 2 steps, max c = 20K
-        "convA:0": {"d": today, "me": 1016, "u": 100, "c": 10_000, "o": 50},
-        "convA:1": {"d": today, "me": 1016, "u": 100, "c": 20_000, "o": 50},
-        # Conversation B: 1 step, c = 5K
-        "convB:0": {"d": today, "me": 1016, "u": 200, "c": 5_000, "o": 80},
-    }
-    _write_ledger(tmp_path, entries)
-    s = _cost_summary(tmp_path, monkeypatch)
-    # Expected: (100+100+200) + (20000+5000) + (50+50+80) = 400 + 25000 + 180 = 25580
-    assert s["tokensToday"] == 400 + 25_000 + 180
-
-
-def test_cache_read_rpc_entries_unaffected(tmp_path, monkeypatch):
-    """RPC '#'-keyed entries are per-generation records; each is an independent
-    API call with its own cache-read (NOT a cumulative re-read of growing context).
-    De-inflation must NOT combine '#' entries across the same cascade — each is its
-    own singleton stem and keeps its full 'c' value."""
-    today = dt.date.today().isoformat()
-    entries = {
-        "conv#gen0": {"d": today, "me": 1026, "u": 1000, "c": 500, "o": 200},
-        "conv#gen1": {"d": today, "me": 1026, "u": 800, "c": 400, "o": 150},
-    }
-    _write_ledger(tmp_path, entries)
-    s = _cost_summary(tmp_path, monkeypatch)
-    # Each '#' entry is its own singleton stem: both keep their full c values.
-    # tokensToday = (1000+800) + (500+400) + (200+150) = 1800 + 900 + 350 = 3050
-    assert s["tokensToday"] == 1800 + 900 + 350
-
-
-def test_cache_read_cli_sessions_not_deflated_against_each_other(tmp_path, monkeypatch):
-    """CLI statusLine entries (keyed 'cli:<sessionId>') are session-cumulative totals —
-    each entry is already the single authoritative total for its session and must NOT be
-    de-inflated against other CLI sessions sharing the 'cli:' prefix.
-
-    Regression: _key_stem('cli:abc') previously split on ':' and returned 'cli', collapsing
-    ALL CLI sessions into one stem; only the highest-c session's value survived and others
-    were zeroed out — e.g. two sessions c=5000/c=3000 reported 5300 tokens instead of 8300.
-    """
+def test_cache_read_cli_sessions_each_counted(tmp_path, monkeypatch):
+    """CLI statusLine entries ('cli:<sessionId>') are separate sessions — both count in full.
+    (Regression: a stem split on ':' once collapsed every 'cli:' session into one.)"""
     today = dt.date.today().isoformat()
     entries = {
         "cli:session-aaa": {"d": today, "model": "Gemini 3.5 Flash (High)", "u": 100, "c": 5_000, "o": 50},
@@ -1281,70 +1251,20 @@ def test_cache_read_cli_sessions_not_deflated_against_each_other(tmp_path, monke
     }
     _write_ledger(tmp_path, entries)
     s = _cost_summary(tmp_path, monkeypatch)
-    # Both sessions must keep their full c values (singletons, not cross-de-inflated).
-    # tokensToday = (100+200) + (5000+3000) + (50+80) = 300 + 8000 + 130 = 8430
-    expected = 300 + 8_000 + 130
-    assert s["tokensToday"] == expected, (
-        f"Expected {expected} (both CLI sessions' full c), got {s['tokensToday']} "
-        f"(if ~5300+130=5430, de-inflation incorrectly merged CLI sessions)"
-    )
+    assert s["tokensToday"] == 300 + 8_000 + 130
 
 
-def test_cache_read_at_keyed_gen_entries_are_singletons(tmp_path, monkeypatch):
-    """gen_metadata '@'-keyed entries are per-generation independent cache-read
-    snapshots (each is one discrete API call, not a cumulative context re-read
-    accumulating across turns). They must be singletons in _key_stem so two
-    '@' entries from the same cascade keep their own full 'c' values.
-
-    Verified in _pb_generations: 'c' = protobuf field 5 from the generation's
-    own usage record — it reflects that single generation's cache cost, not a
-    rolling total across all prior generations in the conversation.
-    """
+def test_cache_read_breakdown_line_reports_full_cache(tmp_path, monkeypatch):
+    """The 30-day "Cached" breakdown lane reports the same summed cache volume the
+    token totals use (no second, deflated notion of cache anywhere in the summary)."""
     today = dt.date.today().isoformat()
     entries = {
-        # Two gen_metadata entries from the same cascade: each is independent.
-        "cas@0": {"d": today, "me": 1026, "u": 200, "c": 10_000, "o": 80},
-        "cas@1": {"d": today, "me": 1026, "u": 150, "c":  8_000, "o": 60},
+        "conv:0": {"d": today, "me": 1016, "u": 1_000, "c": 400_000, "o": 1_000},
+        "conv:1": {"d": today, "me": 1016, "u": 1_000, "c": 600_000, "o": 1_000},
     }
     _write_ledger(tmp_path, entries)
     s = _cost_summary(tmp_path, monkeypatch)
-    # Each '@' entry is its own singleton: both keep their full c values.
-    # tokensToday = (200+150) + (10000+8000) + (80+60) = 350 + 18000 + 140 = 18490
-    expected = 350 + 18_000 + 140
-    assert s["tokensToday"] == expected, (
-        f"Expected {expected} (both '@' entries' full c), got {s['tokensToday']} "
-        f"(if ~10490, de-inflation incorrectly merged '@' gen_metadata entries)"
-    )
-
-
-def test_cache_read_colon_in_cascade_id_not_truncated(tmp_path, monkeypatch):
-    """A cascade id containing ':' must not be truncated by _key_stem — splitting
-    on the first ':' would merge 'abc:def:0' (stem 'abc') with 'abc:ghi:0' (also
-    stem 'abc'), cross-de-inflating unrelated conversations.
-
-    rsplit(":", 1) correctly recovers the full cascade id 'abc:def' from key
-    'abc:def:0' (suffix is always a plain integer, never contains ':').
-    """
-    today = dt.date.today().isoformat()
-    entries = {
-        # Two distinct conversations whose IDs share an 'abc:' prefix.
-        "abc:def:0": {"d": today, "me": 1016, "u": 100, "c": 5_000, "o": 50},
-        "abc:def:1": {"d": today, "me": 1016, "u": 100, "c": 9_000, "o": 50},  # same cascade
-        "abc:ghi:0": {"d": today, "me": 1016, "u": 200, "c": 3_000, "o": 80},  # different cascade
-    }
-    _write_ledger(tmp_path, entries)
-    s = _cost_summary(tmp_path, monkeypatch)
-    # Stem of 'abc:def:0'/'abc:def:1' = 'abc:def'; stem of 'abc:ghi:0' = 'abc:ghi'.
-    # De-inflated: max_c(abc:def) = 9000, c(abc:ghi) = 3000 (singleton).
-    # tokensToday = (100+100+200) + (9000+3000) + (50+50+80) = 400 + 12000 + 180 = 12580
-    expected = 400 + 12_000 + 180
-    # Wrong (split-on-first-':'): stem 'abc' for all three → max_c=9000, others zeroed
-    # → (100+100+200) + 9000 + (50+50+80) = 400+9000+180 = 9580
-    wrong = 400 + 9_000 + 180
-    assert s["tokensToday"] != wrong, "rsplit not applied — cascade id truncated at first ':'"
-    assert s["tokensToday"] == expected, (
-        f"Expected {expected}, got {s['tokensToday']}"
-    )
+    assert "Cached 1M" in s["breakdown"], s["breakdown"]
 
 
 # ---------------------------------------------------------------------------
@@ -1445,3 +1365,20 @@ def test_marker26_and_marker24_steps_disjoint_keys(tmp_path, monkeypatch):
     assert entries["dedup:0"]["u"] == 100
     assert entries["dedup@1"]["u"] == 200
     assert entries["dedup@1"]["me"] == 1026
+
+
+def test_apply_cost_summaries_replaces_stale_and_clears_on_no_data():
+    """apply_cost_summaries ASSIGNS the scan's summary: a pre-existing (stale) costSummary
+    is replaced, a scan reporting no data clears it, and an absent key leaves it alone."""
+    providers = {
+        "claude": {"label": "Claude", "status": "ok", "limits": [], "costSummary": {"cost30d": 1.0}},
+        "codex": {"label": "Codex", "status": "ok", "limits": [], "costSummary": {"cost30d": 2.0}},
+        "gemini": {"label": "Gemini", "status": "ok", "limits": [], "costSummary": {"cost30d": 3.0}},
+        "antigravity": {"label": "Antigravity", "status": "ok", "limits": [], "costSummary": {"cost30d": 4.0}},
+    }
+    costmod.apply_cost_summaries(providers, {"claude": {"cost30d": 99.0}, "codex": None,
+                                             "antigravity": {"cost30d": 44.0}})
+    assert providers["claude"]["costSummary"]["cost30d"] == 99.0
+    assert "costSummary" not in providers["codex"]
+    assert providers["gemini"]["costSummary"]["cost30d"] == 3.0      # not in this scan: untouched
+    assert providers["antigravity"]["costSummary"]["cost30d"] == 44.0

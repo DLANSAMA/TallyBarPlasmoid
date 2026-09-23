@@ -22,16 +22,18 @@ from pathlib import Path
 from typing import Any
 
 from accounting import default_provider, enrich_ui_formatting, now_iso
-from cookies import collect_browser_sessions, host_matches_any
+from cookies import collect_browser_sessions, host_matches_any, select_session_cookies
 from http_helpers import bounded_provider, run_threaded_provider, scrub_credentials
 from io_helpers import atomic_write_text as _atomic_write_text, flock_with_timeout, to_daemon_thread
 from providers import (
     GEMINI_DOMAINS,
+    apply_claude_statusline_fallback,
     apply_cost_summaries,
     apply_google_one_credits,
     choose_antigravity_result,
     compute_local_cost_summaries,
     google_one_credit_fresh,
+    load_claude_statusline,
     run_antigravity_local,
     run_antigravity_remote,
     run_claude_api,
@@ -51,6 +53,7 @@ __all__ = [
     "SNAPSHOT_PATH",
     "all_ai_month_to_date_cost",
     "all_ai_projected_month_cost",
+    "apply_claude_statusline_fallback",
     "apply_cost_summaries",
     "apply_google_one_credits",
     "bounded_provider",
@@ -67,11 +70,13 @@ __all__ = [
     "flock_with_timeout",
     "google_one_credit_fresh",
     "host_matches_any",
+    "load_claude_statusline",
     "load_config",
     "load_snapshot",
     "main",
     "now_iso",
     "public_config",
+    "refresh_worst_case_seconds",
     "run_antigravity_local",
     "run_antigravity_remote",
     "run_claude_api",
@@ -113,6 +118,18 @@ _ACTIONABLE_BAD_STATUSES = frozenset((
     "missing-cookies", "unauthorized", "wallet-locked", "wallet-state-unknown",
     "timeout", "api-error", "error",
 ))
+
+
+def refresh_worst_case_seconds(timeout: float) -> float:
+    """Upper bound on build_snapshot's wall time for a given per-provider ``timeout``.
+
+    The phases run in sequence: browser-cookie collection (bounded at ``timeout + 1``), the
+    provider TaskGroup (``timeout + 1``), then the lazy OpenAI cookie fallback, which is capped
+    to whatever remains of this budget (at most ``timeout``). The cost scan overlaps them and
+    is bounded from the start. The widget's refresh watchdog (main.qml ``refreshWatchdogMs``)
+    must exceed this plus interpreter startup — otherwise a slow-but-healthy refresh is
+    declared dead and its result dropped. → tests/test_backend.py::test_refresh_watchdog_*"""
+    return 3 * timeout + 2
 
 
 def _open_lock_0600(lock_path: Path):
@@ -272,12 +289,18 @@ def _status_notification(pkey: str, plabel: str, status: str, provider: dict[str
     }
 
 
-def compute_notifications(providers: dict[str, Any], config: dict[str, Any]) -> list[dict[str, Any]]:
+def compute_notifications(providers: dict[str, Any], config: dict[str, Any],
+                          cost_available: bool = True) -> list[dict[str, Any]]:
     """Detect usage-limit threshold crossings and return only the NEWLY-crossed ones
     (de-duped via NOTIFY_STATE_PATH so each crossing alerts once). The QML side fires
     these via notify-send. Returns [] when notifications are disabled — but still keeps
     the armed-set tracking current usage so toggling notifications off→on neither
-    replays old crossings nor suppresses a fresh one."""
+    replays old crossings nor suppresses a fresh one.
+
+    ``cost_available=False`` (the cost scan timed out or errored this run) HOLDS the
+    budget armed-state untouched, exactly like a transiently-failed provider holds its
+    usage keys: a missing costSummary reads as $0 month-to-date, and evaluating the budget
+    against that would re-arm every crossing and replay the alert on the next good run."""
     enabled = config.get("notificationsEnabled", True) is not False
     raw_thresholds = config.get("notificationThresholds") or list(DEFAULT_NOTIFY_THRESHOLDS)
     if not isinstance(raw_thresholds, (list, tuple)):
@@ -421,7 +444,11 @@ def compute_notifications(providers: dict[str, Any], config: dict[str, Any]) -> 
                 budget = float(config.get("monthlyBudget") or 0.0)
             except (TypeError, ValueError):
                 budget = 0.0
-            if budget > 0.0:
+            # No cost data this run -> hold (don't evaluate against a phantom $0). Also holds
+            # when no provider carries a costSummary at all (nothing to compare against).
+            has_cost = cost_available and any(
+                isinstance(p, dict) and isinstance(p.get("costSummary"), dict) for p in providers.values())
+            if budget > 0.0 and has_cost:
                 mtd = all_ai_month_to_date_cost(providers)
                 pct = (mtd / budget) * 100.0
                 for t in _BUDGET_THRESHOLDS:
@@ -640,6 +667,10 @@ def carry_forward_provider_last_good(provider: dict[str, Any], cached: Any,
         return provider
 
     frozen = copy.deepcopy(cached_entry)
+    # The cost summary is LOCAL data (parsed from ~/.claude, ~/.codex, … this run), not part
+    # of the network reading being frozen — carrying the cached one would shadow this run's
+    # fresh scan for the whole grace window. apply_cost_summaries attaches the fresh one.
+    frozen.pop("costSummary", None)
     frozen["status"] = "ok"
     frozen["stale"] = True
     frozen["staleAsOf"] = stale_as_of
@@ -798,6 +829,7 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     # negative. These do NOT sum to `total`: the cost scan deliberately overlaps the provider
     # fetches, and `cost_scan` measures launch -> clean await, not CPU time.
     phase_start = time.monotonic()
+    snapshot_deadline = phase_start + refresh_worst_case_seconds(args.timeout)
     timings: dict[str, int] = {}
 
     def mark(name: str, since: float) -> None:
@@ -1031,9 +1063,12 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         # its own timeout, so this post-group await is bounded even outside the
         # TaskGroup's asyncio.timeout wrapper (intended — it's the rare fallback path).
         if providers["codex"].get("status") != "ok":
+            # Capped to what's left of the refresh budget so refresh_worst_case_seconds is a
+            # guarantee the widget's watchdog can rely on, not just the usual case.
+            fallback_budget = min(args.timeout, max(0.1, snapshot_deadline - time.monotonic()))
             codex_cookie = await bounded_provider(
-                run_openai_cookie_api(cookies, args.timeout),
-                args.timeout,
+                run_openai_cookie_api(cookies, fallback_budget),
+                fallback_budget,
                 default_provider("Codex", "browser-api"),
             )
             if codex_cookie["status"] == "ok":
@@ -1060,7 +1095,7 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
             "gemini": GEMINI_DOMAINS,
             "claude": ("claude.ai",),
         }.items():
-            count = sum(1 for cookie in cookies if host_matches_any(cookie.host, domains))
+            count = len(select_session_cookies(cookies, domains))
             providers[provider].update(
                 status="cookies-ready" if count else "missing-cookies",
                 source="browser-cookies",
@@ -1098,6 +1133,13 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     # branch's cookies-ready/missing-cookies) or when the provider already has limits.
     for _name in ("claude", "gemini", "codex"):
         providers[_name] = carry_forward_provider_last_good(providers[_name], cached_snapshot)
+
+    # Claude Code statusLine fallback (integrations/claude_code/statusline_capture.py): when
+    # the claude.ai cookie path produced no live limits — Cloudflare 403/429, signed out,
+    # wallet locked, or --no-network — use the quota Claude Code itself handed the hook.
+    # Runs AFTER the carry-forward so a carried last-good reading is replaced only by a
+    # NEWER capture. A live cookie reading is never touched. Local file read, no network.
+    providers["claude"] = apply_claude_statusline_fallback(providers["claude"], load_claude_statusline())
 
     # Merge the cost summaries computed CONCURRENTLY since the top of build_snapshot
     # (the scan overlapped the network fetches above). apply_cost_summaries propagates the
@@ -1296,7 +1338,11 @@ def main() -> int:
         # never carries them — otherwise the cold-start cacheLoader would re-fire stale
         # alerts. Only this live --once path emits them (not --cost); the QML fires each via
         # KNotification. State de-dup lives in compute_notifications.
-        snapshot["notifications"] = compute_notifications(snapshot.get("providers") or {}, snapshot.get("config") or {})
+        diags_raw = snapshot.get("diagnostics")
+        diags = diags_raw if isinstance(diags_raw, dict) else {}
+        cost_ok = not (diags.get("cost_summary_timeout") or diags.get("cost_summary_error"))
+        snapshot["notifications"] = compute_notifications(snapshot.get("providers") or {}, snapshot.get("config") or {},
+                                                          cost_available=cost_ok)
     except (KeyboardInterrupt, SystemExit):
         raise
     except BaseException as exc:  # noqa: BLE001 - same rationale as the build_snapshot guard

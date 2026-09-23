@@ -2,6 +2,7 @@ import QtQuick
 import org.kde.plasma.plasma5support as Plasma5Support
 import org.kde.plasma.plasmoid
 import org.kde.plasma.core as PlasmaCore
+import "lib/ui_helpers.js" as UIHelpers
 
 PlasmoidItem {
     id: root
@@ -86,13 +87,20 @@ PlasmoidItem {
     // injection vector if this were ever wired up to real config, so don't reintroduce it
     // without also shellQuote()-ing it.
     property string pythonExec: "/usr/bin/env python3"
+    // Per-provider timeout handed to the backend (--timeout). The backend's refresh can take
+    // up to backend.refresh_worst_case_seconds(timeout) = 3*timeout + 2 (38s at 12) plus
+    // interpreter startup, so the watchdog below must sit above that — at 25s it abandoned
+    // slow-but-healthy refreshes and dropped their result. tests/test_backend.py pins the
+    // relation (test_refresh_watchdog_covers_backend_worst_case).
+    readonly property int backendTimeoutSeconds: 12
+    readonly property int refreshWatchdogMs: 45000
 
     // background defaults true (the widget's normal timer refresh). Pass false for the
     // "Unlock KWallet" path: dropping --background lets the backend's KWallet open()
     // pop the native unlock dialog (and runs the documented GUI-prompt credential action).
     function backendCommand(background) {
         const backend = root.localPath(Qt.resolvedUrl("../code/backend.py"));
-        const cmd = root.pythonExec + " " + root.shellQuote(backend) + " --once --timeout 12";
+        const cmd = root.pythonExec + " " + root.shellQuote(backend) + " --once --timeout " + root.backendTimeoutSeconds;
         return (background === false) ? cmd : cmd + " --background";
     }
 
@@ -256,11 +264,12 @@ PlasmoidItem {
     // process getting SIGKILLed, a stuck DataSource), onNewData never fires and
     // loading stays true forever — refresh() then early-returns on every Timer
     // tick and the widget is permanently stuck "Refreshing". This forces loading
-    // back to false after a generous bound (backend --timeout is 12s) so the next
-    // tick can retry. The normal path disarms this in executable.onNewData.
+    // back to false after refreshWatchdogMs (above the backend's worst case — see
+    // backendTimeoutSeconds) so the next tick can retry. The normal path disarms
+    // this in executable.onNewData.
     Timer {
         id: refreshWatchdog
-        interval: 25000
+        interval: root.refreshWatchdogMs
         repeat: false
         onTriggered: () => {
             if (root.loading) {
@@ -310,27 +319,12 @@ PlasmoidItem {
         return muted.indexOf(provider) >= 0;
     }
 
-    Plasmoid.status: {
-        const provider = root.providerData(root.selectedProvider);
-        if (root.providerMuted(root.selectedProvider))
-            return PlasmaCore.Types.ActiveStatus;
-        // A provider needing explicit user action (sign in / unlock the wallet) raises the
-        // tray to NeedsAttention so an outage is noticed without opening the popup. Kept
-        // conservative: ONLY these actionable states, not transient timeout/api-error (which
-        // would flap the badge) — keyed off status, never usage percent.
-        const status = String(provider.status || "");
-        if (status === "missing-cookies" || status === "unauthorized"
-                || status === "wallet-locked" || status === "wallet-state-unknown")
-            return PlasmaCore.Types.NeedsAttentionStatus;
-
-        const limits = provider.limits || [];
-        for (let i = 0; i < limits.length; ++i) {
-            if (Number(limits[i].percent || 0) >= 90)
-                return PlasmaCore.Types.NeedsAttentionStatus;
-
-        }
-        return PlasmaCore.Types.ActiveStatus;
-    }
+    // NeedsAttention for an actionable status (sign in / unlock) or a capacity window at
+    // >= 90% — never for extra-usage rows (Claude overage, credit pools), which the
+    // backend's notifications skip too. Rule lives in ui_helpers.needsAttention (node-tested).
+    Plasmoid.status: UIHelpers.needsAttention(root.providerData(root.selectedProvider),
+                                              root.providerMuted(root.selectedProvider))
+        ? PlasmaCore.Types.NeedsAttentionStatus : PlasmaCore.Types.ActiveStatus
     Plasmoid.title: "TallyBar"
     toolTipMainText: "TallyBar"
     toolTipSubText: root.tooltipText()
@@ -467,8 +461,9 @@ PlasmoidItem {
     // makes every invocation a distinct source.
     property int notifySeq: 0
 
-    // Fire desktop notifications. Reuses the existing root.shellQuote (defined above) to
-    // escape the title/body for the shell — they come from provider labels + numbers.
+    // Fire desktop notifications. root.shellQuote escapes the title/body for the SHELL; the
+    // body is additionally markup-escaped (UIHelpers.escapeNotificationMarkup) because the
+    // notification server renders body markup and bodies can carry provider/API messages.
     function fireNotifications(list) {
         for (let i = 0; i < list.length; ++i) {
             const n = list[i];
@@ -478,7 +473,7 @@ PlasmoidItem {
             const cmd = "TALLYBAR_NSEQ=" + (++root.notifySeq) + " "
                 + "notify-send --app-name=TallyBar --urgency=" + urgency
                 + " --icon=utilities-system-monitor -- "
-                + root.shellQuote(n.title) + " " + root.shellQuote(n.body || "");
+                + root.shellQuote(n.title) + " " + root.shellQuote(UIHelpers.escapeNotificationMarkup(n.body || ""));
             notifier.connectSource(cmd);
         }
     }

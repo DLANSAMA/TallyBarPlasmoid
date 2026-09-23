@@ -18,6 +18,16 @@ import pytest
 REPO = Path(__file__).parent.parent
 UI = REPO / "io.github.dlansama.tallybar" / "contents" / "ui"
 SHOTS = REPO / "docs" / "screenshots"
+# Mirrors the Makefile's SHOT_ENV + SHOT_DAY. Both are what make a render byte-stable: the
+# day pins where the fixture's week/month buckets land (rebasing onto the REAL today broke
+# the week/month comparisons every day after the screenshots were taken), and the repo-local
+# XDG_CONFIG_HOME pins the icon theme (the kde platform theme otherwise follows the
+# developer's desktop kdeglobals, so switching desktop icon themes broke the widget shots).
+SHOT_DAY = re.search(r"^SHOT_DAY := (\S+)$", (REPO / "Makefile").read_text(), re.M).group(1)
+SHOT_ENV = dict(QML_XHR_ALLOW_FILE_READ="1", QT_FORCE_STDERR_LOGGING="1",
+                QT_QPA_PLATFORM="offscreen", QT_QUICK_BACKEND="software",
+                XDG_ICON_THEME="breeze-dark", QT_QPA_PLATFORMTHEME="kde",
+                XDG_CONFIG_HOME=str(REPO / "tools" / "preview" / "xdg-config"))
 
 
 def _delegate_blocks(src: str):
@@ -62,10 +72,9 @@ def test_offscreen_render_matches_committed_screenshot(provider, tmp_path):
     if qml6 is None or os.environ.get("CI"):
         pytest.skip("qml6/QtQuick not available; offscreen render test skipped")
     out = tmp_path / f"{provider}.png"
-    env = dict(os.environ, QML_XHR_ALLOW_FILE_READ="1", QT_FORCE_STDERR_LOGGING="1",
-               QT_QPA_PLATFORM="offscreen", QT_QUICK_BACKEND="software",
-               XDG_ICON_THEME="breeze-dark", QT_QPA_PLATFORMTHEME="kde")  # mirrors Makefile SHOT_ENV
-    proc = subprocess.run([qml6, "tools/preview/screenshot.qml", "--", f"provider={provider}", f"out={out}"],
+    env = dict(os.environ, **SHOT_ENV)
+    proc = subprocess.run([qml6, "tools/preview/screenshot.qml", "--", f"today={SHOT_DAY}",
+                           f"provider={provider}", f"out={out}"],
                           cwd=REPO, env=env, capture_output=True, text=True, timeout=120)
     if not out.is_file():
         pytest.skip(f"offscreen render unavailable here: {proc.stderr[-200:]}")
@@ -89,10 +98,8 @@ def test_cost_popout_render_matches_committed_screenshot(mode, tmp_path):
     if qml6 is None or os.environ.get("CI"):
         pytest.skip("qml6/QtQuick not available; offscreen render test skipped")
     out = tmp_path / f"cost-{mode}.png"
-    env = dict(os.environ, QML_XHR_ALLOW_FILE_READ="1", QT_FORCE_STDERR_LOGGING="1",
-               QT_QPA_PLATFORM="offscreen", QT_QUICK_BACKEND="software",
-               XDG_ICON_THEME="breeze-dark", QT_QPA_PLATFORMTHEME="kde")  # mirrors Makefile SHOT_ENV
-    proc = subprocess.run([qml6, "tools/preview/screenshot.qml", "--", "component=CostPopout",
+    env = dict(os.environ, **SHOT_ENV)
+    proc = subprocess.run([qml6, "tools/preview/screenshot.qml", "--", f"today={SHOT_DAY}", "component=CostPopout",
                            f"graphMode={mode}", f"out={out}"],
                           cwd=REPO, env=env, capture_output=True, text=True, timeout=120)
     if not out.is_file():
@@ -116,3 +123,12 @@ def test_extracted_components_do_not_size_themselves_from_parent():
             if re.match(r"^ {4}(Layout\.\w+|width|height|implicitWidth|implicitHeight)\s*:.*\bparent\.(width|height)\b", line):
                 offenders.append(f"{path.relative_to(REPO)}:{n}: {line.strip()}")
     assert not offenders, "component root sized from parent:\n" + "\n".join(offenders)
+
+
+def test_render_env_is_pinned():
+    """The render must not depend on the day or the developer's desktop icon theme."""
+    kdeglobals = REPO / "tools" / "preview" / "xdg-config" / "kdeglobals"
+    assert "Theme=breeze-dark" in kdeglobals.read_text()
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", SHOT_DAY)
+    shot_qml = (REPO / "tools" / "preview" / "screenshot.qml").read_text()
+    assert 'argValue("today"' in shot_qml

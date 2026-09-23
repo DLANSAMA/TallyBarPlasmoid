@@ -6,6 +6,47 @@ Notable changes to TallyBar. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- Antigravity CLI cost was understated: cache reads captured from the CLI's
+  conversation databases were collapsed to each conversation's peak instead of
+  billed per call, while the same calls captured live were billed in full. Every
+  capture path now bills cache reads per call (about a third higher 30-day cost on
+  a real CLI-heavy ledger).
+- The Claude Code statusline integration now does what its README said: when
+  claude.ai can't be read (Cloudflare rate limit, signed out, locked wallet,
+  offline), the Claude tab falls back to the quota Claude Code reported to the
+  hook instead of showing an error. Previously the capture was written but never read.
+- A monthly-budget alert no longer fires a second time after a refresh whose
+  cost scan timed out (the missing cost data read as $0 and re-armed the alert).
+- During a brief Claude/Gemini/Codex outage the widget keeps showing the last good
+  usage bars, but the cost section now updates from this refresh's local logs
+  instead of freezing at the cached figures for up to 15 minutes.
+- Browser sessions are read from the one browser profile you used most recently,
+  and expired cookies are skipped. Previously every profile was merged and the last
+  one read (Firefox) won, so a long-abandoned profile could shadow your live
+  session — or mix cookies from two Google accounts.
+- The custom monthly-budget field reads amounts in your locale: "12,50" in a
+  decimal-comma locale is $12.50, not $1250.
+- Grok: once the logged billing period has ended (no grok session since), the
+  bar reads 0% with the reset projected to the current week instead of repeating
+  last week's percentage with "Reset due"; "This week" counts the current week.
+- Codex token history no longer counts repeated usage events twice (Codex
+  re-emits a turn's usage without new tokens; about 0.2% of tokens on a real log).
+- A slow but healthy refresh (e.g. a sluggish claude.ai plus the Codex cookie
+  fallback) is no longer abandoned by the widget at 25 s and its result dropped;
+  the watchdog now sits above the backend's guaranteed worst case.
+- The tray attention badge and the panel's bars and warning pulse ignore
+  extra-usage and credit rows (e.g. Claude overage spend), matching the
+  notifications, so a nearly-spent overage cap no longer reads as a full usage window.
+- Notification text from providers is shown literally: characters like `<` and
+  `&` in an error message are escaped instead of being interpreted as markup
+  (which could garble the text or turn a link in a response into a live link).
+- On a shared machine, Antigravity usage is only read from your own language
+  servers — another user's (whose token is visible in the process list) is ignored.
+- Claude refreshes make one fewer claude.ai request when the preferred usage
+  endpoint isn't available for the account: the miss is remembered for a day
+  instead of re-probed every refresh (less Cloudflare rate-limit pressure).
+
 ## [0.1.0] — 2026-09-17
 
 First public release.

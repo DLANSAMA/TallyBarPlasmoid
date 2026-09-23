@@ -109,7 +109,8 @@ async def test_find_antigravity_process_local():
 
     with patch.dict(sys.modules, {"psutil": None}), \
             patch("os.listdir", return_value=["1234"]), \
-            patch("builtins.open", side_effect=scoped_open):
+            patch("builtins.open", side_effect=scoped_open), \
+            patch.object(providers.antigravity, "_owned_by_current_user", return_value=True):
         # find_antigravity_processes memoizes its scan for the life of the process; drop
         # that memo so this test observes a fresh /proc scan regardless of test ordering.
         providers.antigravity._reset_process_scan_cache()
@@ -1259,3 +1260,153 @@ async def test_build_snapshot_reports_phase_timings():
         assert timings[phase] <= timings["total"] + 50, (
             f"{phase} ({timings[phase]}ms) exceeds total ({timings['total']}ms)"
         )
+
+
+# --- Carried-forward providers get THIS run's local cost summary ---
+
+def test_carry_forward_drops_cached_cost_summary():
+    """The cost summary is local data, not part of the frozen network reading."""
+    cached = _cached_provider("Claude", [{"label": "Session", "percent": 40}], ts_offset=60.0,
+                              extra={"costSummary": {"cost30d": 1.0}, "creditBalance": {"amount": 5}})
+    failing = {"label": "Claude", "status": "unauthorized", "limits": [], "message": "403"}
+    out = backend.carry_forward_provider_last_good(failing, cached)
+    assert out["stale"] is True
+    assert "costSummary" not in out
+    assert out["creditBalance"] == {"amount": 5}   # network data IS carried
+
+
+@pytest.mark.asyncio
+async def test_build_snapshot_carried_provider_gets_fresh_cost_summary():
+    """End to end: a transient Claude failure carries the cached limits forward, but the
+    costSummary must be this run's fresh scan, not the cached one (which used to win
+    through apply_cost_summaries' setdefault for the whole 15-minute grace window)."""
+    cached = _cached_provider("Claude", [{"label": "Session", "percent": 40}], ts_offset=60.0,
+                              extra={"costSummary": {"cost30d": 1.0, "today": "stale"}})
+    fresh = {"cost30d": 99.0, "today": "Today: $1.00 · 1K tok"}
+    with patch("backend.compute_local_cost_summaries",
+               side_effect=lambda deadline=None: {"claude": fresh}):
+        res = await _build_snapshot_carry_forward_nocost("api-error", cached)
+    claude = res["providers"]["claude"]
+    assert claude["stale"] is True
+    assert claude["costSummary"]["cost30d"] == 99.0
+
+
+async def _build_snapshot_carry_forward_nocost(claude_status, cached_snapshot):
+    """_build_snapshot_carry_forward without its compute_local_cost_summaries patch, so the
+    caller can supply the scan result."""
+    args = MagicMock()
+    args.no_network = False
+    args.timeout = 0.5
+
+    async def fast_threaded(func, *a, **k):
+        return {"status": "ok", "label": "Gemini", "limits": []}
+
+    async def fake_codex_rpc(timeout):
+        return {"status": "ok", "label": "Codex", "limits": []}
+
+    async def fake_claude(cookies, timeout, prev=None):
+        return {"status": claude_status, "label": "Claude", "limits": [], "message": "boom"}
+
+    async def noop_pricing(*a, **k):
+        return
+
+    with patch("backend.load_config", return_value={}), \
+         patch("backend.load_snapshot", return_value=cached_snapshot), \
+         patch("backend.collect_browser_sessions", return_value=([], {"kwallet": {"status": "ok"}})), \
+         patch("backend.run_threaded_provider", side_effect=fast_threaded), \
+         patch("backend.run_codex_rpc", side_effect=fake_codex_rpc), \
+         patch("backend.run_claude_api", side_effect=fake_claude), \
+         patch("pricing_data.refresh_pricing", noop_pricing):
+        return await backend.build_snapshot(args)
+
+
+# --- The widget's refresh watchdog must outlast the backend's worst case ---
+
+def test_refresh_watchdog_covers_backend_worst_case():
+    """main.qml abandons a refresh after refreshWatchdogMs and DROPS its result, so the
+    watchdog must exceed the backend's bounded worst case plus interpreter startup."""
+    import re as _re
+    qml = (Path(__file__).parent.parent / "io.github.dlansama.tallybar" / "contents" / "ui" / "main.qml").read_text()
+    timeout = int(_re.search(r"readonly property int backendTimeoutSeconds: (\d+)", qml).group(1))
+    watchdog_ms = int(_re.search(r"readonly property int refreshWatchdogMs: (\d+)", qml).group(1))
+    assert '--once --timeout " + root.backendTimeoutSeconds' in qml   # one source for the flag
+    assert "interval: root.refreshWatchdogMs" in qml
+    startup_margin_s = 5
+    assert watchdog_ms >= (backend.refresh_worst_case_seconds(timeout) + startup_margin_s) * 1000
+
+
+@pytest.mark.asyncio
+async def test_build_snapshot_respects_worst_case_bound():
+    """Every phase stalls far past its timeout: the refresh still returns within
+    refresh_worst_case_seconds — the guarantee the widget's watchdog is sized against."""
+    import asyncio as _asyncio
+    import time as _time
+    args = MagicMock()
+    args.no_network = False
+    args.timeout = 0.3
+
+    async def slow_cookies(timeout, background=False):
+        await _asyncio.sleep(30)
+
+    async def slow_threaded(func, *a, **k):
+        await _asyncio.sleep(30)
+
+    async def failed_codex(timeout):
+        return {"status": "api-error", "label": "Codex", "limits": []}
+
+    async def slow_openai(cookies, timeout):
+        await _asyncio.sleep(30)
+
+    async def slow_claude(cookies, timeout, prev=None):
+        await _asyncio.sleep(30)
+
+    async def noop_pricing(*a, **k):
+        return
+
+    started = _time.monotonic()
+    with patch("backend.load_config", return_value={}), \
+         patch("backend.load_snapshot", return_value={}), \
+         patch("backend.collect_browser_sessions", side_effect=slow_cookies), \
+         patch("backend.run_threaded_provider", side_effect=slow_threaded), \
+         patch("backend.run_codex_rpc", side_effect=failed_codex), \
+         patch("backend.run_openai_cookie_api", side_effect=slow_openai), \
+         patch("backend.run_claude_api", side_effect=slow_claude), \
+         patch("backend.compute_local_cost_summaries", side_effect=lambda deadline=None: {}), \
+         patch("pricing_data.refresh_pricing", noop_pricing):
+        snap = await backend.build_snapshot(args)
+    elapsed = _time.monotonic() - started
+    assert snap["ok"] is True
+    assert elapsed <= backend.refresh_worst_case_seconds(args.timeout) + 0.5, elapsed
+
+
+
+# --- The process scan only considers the current user's processes ---
+
+def test_process_scan_skips_other_users_language_servers():
+    """/proc/<pid>/cmdline is world-readable: another user's language server (and its CSRF
+    token) must not be picked up on a shared machine."""
+    mine = "language_server\0--app_data_dir=antigravity\0--csrf_token\0MINE\0"
+    theirs = "language_server\0--app_data_dir=antigravity\0--csrf_token\0THEIRS\0"
+    cmdlines = {"/proc/100/cmdline": mine, "/proc/200/cmdline": theirs}
+    real_open = open
+
+    def scoped_open(path, *args, **kwargs):
+        if str(path) in cmdlines:
+            return mock_open(read_data=cmdlines[str(path)])()
+        return real_open(path, *args, **kwargs)
+
+    with patch.dict(sys.modules, {"psutil": None}), \
+            patch("os.listdir", return_value=["100", "200"]), \
+            patch("builtins.open", side_effect=scoped_open), \
+            patch.object(providers.antigravity, "_owned_by_current_user", side_effect=lambda pid: pid == 100):
+        providers.antigravity._reset_process_scan_cache()
+        found = providers.antigravity.find_antigravity_processes()
+    providers.antigravity._reset_process_scan_cache()
+    assert found == [(100, "MINE", "http")]
+
+
+def test_owned_by_current_user_real_proc():
+    import os as _os
+    assert providers.antigravity._owned_by_current_user(_os.getpid()) is True
+    assert providers.antigravity._owned_by_current_user(1) is (_os.getuid() == 0)   # init: root's
+    assert providers.antigravity._owned_by_current_user(2**22 + 12345) is False     # no such pid

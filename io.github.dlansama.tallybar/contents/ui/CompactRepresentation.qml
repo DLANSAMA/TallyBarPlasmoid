@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import "lib/format.js" as Fmt
+import "lib/ui_helpers.js" as UIHelpers
 
 Item {
     id: root
@@ -40,9 +41,15 @@ Item {
         };
     }
 
+    // The panel's bars, pulse and text modes read CAPACITY windows only — an extra-usage /
+    // credit row (e.g. Codex "Credits" as the 2nd limit) must not become the secondary bar
+    // or trigger the warning pulse. Same filter as the tray badge (ui_helpers.usageLimits).
+    function usageRows() {
+        return UIHelpers.usageLimits(root.providerData().limits);
+    }
+
     function percentAt(index) {
-        const provider = root.providerData();
-        const limits = provider.limits || [];
+        const limits = root.usageRows();
         if (limits.length <= index)
             return 0;
 
@@ -50,7 +57,7 @@ Item {
     }
 
     function usageSummary() {
-        const limits = root.providerData().limits || [];
+        const limits = root.usageRows();
         if (limits.length === 0)
             return "--";
 
@@ -73,24 +80,8 @@ Item {
     // (usage-keyed amber/red recolour stays locked out). Mirrors FullRepresentation's
     // tabStatusBad set, plus the sign-in / not-running actionable states.
     function statusIsBad(status) {
-        switch (status) {
-        case "missing-cookies":
-        case "missing-cli":
-        case "unauthorized":
-        case "api-error":
-        case "error":
-        case "timeout":
-        case "wallet-locked":
-        case "wallet-state-unknown":
-        case "not-running":
-        case "no-port":
-        case "missing-oauth":
-        case "oauth-expired":
-        case "oauth-unavailable":
-            return true;
-        default:
-            return false;
-        }
+        // The ONE bad-status set lives in lib/ui_helpers.js (shared with FullRepresentation).
+        return UIHelpers.statusIsBad(status);
     }
     // A muted provider is dropped from the badge/dim logic (still visible in popup).
     function isMuted() {
@@ -151,7 +142,7 @@ Item {
     readonly property bool textMode: root.panelMode !== "percent" && !root.vertical
 
     function primaryLimit() {
-        const limits = root.providerData().limits || [];
+        const limits = root.usageRows();
         return limits.length > 0 ? limits[0] : null;
     }
 
@@ -185,7 +176,7 @@ Item {
         if (!l)
             return "--";
         const session = Math.round(Number(l.percent || 0));
-        const limits = root.providerData().limits || [];
+        const limits = root.usageRows();
         const lane = String(l.label || "");
         for (let i = 1; i < limits.length; i++) {
             const w = limits[i] || {};

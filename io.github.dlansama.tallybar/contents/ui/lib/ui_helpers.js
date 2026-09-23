@@ -87,6 +87,51 @@ function statusIsBad(status) {
     }
 }
 
+// The limit rows that are real capacity windows — everything except the extra-usage /
+// credit / spend rows the backend flags isExtraUsage (Claude overage, Codex/Antigravity
+// credit pools). Badges, pulses and panel bars key off these only, matching the backend's
+// notifications, which skip isExtraUsage rows too. Loops on .length (not Array.isArray)
+// so a QVariantList that crossed a Repeater boundary still works.
+function usageLimits(limits) {
+    const out = [];
+    const src = limits || [];
+    for (let i = 0; i < src.length; ++i) {
+        if (src[i] && !src[i].isExtraUsage)
+            out.push(src[i]);
+    }
+    return out;
+}
+
+// The statuses that need the user to act (sign in / unlock the wallet). Deliberately NOT
+// transient timeout/api-error, which would flap the tray badge.
+const ATTENTION_STATUSES = ["missing-cookies", "unauthorized", "wallet-locked", "wallet-state-unknown"];
+
+// Whether the panel should raise NeedsAttention for this provider: an actionable status,
+// or a capacity window at >= 90%. Muted providers never do; extra-usage rows never count.
+function needsAttention(provider, muted) {
+    if (muted || !provider)
+        return false;
+    if (ATTENTION_STATUSES.indexOf(String(provider.status || "")) >= 0)
+        return true;
+    const rows = usageLimits(provider.limits);
+    for (let i = 0; i < rows.length; ++i) {
+        if (Number(rows[i].percent || 0) >= 90)
+            return true;
+    }
+    return false;
+}
+
+// Escape text for a desktop-notification BODY. The freedesktop Notifications spec treats
+// the body as markup (<b>, <a href>, <img>) and Plasma renders it, while the summary is
+// plain text — so only the body is escaped. Bodies carry provider/API error messages
+// (e.g. a Codex app-server error string), which must render literally: a "<" or "&" would
+// otherwise garble the text, and an <a href>/<img> from a response would become a live
+// link or a remote image fetch in the notification.
+function escapeNotificationMarkup(text) {
+    return String(text === undefined || text === null ? "" : text)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 function menuMoneySpacing(text) {
     return String(text || "").replace(/\$(?=\d)/g, "$ ");
 }
@@ -133,6 +178,33 @@ function compactUsd(value) {
     return "$" + v.toFixed(2);
 }
 
+// Parse a user-typed amount under the given locale's separators (Qt.locale().decimalPoint /
+// .groupSeparator), returning NaN when it isn't a plain non-negative number.
+//
+// The budget field used `parseFloat(text.replace(/,/g, ""))`: in a decimal-comma locale
+// (de_DE, fr_FR, …) the DoubleValidator accepts "12,50", and stripping every comma turned
+// it into 1250 — a 100x budget. Group separators are removed, the locale's decimal point
+// becomes ".", and a C-style "12.50" typed in a comma locale is still read as 12.5 (a lone
+// group separator followed by 1-2 digits can only be a decimal point).
+function parseLocaleAmount(text, decimalPoint, groupSeparator) {
+    let t = String(text || "").replace(/[\s\u00a0\u202f]/g, "");
+    const dp = String(decimalPoint || ".");
+    const gs = String(groupSeparator || ",");
+    if (t.length === 0)
+        return NaN;
+    if (t.indexOf(dp) < 0 && gs !== dp) {
+        const parts = t.split(gs);
+        if (parts.length === 2 && /^\d{1,2}$/.test(parts[1]))
+            t = parts[0] + dp + parts[1];
+    }
+    if (gs !== dp)
+        t = t.split(gs).join("");
+    t = t.split(dp).join(".");
+    if (!/^\d+(\.\d+)?$/.test(t))
+        return NaN;
+    return Number(t);
+}
+
 function prettyModelName(name) {
     let s = String(name || "").trim();
     if (s.length === 0 || s === "Unknown")
@@ -154,10 +226,14 @@ if (typeof module !== 'undefined') {
         dashboardUrl: dashboardUrl,
         statusUrl: statusUrl,
         statusIsBad: statusIsBad,
+        usageLimits: usageLimits,
+        needsAttention: needsAttention,
+        escapeNotificationMarkup: escapeNotificationMarkup,
         menuMoneySpacing: menuMoneySpacing,
         normalizedCostLine: normalizedCostLine,
         costLineValue: costLineValue,
         compactUsd: compactUsd,
+        parseLocaleAmount: parseLocaleAmount,
         prettyModelName: prettyModelName
     };
 }

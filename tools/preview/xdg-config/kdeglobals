@@ -1,0 +1,8 @@
+# Hermetic desktop config for the offscreen screenshot renders (Makefile SHOT_ENV and
+# tests/test_qml_render.py point XDG_CONFIG_HOME here). With QT_QPA_PLATFORMTHEME=kde the
+# icon theme comes from kdeglobals, so renders used whatever theme the developer's desktop
+# had (the committed PNGs once differed from a same-day re-render purely on refresh/gear/
+# close glyphs after a theme switch). breeze-dark is KDE's default dark theme and ships with
+# Plasma, so every KDE machine can reproduce it.
+[Icons]
+Theme=breeze-dark

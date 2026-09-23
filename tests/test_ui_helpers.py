@@ -95,3 +95,74 @@ def test_pretty_model_name():
     assert _run_js_fn("prettyModelName", "gemini-3.5-flash") == "Gemini 3.5 Flash"
     assert _run_js_fn("prettyModelName", "Unknown") == "Other"
     assert _run_js_fn("prettyModelName", "Already Spaced Model") == "Already Spaced Model"
+
+
+@pytest.mark.parametrize("text, dp, gs, expected", [
+    ("12,50", ",", ".", 12.5),        # de_DE decimal comma — used to save as 1250
+    ("1.234,56", ",", ".", 1234.56),  # de_DE with grouping
+    ("1.234", ",", ".", 1234.0),      # de_DE group separator (3 digits) stays a group
+    ("12.50", ",", ".", 12.5),        # C-style decimal typed in a comma locale
+    ("1 234,5", ",", " ", 1234.5),  # fr_FR narrow no-break space grouping
+    ("1,234.56", ".", ",", 1234.56),  # en_US
+    ("1,234", ".", ",", 1234.0),      # en_US grouping (the case the old code handled)
+    ("250", ".", ",", 250.0),
+    ("", ".", ",", None),
+    ("abc", ".", ",", None),
+    ("-5", ".", ",", None),
+    ("1.2.3", ".", ",", None),
+])
+def test_parse_locale_amount(text, dp, gs, expected):
+    assert _run_js_fn("parseLocaleAmount", text, dp, gs) == expected
+
+
+def test_usage_limits_drops_extra_usage_rows():
+    rows = [{"label": "Session", "percent": 10}, {"label": "Credits", "percent": 99, "isExtraUsage": True},
+            {"label": "Weekly", "percent": 20}]
+    assert [r["label"] for r in _run_js_fn("usageLimits", rows)] == ["Session", "Weekly"]
+    assert _run_js_fn("usageLimits", None) == []
+
+
+@pytest.mark.parametrize("provider, muted, expected", [
+    ({"status": "ok", "limits": [{"percent": 95}]}, False, True),                         # capacity window
+    ({"status": "ok", "limits": [{"percent": 50}, {"percent": 97, "isExtraUsage": True}]}, False, False),  # overage row ignored
+    ({"status": "ok", "limits": [{"percent": 89.9}]}, False, False),
+    ({"status": "unauthorized", "limits": []}, False, True),                             # actionable status
+    ({"status": "wallet-state-unknown", "limits": []}, False, True),
+    ({"status": "timeout", "limits": []}, False, False),                                 # transient: no flap
+    ({"status": "unauthorized", "limits": [{"percent": 99}]}, True, False),              # muted never
+    (None, False, False),
+])
+def test_needs_attention(provider, muted, expected):
+    assert _run_js_fn("needsAttention", provider, muted) is expected
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("Codex app-server error: <a href='https://x'>login</a>", "Codex app-server error: &lt;a href='https://x'&gt;login&lt;/a&gt;"),
+    ("R&D budget <img src=http://t/p.png>", "R&amp;D budget &lt;img src=http://t/p.png&gt;"),
+    ("$12.00 of $50 this month (24%).", "$12.00 of $50 this month (24%)."),
+    (None, ""),
+])
+def test_escape_notification_markup(text, expected):
+    assert _run_js_fn("escapeNotificationMarkup", text) == expected
+
+
+def test_notifications_escape_body_markup():
+    """main.qml must route every notification body through the markup escape."""
+    qml = (UI_HELPERS_JS.parent.parent / "main.qml").read_text(encoding="utf-8")
+    assert "shellQuote(UIHelpers.escapeNotificationMarkup(n.body" in qml
+    assert "shellQuote(n.body" not in qml
+
+
+def test_status_is_bad_is_not_re_inlined_in_qml():
+    """lib/ui_helpers.js holds the ONE bad-status set; a QML statusIsBad may only delegate
+    to it (CompactRepresentation used to carry its own copy of the switch)."""
+    import re
+    ui = UI_HELPERS_JS.parent.parent
+    for qml in sorted(ui.rglob("*.qml")):
+        src = qml.read_text(encoding="utf-8")
+        m = re.search(r"function statusIsBad\([^)]*\)\s*\{(.*?)\n\s{4}\}", src, re.S)
+        if not m:
+            continue
+        body = m.group(1)
+        assert "UIHelpers.statusIsBad(" in body and "case " not in body, (
+            f"{qml.name} re-implements statusIsBad instead of delegating to ui_helpers.js")

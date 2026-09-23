@@ -17,7 +17,7 @@ from accounting import (
     compact_token_count,
     now_iso,
 )
-from cookies import BrowserCookie, cookiejar_for_domains, host_matches_any
+from cookies import BrowserCookie, cookiejar_for_domains, has_session_cookies
 from http_helpers import http_text, scrub_credentials
 from io_helpers import atomic_write_text
 from parsers import (
@@ -212,8 +212,7 @@ def run_gemini_web(cookies: list[BrowserCookie], timeout: float) -> dict[str, An
         "message": "No gemini.google.com browser session cookies",
         "limits": [],
     }
-    matched = [cookie for cookie in cookies if host_matches_any(cookie.host, GEMINI_DOMAINS)]
-    if not matched:
+    if not has_session_cookies(cookies, GEMINI_DOMAINS):
         return result
 
     jar = cookiejar_for_domains(cookies, GEMINI_DOMAINS)
@@ -463,8 +462,7 @@ def run_google_one_credits(cookies: list[BrowserCookie], timeout: float) -> dict
         "message": "No one.google.com browser session cookies",
         "creditBalance": None,
     }
-    matched = [cookie for cookie in cookies if host_matches_any(cookie.host, GOOGLE_ONE_DOMAINS)]
-    if not matched:
+    if not has_session_cookies(cookies, GOOGLE_ONE_DOMAINS):
         return result
 
     jar = cookiejar_for_domains(cookies, GOOGLE_ONE_DOMAINS)
