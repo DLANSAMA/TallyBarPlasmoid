@@ -27,11 +27,13 @@ from http_helpers import bounded_provider, run_threaded_provider, scrub_credenti
 from io_helpers import atomic_write_text as _atomic_write_text, flock_with_timeout, to_daemon_thread
 from providers import (
     GEMINI_DOMAINS,
+    apply_claude_statusline_fallback,
     apply_cost_summaries,
     apply_google_one_credits,
     choose_antigravity_result,
     compute_local_cost_summaries,
     google_one_credit_fresh,
+    load_claude_statusline,
     run_antigravity_local,
     run_antigravity_remote,
     run_claude_api,
@@ -51,6 +53,7 @@ __all__ = [
     "SNAPSHOT_PATH",
     "all_ai_month_to_date_cost",
     "all_ai_projected_month_cost",
+    "apply_claude_statusline_fallback",
     "apply_cost_summaries",
     "apply_google_one_credits",
     "bounded_provider",
@@ -67,6 +70,7 @@ __all__ = [
     "flock_with_timeout",
     "google_one_credit_fresh",
     "host_matches_any",
+    "load_claude_statusline",
     "load_config",
     "load_snapshot",
     "main",
@@ -1098,6 +1102,13 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     # branch's cookies-ready/missing-cookies) or when the provider already has limits.
     for _name in ("claude", "gemini", "codex"):
         providers[_name] = carry_forward_provider_last_good(providers[_name], cached_snapshot)
+
+    # Claude Code statusLine fallback (integrations/claude_code/statusline_capture.py): when
+    # the claude.ai cookie path produced no live limits — Cloudflare 403/429, signed out,
+    # wallet locked, or --no-network — use the quota Claude Code itself handed the hook.
+    # Runs AFTER the carry-forward so a carried last-good reading is replaced only by a
+    # NEWER capture. A live cookie reading is never touched. Local file read, no network.
+    providers["claude"] = apply_claude_statusline_fallback(providers["claude"], load_claude_statusline())
 
     # Merge the cost summaries computed CONCURRENTLY since the top of build_snapshot
     # (the scan overlapped the network fetches above). apply_cost_summaries propagates the

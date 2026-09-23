@@ -18,11 +18,13 @@ from accounting import (
 from cookies import BrowserCookie, cookiejar_for_domains, host_matches_any
 from http_helpers import http_json_async, scrub_credentials
 from parsers import (
+    add_pace_detail,
     claude_org_ids,
     normalize_tier,
     parse_claude_credit_balance,
     parse_claude_tier,
     parse_claude_usage,
+    relative_reset,
 )
 
 
@@ -90,6 +92,134 @@ def _prev_monthly_limit(prev: Any) -> dict[str, Any] | None:
         if isinstance(lim, dict) and str(lim.get("label", "")).lower() == "monthly":
             return lim
     return None
+
+
+# ---------------------------------------------------------------------------
+# Claude Code statusLine capture (integrations/claude_code/statusline_capture.py)
+# ---------------------------------------------------------------------------
+
+# Written by the optional statusLine hook: Claude Code hands its subscriber quota to the
+# hook on every status update, no cookies or network involved. The backend uses it as a
+# FALLBACK when the claude.ai cookie path can't produce limits (Cloudflare 403/429, signed
+# out, wallet locked, --no-network) — never over a live cookie reading, which also carries
+# the extra-usage/credit rows the statusLine blob doesn't have.
+CLAUDE_STATUSLINE_PATH = Path.home() / ".tallybar" / "claude_statusline.json"
+# A capture only updates while Claude Code runs. Past this age it is ignored outright:
+# the percentages only ever grow within a window, so a day-old reading is a misleading
+# floor rather than a useful value. (Expired windows are dropped regardless — below.)
+STATUSLINE_MAX_AGE_SECONDS = 6 * 3600
+# Past this age the fallback is flagged ``stale`` (the UI's "(cached)" subtitle suffix).
+STATUSLINE_STALE_AFTER_SECONDS = 900
+_STATUSLINE_WINDOWS = (("five_hour", "Session", 300), ("seven_day", "Weekly", 10080))
+
+
+def load_claude_statusline(path: Path | None = None) -> dict[str, Any] | None:
+    """The raw statusLine capture ``{capturedAt, rateLimits}``, or None if absent/corrupt."""
+    try:
+        data = json.loads((path or CLAUDE_STATUSLINE_PATH).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("rateLimits"), dict):
+        return None
+    return data
+
+
+def _parse_iso_utc(value: Any) -> dt.datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        ts = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=dt.timezone.utc)
+
+
+def claude_statusline_limits(capture: Any, now: dt.datetime | None = None) -> list[dict[str, Any]]:
+    """Session/Weekly limit rows from a statusLine capture — same shape parse_claude_usage
+    emits (incl. pace detail). A window whose ``resetsAt`` has passed is DROPPED: it has
+    reset since the capture, so its percentage no longer describes anything (Claude Code
+    drops such windows from the blob itself). ``spend_limit`` is gateway-only and has no
+    counterpart row in the cookie path, so it is not surfaced."""
+    if not isinstance(capture, dict):
+        return []
+    windows = capture.get("rateLimits")
+    if not isinstance(windows, dict):
+        return []
+    current = now or dt.datetime.now(dt.timezone.utc)
+    rows: list[dict[str, Any]] = []
+    for key, label, window_minutes in _STATUSLINE_WINDOWS:
+        w = windows.get(key)
+        if not isinstance(w, dict):
+            continue
+        pct = w.get("usedPercent")
+        resets = w.get("resetsAt")
+        if not isinstance(pct, (int, float)) or isinstance(pct, bool):
+            continue
+        if not isinstance(resets, (int, float)) or isinstance(resets, bool) or resets <= 0:
+            continue
+        reset_at = dt.datetime.fromtimestamp(float(resets), tz=dt.timezone.utc)
+        if reset_at <= current:
+            continue
+        reset_iso = reset_at.isoformat()
+        rows.append(add_pace_detail({
+            "label": label,
+            "percent": max(0.0, min(100.0, float(pct))),
+            "reset": relative_reset(reset_iso),
+            "unit": "%",
+        }, reset_iso, window_minutes))
+    return rows
+
+
+def apply_claude_statusline_fallback(provider: dict[str, Any], capture: Any,
+                                     now: dt.datetime | None = None) -> dict[str, Any]:
+    """Replace a Claude provider that produced no live limits with the statusLine reading.
+
+    No-op when the provider has LIVE limits (a fresh cookie reading always wins), when the
+    capture is missing/too old, or when every captured window has since reset. A provider
+    that is itself a carried-forward last-good reading (``stale``) is replaced only if the
+    capture is NEWER than that reading. The fallback is honest about its origin: source
+    ``claude-statusline``, ``fetchedAt`` = the capture time, ``stale`` past 15 minutes."""
+    if not isinstance(provider, dict):
+        return provider
+    if provider.get("limits") and not provider.get("stale"):
+        return provider
+    current = now or dt.datetime.now(dt.timezone.utc)
+    captured = _parse_iso_utc((capture or {}).get("capturedAt") if isinstance(capture, dict) else None)
+    if captured is None:
+        return provider
+    age = (current - captured).total_seconds()
+    if age < -60 or age > STATUSLINE_MAX_AGE_SECONDS:
+        return provider
+    if provider.get("stale"):
+        carried = _parse_iso_utc(provider.get("staleAsOf"))
+        if carried is not None and carried >= captured:
+            return provider
+    rows = claude_statusline_limits(capture, current)
+    if not rows:
+        return provider
+    # Keep WHY the cookie path failed visible in the message — but not for a carried
+    # reading (it didn't fail this run) or the --no-network "cookies-ready" state (no failure).
+    original = str(provider.get("message") or provider.get("status") or "").strip()
+    explain = original and not provider.get("stale") and provider.get("status") != "cookies-ready"
+    result: dict[str, Any] = {
+        "label": "Claude",
+        "status": "ok",
+        "source": "claude-statusline",
+        "message": "Read Claude Code statusline quota" + (f" (claude.ai: {original})" if explain else ""),
+        "limits": rows,
+        "fetchedAt": captured.astimezone().isoformat(timespec="seconds"),
+    }
+    for key in ("accentColor", "tier"):
+        if provider.get(key):
+            result[key] = provider[key]
+    if "tier" not in result:
+        disk_tier = claude_tier_from_credentials()
+        if disk_tier:
+            result["tier"] = disk_tier
+    if age > STATUSLINE_STALE_AFTER_SECONDS:
+        result["stale"] = True
+        result["staleAsOf"] = result["fetchedAt"]
+    return result
 
 
 async def _claude_get(url: str, jar: Any, timeout: float) -> tuple[int, Any] | None:

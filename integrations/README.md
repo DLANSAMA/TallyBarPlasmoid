@@ -27,6 +27,14 @@ only for Pro/Max subscribers, and only after a session's first API response — 
 it goes quiet whenever Claude Code is not running. The capture is stamped with
 its own `capturedAt` so a reading is never presented as fresher than it is.
 
+**How the widget uses it.** Whenever the claude.ai cookie path produces no live
+limits — a Cloudflare 403/429, a signed-out or locked-wallet session, or a
+`--no-network` refresh — the Claude tab shows the captured Session and Weekly
+windows instead of an error. A live cookie reading always wins (it also carries
+the extra-usage and credit rows the statusline doesn't have). Windows whose reset
+time has passed are dropped, captures older than 6 hours are ignored, and a
+capture older than 15 minutes is marked "(cached)" in the tab's subtitle.
+
 To wire it up, add to `~/.claude/settings.json`:
 
 ```json

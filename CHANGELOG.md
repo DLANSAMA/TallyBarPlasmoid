@@ -12,6 +12,10 @@ Notable changes to TallyBar. Format follows
   billed per call, while the same calls captured live were billed in full. Every
   capture path now bills cache reads per call (about a third higher 30-day cost on
   a real CLI-heavy ledger).
+- The Claude Code statusline integration now does what its README said: when
+  claude.ai can't be read (Cloudflare rate limit, signed out, locked wallet,
+  offline), the Claude tab falls back to the quota Claude Code reported to the
+  hook instead of showing an error. Previously the capture was written but never read.
 
 ## [0.1.0] — 2026-09-17
 
