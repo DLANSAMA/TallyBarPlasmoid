@@ -83,6 +83,34 @@ def _credit_balance_fresh(prev: Any) -> dict[str, Any] | None:
     return cb
 
 
+# usage_summary is tried first, but when it answers "not here" (404/410, or 200 with no
+# recognizable limits — it 404'd for this account as of 2026-07) every refresh pays an extra
+# authenticated claude.ai GET, the very call volume that trips Cloudflare. Remember the miss
+# on the provider dict and go straight to /usage until this long has passed, then re-probe
+# once in case the endpoint comes back. Transient answers (403/429/5xx, network errors) are
+# NOT recorded — a blip must not switch the probe off for a day.
+USAGE_SUMMARY_RETRY_SECONDS = 24 * 3600
+_USAGE_SUMMARY_GONE = (404, 410)
+
+
+def _usage_summary_skip_since(prev: Any) -> str | None:
+    """The previous snapshot's ``usageSummaryUnavailableSince`` while still inside the retry
+    window (-> skip the probe and carry the stamp), else None (-> probe usage_summary)."""
+    if not isinstance(prev, dict):
+        return None
+    since = prev.get("usageSummaryUnavailableSince")
+    if not isinstance(since, str) or not since:
+        return None
+    try:
+        ts = dt.datetime.fromisoformat(since.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=dt.timezone.utc)
+    age = (dt.datetime.now(dt.timezone.utc) - ts).total_seconds()
+    return since if 0 <= age < USAGE_SUMMARY_RETRY_SECONDS else None
+
+
 def _prev_monthly_limit(prev: Any) -> dict[str, Any] | None:
     """The previous snapshot's 'Monthly' (overage) limit row, if present — carried forward
     when the credit/overage GETs are throttled. None-safe."""
@@ -299,24 +327,31 @@ async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
         credit_balance = carried_credit
         overage_limit = carried_monthly
 
+    # usage_summary known-missing (see USAGE_SUMMARY_RETRY_SECONDS): skip the probe this run.
+    summary_skip_since = _usage_summary_skip_since(prev)
+    summary_unavailable_since: str | None = summary_skip_since
+
     for org_id in claude_org_ids(data):
         base = f"{CLAUDE_ORGANIZATIONS_URL}/{org_id}"
         # usage_summary is the PREFERRED source; only fetch the (heavier) /usage endpoint when
         # usage_summary produced no limits. Sequentialized (not gathered): Claude's ~0.9s
         # latency against a 12s budget makes the extra round-trip free, and it saves one GET
-        # every refresh where usage_summary succeeds (the common case). The credit/overage
-        # GETs are fired concurrently WITH usage_summary only when not throttled.
+        # every refresh where usage_summary succeeds. The credit/overage GETs are fired
+        # concurrently WITH usage_summary only when not throttled.
         extra_calls = []
         if not skip_credit_calls:
             extra_calls = [
                 _claude_get(f"{base}/prepaid/credits", jar, timeout),
                 _claude_get(f"{base}/overage_spend_limit", jar, timeout),
             ]
-        summary_call = _claude_get(f"{base}/usage_summary", jar, timeout)
-        results = await asyncio.gather(summary_call, *extra_calls)
-        summary = results[0]
-        cr = results[1] if not skip_credit_calls else None
-        ov = results[2] if not skip_credit_calls else None
+        summary: tuple[int, Any] | None = None
+        if summary_skip_since is None:
+            results = await asyncio.gather(_claude_get(f"{base}/usage_summary", jar, timeout), *extra_calls)
+            summary, rest = results[0], list(results[1:])
+        else:
+            rest = list(await asyncio.gather(*extra_calls)) if extra_calls else []
+        cr = rest[0] if not skip_credit_calls else None
+        ov = rest[1] if not skip_credit_calls else None
 
         if not skip_credit_calls:
             if credit_balance is None and cr is not None and cr[0] == 200:
@@ -349,6 +384,11 @@ async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
         org_limits: list[dict[str, Any]] = []
         if summary is not None and summary[0] == 200:
             org_limits = parse_claude_usage(summary[1])
+        if summary is not None:
+            if org_limits:
+                summary_unavailable_since = None   # it works (again): keep probing it
+            elif (summary[0] in _USAGE_SUMMARY_GONE or summary[0] == 200) and summary_unavailable_since is None:
+                summary_unavailable_since = now_iso()
         if not org_limits:
             usage = await _claude_get(f"{base}/usage", jar, timeout)
             if usage is not None and usage[0] == 200:
@@ -366,6 +406,8 @@ async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
         limits.append(overage_limit)
     if credit_balance is not None:
         result["creditBalance"] = credit_balance
+    if summary_unavailable_since:
+        result["usageSummaryUnavailableSince"] = summary_unavailable_since
     result.update(
         status="ok" if limits else "api-empty",
         message="Usage API returned data" if limits else "API returned no recognizable limits",

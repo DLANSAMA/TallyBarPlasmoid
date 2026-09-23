@@ -1499,3 +1499,61 @@ def test_roll_period_forward_non_weekly_ended_is_unknown():
         == (None, None, True)
     assert roll_period_forward(s0, e0, "USAGE_PERIOD_TYPE_MONTHLY", dt.datetime(2026, 6, 5, tzinfo=dt.timezone.utc)) \
         == (s0, e0, False)
+
+
+# --- usage_summary: stop re-probing an endpoint that answered "not here" ---
+
+def _claude_side_effect(seen, summary_status=404, summary_body=None):
+    orgs = [{"uuid": "org-1", "rate_limit_tier": "claude_max"}]
+    usage = {"five_hour": {"utilization": 37, "resets_at": "2099-01-01T00:00:00Z"}}
+
+    def side_effect(url, jar, timeout):
+        seen.append(url.rsplit("/", 1)[-1])
+        if url.endswith("/organizations"):
+            return (200, orgs)
+        if url.endswith("/usage_summary"):
+            return (summary_status, summary_body if summary_body is not None else {})
+        if url.endswith("/usage"):
+            return (200, usage)
+        return (404, {})
+    return side_effect
+
+
+@pytest.mark.asyncio
+async def test_usage_summary_404_is_remembered_and_skipped():
+    seen: list[str] = []
+    with patch("providers.claude.http_json_async", side_effect=_claude_side_effect(seen)):
+        first = await providers.claude.run_claude_api([_cookie("claude.ai")], timeout=1.0)
+    assert first["status"] == "ok" and "usage_summary" in seen and "usage" in seen
+    stamp = first["usageSummaryUnavailableSince"]
+
+    seen.clear()
+    with patch("providers.claude.http_json_async", side_effect=_claude_side_effect(seen)):
+        second = await providers.claude.run_claude_api([_cookie("claude.ai")], timeout=1.0, prev=first)
+    assert second["status"] == "ok"
+    assert "usage_summary" not in seen and "usage" in seen   # one authenticated GET saved
+    assert second["usageSummaryUnavailableSince"] == stamp   # clock runs from first detection
+
+
+@pytest.mark.asyncio
+async def test_usage_summary_reprobed_after_retry_window():
+    old = (dt.datetime.now(dt.timezone.utc)
+           - dt.timedelta(seconds=providers.claude.USAGE_SUMMARY_RETRY_SECONDS + 60)).isoformat()
+    seen: list[str] = []
+    ok_summary = {"five_hour": {"utilization": 12, "resets_at": "2099-01-01T00:00:00Z"}}
+    with patch("providers.claude.http_json_async",
+               side_effect=_claude_side_effect(seen, summary_status=200, summary_body=ok_summary)):
+        res = await providers.claude.run_claude_api([_cookie("claude.ai")], timeout=1.0,
+                                                    prev={"usageSummaryUnavailableSince": old})
+    assert "usage_summary" in seen and "usage" not in seen   # probed again, and it works now
+    assert "usageSummaryUnavailableSince" not in res
+
+
+@pytest.mark.asyncio
+async def test_usage_summary_transient_error_is_not_remembered():
+    """A Cloudflare 429/403 blip must not switch the usage_summary probe off for a day."""
+    seen: list[str] = []
+    with patch("providers.claude.http_json_async", side_effect=_claude_side_effect(seen, summary_status=429)):
+        res = await providers.claude.run_claude_api([_cookie("claude.ai")], timeout=1.0)
+    assert res["status"] == "ok" and "usage" in seen
+    assert "usageSummaryUnavailableSince" not in res
