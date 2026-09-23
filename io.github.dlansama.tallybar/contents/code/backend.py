@@ -276,12 +276,18 @@ def _status_notification(pkey: str, plabel: str, status: str, provider: dict[str
     }
 
 
-def compute_notifications(providers: dict[str, Any], config: dict[str, Any]) -> list[dict[str, Any]]:
+def compute_notifications(providers: dict[str, Any], config: dict[str, Any],
+                          cost_available: bool = True) -> list[dict[str, Any]]:
     """Detect usage-limit threshold crossings and return only the NEWLY-crossed ones
     (de-duped via NOTIFY_STATE_PATH so each crossing alerts once). The QML side fires
     these via notify-send. Returns [] when notifications are disabled — but still keeps
     the armed-set tracking current usage so toggling notifications off→on neither
-    replays old crossings nor suppresses a fresh one."""
+    replays old crossings nor suppresses a fresh one.
+
+    ``cost_available=False`` (the cost scan timed out or errored this run) HOLDS the
+    budget armed-state untouched, exactly like a transiently-failed provider holds its
+    usage keys: a missing costSummary reads as $0 month-to-date, and evaluating the budget
+    against that would re-arm every crossing and replay the alert on the next good run."""
     enabled = config.get("notificationsEnabled", True) is not False
     raw_thresholds = config.get("notificationThresholds") or list(DEFAULT_NOTIFY_THRESHOLDS)
     if not isinstance(raw_thresholds, (list, tuple)):
@@ -425,7 +431,11 @@ def compute_notifications(providers: dict[str, Any], config: dict[str, Any]) -> 
                 budget = float(config.get("monthlyBudget") or 0.0)
             except (TypeError, ValueError):
                 budget = 0.0
-            if budget > 0.0:
+            # No cost data this run -> hold (don't evaluate against a phantom $0). Also holds
+            # when no provider carries a costSummary at all (nothing to compare against).
+            has_cost = cost_available and any(
+                isinstance(p, dict) and isinstance(p.get("costSummary"), dict) for p in providers.values())
+            if budget > 0.0 and has_cost:
                 mtd = all_ai_month_to_date_cost(providers)
                 pct = (mtd / budget) * 100.0
                 for t in _BUDGET_THRESHOLDS:
@@ -1307,7 +1317,10 @@ def main() -> int:
         # never carries them — otherwise the cold-start cacheLoader would re-fire stale
         # alerts. Only this live --once path emits them (not --cost); the QML fires each via
         # KNotification. State de-dup lives in compute_notifications.
-        snapshot["notifications"] = compute_notifications(snapshot.get("providers") or {}, snapshot.get("config") or {})
+        diags = snapshot.get("diagnostics") if isinstance(snapshot.get("diagnostics"), dict) else {}
+        cost_ok = not (diags.get("cost_summary_timeout") or diags.get("cost_summary_error"))
+        snapshot["notifications"] = compute_notifications(snapshot.get("providers") or {}, snapshot.get("config") or {},
+                                                          cost_available=cost_ok)
     except (KeyboardInterrupt, SystemExit):
         raise
     except BaseException as exc:  # noqa: BLE001 - same rationale as the build_snapshot guard

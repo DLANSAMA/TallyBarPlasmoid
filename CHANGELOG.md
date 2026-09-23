@@ -16,6 +16,8 @@ Notable changes to TallyBar. Format follows
   claude.ai can't be read (Cloudflare rate limit, signed out, locked wallet,
   offline), the Claude tab falls back to the quota Claude Code reported to the
   hook instead of showing an error. Previously the capture was written but never read.
+- A monthly-budget alert no longer fires a second time after a refresh whose
+  cost scan timed out (the missing cost data read as $0 and re-armed the alert).
 
 ## [0.1.0] — 2026-09-17
 
