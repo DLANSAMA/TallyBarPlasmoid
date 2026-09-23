@@ -1259,3 +1259,61 @@ async def test_build_snapshot_reports_phase_timings():
         assert timings[phase] <= timings["total"] + 50, (
             f"{phase} ({timings[phase]}ms) exceeds total ({timings['total']}ms)"
         )
+
+
+# --- Carried-forward providers get THIS run's local cost summary ---
+
+def test_carry_forward_drops_cached_cost_summary():
+    """The cost summary is local data, not part of the frozen network reading."""
+    cached = _cached_provider("Claude", [{"label": "Session", "percent": 40}], ts_offset=60.0,
+                              extra={"costSummary": {"cost30d": 1.0}, "creditBalance": {"amount": 5}})
+    failing = {"label": "Claude", "status": "unauthorized", "limits": [], "message": "403"}
+    out = backend.carry_forward_provider_last_good(failing, cached)
+    assert out["stale"] is True
+    assert "costSummary" not in out
+    assert out["creditBalance"] == {"amount": 5}   # network data IS carried
+
+
+@pytest.mark.asyncio
+async def test_build_snapshot_carried_provider_gets_fresh_cost_summary():
+    """End to end: a transient Claude failure carries the cached limits forward, but the
+    costSummary must be this run's fresh scan, not the cached one (which used to win
+    through apply_cost_summaries' setdefault for the whole 15-minute grace window)."""
+    cached = _cached_provider("Claude", [{"label": "Session", "percent": 40}], ts_offset=60.0,
+                              extra={"costSummary": {"cost30d": 1.0, "today": "stale"}})
+    fresh = {"cost30d": 99.0, "today": "Today: $1.00 · 1K tok"}
+    with patch("backend.compute_local_cost_summaries",
+               side_effect=lambda deadline=None: {"claude": fresh}):
+        res = await _build_snapshot_carry_forward_nocost("api-error", cached)
+    claude = res["providers"]["claude"]
+    assert claude["stale"] is True
+    assert claude["costSummary"]["cost30d"] == 99.0
+
+
+async def _build_snapshot_carry_forward_nocost(claude_status, cached_snapshot):
+    """_build_snapshot_carry_forward without its compute_local_cost_summaries patch, so the
+    caller can supply the scan result."""
+    args = MagicMock()
+    args.no_network = False
+    args.timeout = 0.5
+
+    async def fast_threaded(func, *a, **k):
+        return {"status": "ok", "label": "Gemini", "limits": []}
+
+    async def fake_codex_rpc(timeout):
+        return {"status": "ok", "label": "Codex", "limits": []}
+
+    async def fake_claude(cookies, timeout, prev=None):
+        return {"status": claude_status, "label": "Claude", "limits": [], "message": "boom"}
+
+    async def noop_pricing(*a, **k):
+        return
+
+    with patch("backend.load_config", return_value={}), \
+         patch("backend.load_snapshot", return_value=cached_snapshot), \
+         patch("backend.collect_browser_sessions", return_value=([], {"kwallet": {"status": "ok"}})), \
+         patch("backend.run_threaded_provider", side_effect=fast_threaded), \
+         patch("backend.run_codex_rpc", side_effect=fake_codex_rpc), \
+         patch("backend.run_claude_api", side_effect=fake_claude), \
+         patch("pricing_data.refresh_pricing", noop_pricing):
+        return await backend.build_snapshot(args)

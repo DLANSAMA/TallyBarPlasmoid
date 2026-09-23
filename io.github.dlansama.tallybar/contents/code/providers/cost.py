@@ -1215,6 +1215,27 @@ def compute_local_cost_summaries(deadline: float | None = None) -> dict[str, dic
     return summaries
 
 
+def _attach_summary(providers: dict[str, dict[str, Any]], provider: str,
+                    summaries: dict[str, dict[str, Any] | None] | None,
+                    label: str | None = None, source: str | None = None) -> None:
+    """ASSIGN this run's summary (never setdefault): the scan is the only source of a cost
+    summary, so any costSummary already on the provider is stale — e.g. one riding a
+    carried-forward last-good entry. A scan that reported no data for the provider (None)
+    clears a stale one; a provider absent from ``summaries`` is left untouched."""
+    if not summaries or provider not in summaries:
+        return
+    summary = summaries[provider]
+    if summary is not None:
+        target = providers.get(provider)
+        if target is None:
+            if label is None or source is None:
+                return
+            target = providers[provider] = default_provider(label, source)
+        target["costSummary"] = summary
+    elif isinstance(providers.get(provider), dict):
+        providers[provider].pop("costSummary", None)
+
+
 def apply_cost_summaries(providers: dict[str, dict[str, Any]],
                          summaries: dict[str, dict[str, Any] | None]) -> None:
     """Merge precomputed cost summaries into ``providers`` — the fast, provider-DEPENDENT
@@ -1235,20 +1256,12 @@ def apply_cost_summaries(providers: dict[str, dict[str, Any]],
         # entry from its costSummary so the tab appears whenever ~/.grok logs exist.
         ("grok", "Grok", "local-grok-logs"),
     ):
-        summary = (summaries or {}).get(provider)
-        if summary is not None:
-            providers.setdefault(provider, default_provider(label, source)).setdefault(
-                "costSummary",
-                summary,
-            )
+        _attach_summary(providers, provider, summaries, label, source)
 
     # We no longer gate Antigravity on the provider being "ok": CLI token data can exist
     # while the IDE is closed (status != ok), and that usage should still surface.
-    ag_provider = providers.get("antigravity")
-    if ag_provider is not None and "costSummary" not in ag_provider:
-        ledger_summary = (summaries or {}).get("antigravity")
-        if ledger_summary is not None:
-            ag_provider["costSummary"] = ledger_summary
+    if providers.get("antigravity") is not None:
+        _attach_summary(providers, "antigravity", summaries)
 
     # Gemini: the cost section is pay-per-use only (from local gemini-cli token logs).
     # gemini.google.com isn't token-metered, so when there are no local logs we show no

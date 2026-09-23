@@ -654,6 +654,10 @@ def carry_forward_provider_last_good(provider: dict[str, Any], cached: Any,
         return provider
 
     frozen = copy.deepcopy(cached_entry)
+    # The cost summary is LOCAL data (parsed from ~/.claude, ~/.codex, … this run), not part
+    # of the network reading being frozen — carrying the cached one would shadow this run's
+    # fresh scan for the whole grace window. apply_cost_summaries attaches the fresh one.
+    frozen.pop("costSummary", None)
     frozen["status"] = "ok"
     frozen["stale"] = True
     frozen["staleAsOf"] = stale_as_of

@@ -18,6 +18,9 @@ Notable changes to TallyBar. Format follows
   hook instead of showing an error. Previously the capture was written but never read.
 - A monthly-budget alert no longer fires a second time after a refresh whose
   cost scan timed out (the missing cost data read as $0 and re-armed the alert).
+- During a brief Claude/Gemini/Codex outage the widget keeps showing the last good
+  usage bars, but the cost section now updates from this refresh's local logs
+  instead of freezing at the cached figures for up to 15 minutes.
 
 ## [0.1.0] — 2026-09-17
 

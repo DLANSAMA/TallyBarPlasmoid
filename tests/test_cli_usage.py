@@ -1364,3 +1364,20 @@ def test_marker26_and_marker24_steps_disjoint_keys(tmp_path, monkeypatch):
     assert entries["dedup:0"]["u"] == 100
     assert entries["dedup@1"]["u"] == 200
     assert entries["dedup@1"]["me"] == 1026
+
+
+def test_apply_cost_summaries_replaces_stale_and_clears_on_no_data():
+    """apply_cost_summaries ASSIGNS the scan's summary: a pre-existing (stale) costSummary
+    is replaced, a scan reporting no data clears it, and an absent key leaves it alone."""
+    providers = {
+        "claude": {"label": "Claude", "status": "ok", "limits": [], "costSummary": {"cost30d": 1.0}},
+        "codex": {"label": "Codex", "status": "ok", "limits": [], "costSummary": {"cost30d": 2.0}},
+        "gemini": {"label": "Gemini", "status": "ok", "limits": [], "costSummary": {"cost30d": 3.0}},
+        "antigravity": {"label": "Antigravity", "status": "ok", "limits": [], "costSummary": {"cost30d": 4.0}},
+    }
+    costmod.apply_cost_summaries(providers, {"claude": {"cost30d": 99.0}, "codex": None,
+                                             "antigravity": {"cost30d": 44.0}})
+    assert providers["claude"]["costSummary"]["cost30d"] == 99.0
+    assert "costSummary" not in providers["codex"]
+    assert providers["gemini"]["costSummary"]["cost30d"] == 3.0      # not in this scan: untouched
+    assert providers["antigravity"]["costSummary"]["cost30d"] == 44.0
