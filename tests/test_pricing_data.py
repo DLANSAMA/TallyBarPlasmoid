@@ -329,3 +329,34 @@ async def test_refresh_pricing_success_updates_and_clears_memo(tmp_path, monkeyp
     assert ok is True
     assert pricing_data.get_pricing("claude-neo")["input"] == 3.0   # $/MTok, memo rebuilt
     assert (tmp_path / "pricing_cache.json").is_file()              # disk cache written
+
+
+def test_memo_write_dropped_when_catalog_refreshed_mid_scan():
+    """get_pricing scans the catalog outside the lock. If refresh_pricing swaps the catalog
+    in mid-scan (another OS thread), the answer computed against the OLD catalog may be
+    returned for that one call but must NOT be memoized — else it outlives the refresh
+    and every later lookup serves the stale price."""
+    old_prices = {"input": 1.0, "output": 1.0}
+    new_prices = {"input": 9.0, "output": 9.0}
+
+    class RefreshingCatalog(list):
+        def __iter__(self):
+            # Simulate the concurrent refresh landing while this scan is in progress.
+            with pricing_data._pricing_lock:
+                pricing_data._active_pricing = [("race-model", new_prices)]
+                pricing_data._resolve_memo.clear()
+                pricing_data._catalog_generation += 1
+            return super().__iter__()
+
+    pricing_data._active_pricing = RefreshingCatalog([("race-model", old_prices)])
+    pricing_data._resolve_memo.clear()
+    assert pricing_data.get_pricing("race-model") == old_prices   # this call's snapshot
+    assert "race-model" not in pricing_data._resolve_memo          # ...but not memoized
+    assert pricing_data.get_pricing("race-model") == new_prices   # next call sees the refresh
+
+
+def test_memo_written_when_catalog_unchanged():
+    pricing_data._active_pricing = [("steady-model", {"input": 2.0, "output": 3.0})]
+    pricing_data._resolve_memo.clear()
+    assert pricing_data.get_pricing("steady-model")["input"] == 2.0
+    assert "steady-model" in pricing_data._resolve_memo

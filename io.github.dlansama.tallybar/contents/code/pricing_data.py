@@ -143,12 +143,18 @@ _last_fetch_time: float = 0.0
 # refresh. Keyed by lowercased model name; MUST be cleared wherever _active_pricing is
 # (re)built, or a stale catalog's resolution survives a refresh.
 _resolve_memo: dict[str, dict[str, float]] = {}
-# Guards the _active_pricing/_resolve_memo/_last_fetch_time mutation sequence in
-# refresh_pricing() and get_pricing()'s bootstrap branch. These run on different real
-# OS threads (a daemon thread runs compute_local_cost_summaries -> get_pricing while
-# the event-loop thread finishes an awaited refresh_pricing), so without a lock a
-# memo/catalog write computed against the pre-refresh catalog could land after
-# refresh_pricing's clear(), resurrecting a stale price for the rest of the run.
+# Bumped (under _pricing_lock) every time _active_pricing is (re)built. get_pricing scans
+# the catalog OUTSIDE the lock — it runs once per usage record — and only memoizes its
+# answer if the generation it scanned is still current.
+_catalog_generation = 0
+# Guards every mutation of _active_pricing / _resolve_memo / _last_fetch_time /
+# _catalog_generation. They race across real OS threads: a daemon thread runs
+# compute_local_cost_summaries -> get_pricing while the event-loop thread finishes an
+# awaited refresh_pricing. A resolution computed against the pre-refresh catalog must not
+# be memoized after refresh_pricing's clear() (it would serve a stale price for the rest of
+# the run) — the generation check in get_pricing's memo write is what prevents that; the
+# lock alone did not, because the scan and memo write used to happen outside it.
+# → tests/test_pricing_data.py::test_memo_write_dropped_when_catalog_refreshed_mid_scan
 _pricing_lock = threading.Lock()
 
 
@@ -315,7 +321,7 @@ def _with_fallback_supplement(entries: list[tuple[str, dict[str, float]]]) -> li
 async def refresh_pricing(timeout: float = 10.0) -> bool:
     """Fetch latest pricing from LiteLLM and update the in-memory + disk cache.
     Returns True if successful, False if the fetch failed (stale data retained)."""
-    global _active_pricing, _last_fetch_time
+    global _active_pricing, _last_fetch_time, _catalog_generation
 
     raw = await to_daemon_thread(_fetch_litellm_pricing, timeout)
     if raw is None:
@@ -328,6 +334,7 @@ async def refresh_pricing(timeout: float = 10.0) -> bool:
     with _pricing_lock:
         _active_pricing = _with_fallback_supplement(converted)
         _resolve_memo.clear()
+        _catalog_generation += 1
         _last_fetch_time = time.time()
     _save_cache(converted)  # disk cache stays pure fetched data
     return True
@@ -339,7 +346,7 @@ def get_pricing(model: str | None) -> dict[str, float]:
 
     ONLY does fast in-memory or stale disk-cache reads, and never calls
     refresh_pricing synchronously."""
-    global _active_pricing, _last_fetch_time
+    global _active_pricing, _last_fetch_time, _catalog_generation
 
     # Bootstrap: load pricing data if not yet in memory
     if _active_pricing is None:
@@ -348,6 +355,7 @@ def get_pricing(model: str | None) -> dict[str, float]:
             # while we were waiting to acquire it (double-checked locking).
             if _active_pricing is None:
                 _resolve_memo.clear()
+                _catalog_generation += 1
                 # Try disk cache first (fast, no network)
                 cached = _load_cache()
                 if cached:
@@ -378,15 +386,18 @@ def get_pricing(model: str | None) -> dict[str, float]:
     name = (model or "").lower()
     if not name:
         return {}
-    hit = _resolve_memo.get(name)
+    hit = _resolve_memo.get(name)  # dict.get is atomic under the GIL; no lock on the hot path
     if hit is not None:
         return hit
+    with _pricing_lock:
+        catalog = _active_pricing or []
+        generation = _catalog_generation
     result: dict[str, float] = {}
     family = None        # pattern in name  (catalog key ⊂ query) — most specific family
     family_len = -1
     loose = None         # name in pattern  (query ⊂ longer catalog key) — last resort
     loose_len = -1
-    for pattern, prices in _active_pricing:
+    for pattern, prices in catalog:
         if pattern == name:
             result = prices                    # exact key wins outright
             break
@@ -401,13 +412,17 @@ def get_pricing(model: str | None) -> dict[str, float]:
             result = family
         elif loose is not None:
             result = loose
-    _resolve_memo[name] = result
+    with _pricing_lock:
+        if generation == _catalog_generation:  # catalog not rebuilt while we scanned
+            _resolve_memo[name] = result
     return result
 
 
 def invalidate_cache() -> None:
     """Clear in-memory pricing so the next get_pricing() call re-bootstraps."""
-    global _active_pricing, _last_fetch_time
-    _active_pricing = None
-    _last_fetch_time = 0.0
-    _resolve_memo.clear()
+    global _active_pricing, _last_fetch_time, _catalog_generation
+    with _pricing_lock:
+        _active_pricing = None
+        _last_fetch_time = 0.0
+        _resolve_memo.clear()
+        _catalog_generation += 1
