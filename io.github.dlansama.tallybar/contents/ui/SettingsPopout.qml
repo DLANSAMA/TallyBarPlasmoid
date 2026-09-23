@@ -6,6 +6,7 @@
 import QtQuick
 import QtQuick.Layouts
 import org.kde.plasma.core as PlasmaCore
+import "lib/ui_helpers.js" as UIHelpers
 
 PlasmaCore.PopupPlasmaWindow {
     id: settingsPopout
@@ -637,10 +638,11 @@ PlasmaCore.PopupPlasmaWindow {
                         text: settingsPopout.budgetIsCustom ? String(root.monthlyBudgetValue()) : ""
 
                         function commit() {
-                            // DoubleValidator accepts the locale group separator (e.g. "1,234")
-                            // but JS parseFloat stops at the first non-digit/"." character, so
-                            // strip group separators first — otherwise "1,234" silently saves as 1.
-                            const v = parseFloat(budgetField.text.replace(/,/g, ""));
+                            // Parse with the RUNTIME locale's separators — the same locale the
+                            // DoubleValidator accepted the text under. Stripping every comma
+                            // turned a decimal-comma "12,50" (de_DE, fr_FR, …) into $1250.
+                            const loc = Qt.locale();
+                            const v = UIHelpers.parseLocaleAmount(budgetField.text, loc.decimalPoint, loc.groupSeparator);
                             if (!isNaN(v) && v >= 0 && v <= 1000000)
                                 root.configChangeRequested({ "monthlyBudget": v });
                             settingsPopout.budgetEditing = false;

@@ -95,3 +95,21 @@ def test_pretty_model_name():
     assert _run_js_fn("prettyModelName", "gemini-3.5-flash") == "Gemini 3.5 Flash"
     assert _run_js_fn("prettyModelName", "Unknown") == "Other"
     assert _run_js_fn("prettyModelName", "Already Spaced Model") == "Already Spaced Model"
+
+
+@pytest.mark.parametrize("text, dp, gs, expected", [
+    ("12,50", ",", ".", 12.5),        # de_DE decimal comma — used to save as 1250
+    ("1.234,56", ",", ".", 1234.56),  # de_DE with grouping
+    ("1.234", ",", ".", 1234.0),      # de_DE group separator (3 digits) stays a group
+    ("12.50", ",", ".", 12.5),        # C-style decimal typed in a comma locale
+    ("1 234,5", ",", " ", 1234.5),  # fr_FR narrow no-break space grouping
+    ("1,234.56", ".", ",", 1234.56),  # en_US
+    ("1,234", ".", ",", 1234.0),      # en_US grouping (the case the old code handled)
+    ("250", ".", ",", 250.0),
+    ("", ".", ",", None),
+    ("abc", ".", ",", None),
+    ("-5", ".", ",", None),
+    ("1.2.3", ".", ",", None),
+])
+def test_parse_locale_amount(text, dp, gs, expected):
+    assert _run_js_fn("parseLocaleAmount", text, dp, gs) == expected

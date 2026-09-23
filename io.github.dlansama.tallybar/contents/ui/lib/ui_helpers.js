@@ -133,6 +133,33 @@ function compactUsd(value) {
     return "$" + v.toFixed(2);
 }
 
+// Parse a user-typed amount under the given locale's separators (Qt.locale().decimalPoint /
+// .groupSeparator), returning NaN when it isn't a plain non-negative number.
+//
+// The budget field used `parseFloat(text.replace(/,/g, ""))`: in a decimal-comma locale
+// (de_DE, fr_FR, …) the DoubleValidator accepts "12,50", and stripping every comma turned
+// it into 1250 — a 100x budget. Group separators are removed, the locale's decimal point
+// becomes ".", and a C-style "12.50" typed in a comma locale is still read as 12.5 (a lone
+// group separator followed by 1-2 digits can only be a decimal point).
+function parseLocaleAmount(text, decimalPoint, groupSeparator) {
+    let t = String(text || "").replace(/[\s\u00a0\u202f]/g, "");
+    const dp = String(decimalPoint || ".");
+    const gs = String(groupSeparator || ",");
+    if (t.length === 0)
+        return NaN;
+    if (t.indexOf(dp) < 0 && gs !== dp) {
+        const parts = t.split(gs);
+        if (parts.length === 2 && /^\d{1,2}$/.test(parts[1]))
+            t = parts[0] + dp + parts[1];
+    }
+    if (gs !== dp)
+        t = t.split(gs).join("");
+    t = t.split(dp).join(".");
+    if (!/^\d+(\.\d+)?$/.test(t))
+        return NaN;
+    return Number(t);
+}
+
 function prettyModelName(name) {
     let s = String(name || "").trim();
     if (s.length === 0 || s === "Unknown")
@@ -158,6 +185,7 @@ if (typeof module !== 'undefined') {
         normalizedCostLine: normalizedCostLine,
         costLineValue: costLineValue,
         compactUsd: compactUsd,
+        parseLocaleAmount: parseLocaleAmount,
         prettyModelName: prettyModelName
     };
 }

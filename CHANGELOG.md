@@ -25,6 +25,8 @@ Notable changes to TallyBar. Format follows
   and expired cookies are skipped. Previously every profile was merged and the last
   one read (Firefox) won, so a long-abandoned profile could shadow your live
   session — or mix cookies from two Google accounts.
+- The custom monthly-budget field reads amounts in your locale: "12,50" in a
+  decimal-comma locale is $12.50, not $1250.
 
 ## [0.1.0] — 2026-09-17
 
