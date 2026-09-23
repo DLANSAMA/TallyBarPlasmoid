@@ -923,7 +923,7 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
             _price_cache[key] = chosen
         return _price_cache[key]
 
-    def cost_of(key: str, e: dict[str, int], effective_c: int | None = None) -> float:
+    def cost_of(e: dict[str, int]) -> float:
         p = _prices_for(e)
         in_rate = p.get("input", 0.0) or 0.0
         cache_rate = p.get("cache_read", 0.0) or 0.0
@@ -935,63 +935,18 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
         # responseOutputTokens). So bill "o" once at the output rate; the old
         # "o + t" (+ "x" at input rate) double-counted thinking and re-billed the
         # response. CLI entries already store o=total with t=x=0, so they were correct.
-        c_val = e.get("c", 0) if effective_c is None else effective_c
-        return (e.get("u", 0) * in_rate + c_val * cache_rate
+        #
+        # "c" is billed as recorded on EVERY entry, whatever its key namespace. Each
+        # ':' (disk steps), '@' (gen_metadata) and '#' (RPC) entry is one API call, and
+        # each call pays for the cache it re-reads — so a conversation's cache cost is
+        # the SUM over its calls, exactly as usage_cost_usd bills Claude/Codex/Gemini per
+        # request. Do NOT collapse a conversation to its peak "c": the ':' and '#' records
+        # of the same agy session carry identical per-call values (the RPC and the steps
+        # scan agree to the digit), so any per-namespace deflation makes a conversation's
+        # cost depend on which path captured it — and change when CLI ownership flips.
+        # → tests/test_cli_usage.py::test_cache_read_billed_per_call_*
+        return (e.get("u", 0) * in_rate + e.get("c", 0) * cache_rate
                 + e.get("o", 0) * out_rate) / 1_000_000.0
-
-    # -------------------------------------------------------------------------
-    # Cache-read de-inflation: context re-reads grow monotonically across steps
-    # (each API call re-reads the full accumulated conversation from cache), so
-    # summing "c" across all steps of a conversation inflates the total — a
-    # 65K-context conversation with 35 steps would sum to ~2.3M cache-read tokens.
-    # Fix: for each conversation stem, count cache reads as the MAXIMUM single-step
-    # value (the peak context size, equal to the final step for monotone growth) and
-    # assign it to the entry with the highest "c". All other entries for that stem
-    # contribute c=0. This preserves per-conversation attribution (the canonical
-    # entry still carries the realistic cache cost), keeps all u/o accounting intact,
-    # and avoids the need to rewrite or re-key any stored entries.
-    #
-    # Stem extraction for de-inflation grouping.
-    # Key namespaces and their semantics:
-    #   "<cascadeId>:<idx>"       — steps.metadata rows: PER-STEP cumulative context re-reads
-    #                               across turns → group by stem, apply max-c de-inflation.
-    #                               Suffix <idx> is a SQLite integer row id (never contains ':'),
-    #                               so rsplit(":", 1) cleanly recovers the cascade id even when
-    #                               the cascade id itself contains ':'.
-    #   "<cascadeId>@<idx>[.gi]"  — gen_metadata rows: each entry is one INDEPENDENT generation's
-    #                               cache-read snapshot — not cumulative across turns — so treat
-    #                               as singletons (same reasoning as '#' RPC entries).
-    #                               Suffix <idx> or <idx>.<gi> never contains '@'.
-    #   "<cascadeId>#<stepKey>"   — RPC per-generation: independent per-call cache reads.
-    #   "cli:<sessionId>"         — CLI statusLine push: session-cumulative total, but each
-    #                               session is its own logical unit → singleton.
-    # Only ':'-keyed steps entries benefit from cross-step de-inflation; all others are
-    # singletons whose "c" must not be deflated against peers.
-    def _key_stem(k: str) -> str:
-        # Singletons: RPC, gen_metadata, and CLI session-cumulative entries.
-        if "#" in k or "@" in k or k.startswith("cli:"):
-            return k
-        # Steps entries: rsplit on ':' so a cascade id containing ':' is preserved intact.
-        # Suffix is always a plain integer (SQLite row idx), so the last ':' is the separator.
-        if ":" in k:
-            return k.rsplit(":", 1)[0]
-        return k  # bare key with no separator (shouldn't occur in practice)
-
-    # First pass: find the key with the maximum "c" per stem. That key becomes the
-    # canonical cache carrier for the stem; all peers get effective_c=0.
-    # IMPORTANT: RPC "#"-keyed entries are per-generation records whose "c" values
-    # are independent (not cumulative re-reads of the same context) — each generation
-    # is a separate API call with its OWN cache-read tally. We must NOT de-inflate
-    # them against each other. Treat each "#" key as its own singleton stem (the full
-    # key), so every RPC entry is its own canonical key and eff_c == its actual c.
-    stem_max_c: dict[str, int] = {}
-    stem_canonical: dict[str, str] = {}
-    for k, e in entries.items():
-        s = _key_stem(k)
-        cv = e.get("c", 0)
-        if cv > stem_max_c.get(s, -1):
-            stem_max_c[s] = cv
-            stem_canonical[s] = k
 
     today_cost = month_cost = 0.0
     today_tok = month_tok = 0
@@ -1015,15 +970,11 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
     family_cache: dict[tuple[Any, Any], str] = {}
     for key, e in entries.items():
         d = e.get("d", "")
-        # Cache-read de-inflation: use the stem's max "c" only for the canonical key;
-        # all other entries in the same conversation contribute effective_c=0 (their
-        # cache reads are monotone sub-slices of the canonical step's context size).
-        eff_c = e.get("c", 0) if stem_canonical.get(_key_stem(key)) == key else 0
-        c = cost_of(key, e, effective_c=eff_c)
-        # Token VOLUME = total tokens processed = uncached input + de-inflated cached
-        # re-read + output. "eff_c" is 0 for non-canonical steps so the total reflects
-        # the peak context size once per conversation, not the sum across all steps.
-        tok = e.get("u", 0) + eff_c + e.get("o", 0)  # o = total output (see cost_of)
+        cached = e.get("c", 0)
+        c = cost_of(e)
+        # Token VOLUME = total tokens processed = uncached input + cached re-read + output
+        # (industry standard: volume includes cache reads; cost bills them discounted).
+        tok = e.get("u", 0) + cached + e.get("o", 0)  # o = total output (see cost_of)
         # Enum map first (mirrors _prices_for): heals fallback-attributed entries
         # retroactively once a new placeholder enum gets mapped. Then collapse to the
         # display FAMILY — the single choke point that keeps the 30-day breakdown and
@@ -1036,10 +987,10 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
         if d >= m30_iso:
             month_cost += c
             month_tok += tok
-            # input lane = uncached input; output lane = total output; cached = de-inflated cache
+            # input lane = uncached input; output lane = total output; cached = cache reads
             month_in += e.get("u", 0)
             month_out += e.get("o", 0)
-            month_cached += eff_c
+            month_cached += cached
             slot = model_costs.setdefault(str(mname), {"cost": 0.0, "tokens": 0})
             slot["cost"] += c
             slot["tokens"] += tok

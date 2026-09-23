@@ -6,6 +6,13 @@ Notable changes to TallyBar. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- Antigravity CLI cost was understated: cache reads captured from the CLI's
+  conversation databases were collapsed to each conversation's peak instead of
+  billed per call, while the same calls captured live were billed in full. Every
+  capture path now bills cache reads per call (about a third higher 30-day cost on
+  a real CLI-heavy ledger).
+
 ## [0.1.0] — 2026-09-17
 
 First public release.

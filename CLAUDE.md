@@ -84,6 +84,7 @@ Runtime: stdlib-only (no third-party deps). `.venv` is for pytest only. Release:
 **Token semantics are verified — don't "simplify":**
 - Ledger: `o = t + x` (total output = thinking + response); bill `u·input + c·cache + o·output` once.
 - Volume = `u + c + o` (includes cached — industry standard); cost bills cache at the *discounted* rate.
+- Antigravity ledger cache reads are billed PER ENTRY in every key namespace (`:` / `@` / `#` / `cli:`) — each entry is one API call and pays for the cache it re-reads. Never collapse a conversation to its peak `c`: the agy RPC and the CLI steps rows carry identical per-call values, so namespace-specific accounting makes cost depend on the capture path and shift when CLI ownership flips. → `tests/test_cli_usage.py::test_cache_read_billed_per_call_*`
 - `usage_cost_usd` local-log shapes: Anthropic cache additive (never subtract from input); OpenAI subsets; Gemini `thoughts`+`tool` additive (the `tool` add is NOT double-counting).
 - Anthropic 1h cache writes = 2× input (`cache_write_1h`), NOT 1.25×. `_litellm_to_tallybar` **synthesizes** `cache_write_1h = 2× input` for any Anthropic model the live catalog omits — don't drop that synthesis.
 - Claude dedup: keep the FINAL (max-`output_tokens`) streamed line per `requestId`, not first-seen.
