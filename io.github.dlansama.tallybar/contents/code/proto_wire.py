@@ -180,7 +180,7 @@ def _pb_generations(buf: bytes, require_timestamp: bool = True) -> list[dict[str
     ``require_timestamp=False``, which returns it with ``secs: None`` (the caller dates it) —
     still reading field 4 only, so it never picks up the field-17.2 duplicate.
     """
-    out: list[dict[str, int]] = []
+    out: list[dict[str, Any]] = []
     _, root_subs = _pb_fields(buf)
     gen_frames = [sub for fn, sub in root_subs if fn == 1]
     if not gen_frames:

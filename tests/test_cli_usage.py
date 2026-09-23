@@ -976,8 +976,9 @@ def test_pb_generations_counts_each_generation_once_dated_by_timestamp():
     ])
     gens = costmod._pb_generations(blob)
     assert len(gens) == 2  # each counted ONCE, not 4 (the field17.2 duplicate is ignored)
-    assert gens[0] == {"u": 100, "c": 10, "o": 50, "me": 1133, "secs": secs_a}
-    assert gens[1] == {"u": 200, "c": 20, "o": 80, "me": 1016, "secs": secs_b}
+    # "mk" is the record's field-6 marker (_encode_generation's default: the pre-2.0 24).
+    assert gens[0] == {"u": 100, "c": 10, "o": 50, "me": 1133, "mk": 24, "secs": secs_a}
+    assert gens[1] == {"u": 200, "c": 20, "o": 80, "me": 1016, "mk": 24, "secs": secs_b}
 
 
 def test_disk_scan_dates_by_embedded_timestamp_not_today(monkeypatch, tmp_path):
