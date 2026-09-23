@@ -1579,3 +1579,38 @@ def test_stateful_parsers_are_not_wired_for_incremental():
             assert "incremental=True" in call
         else:
             assert "incremental" not in call, f"a stateful parser opted in:\n{call}"
+
+
+def _codex_tc(last=None, total=None):
+    info = {}
+    if last is not None:
+        info["last_token_usage"] = last
+    if total is not None:
+        info["total_token_usage"] = total
+    return json.dumps({"timestamp": _NOW.isoformat(), "payload": {"type": "token_count", "info": info}})
+
+
+def test_codex_repeated_token_count_events_are_counted_once(tmp_path):
+    """Codex re-emits token_count with an unchanged cumulative total (no new usage) — the
+    repeat must not add its last_token_usage a second time."""
+    t1 = {"input_tokens": 1000, "output_tokens": 100, "total_tokens": 1100}
+    t2 = {"input_tokens": 3000, "output_tokens": 300, "total_tokens": 3300}
+    lines = [json.dumps({"timestamp": _NOW.isoformat(), "payload": {"model": "gpt-5-codex"}}),
+             _codex_tc(last=t1, total=t1),
+             _codex_tc(last=t1, total=t1),                       # repeat: total unchanged
+             _codex_tc(last={"input_tokens": 2000, "output_tokens": 200, "total_tokens": 2200}, total=t2)]
+    f = tmp_path / "rollout.jsonl"
+    f.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    recs = accounting._parse_codex_file(f)
+    assert [r["u"]["total_tokens"] for r in recs] == [1100, 2200]
+
+
+def test_codex_total_only_events_contribute_their_increase(tmp_path):
+    """An event carrying only the cumulative total adds its delta, not the running sum."""
+    lines = [_codex_tc(total={"input_tokens": 100, "output_tokens": 10, "total_tokens": 110}),
+             _codex_tc(total={"input_tokens": 250, "output_tokens": 30, "total_tokens": 280})]
+    f = tmp_path / "rollout.jsonl"
+    f.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    recs = accounting._parse_codex_file(f)
+    assert [r["u"]["total_tokens"] for r in recs] == [110, 170]
+    assert recs[1]["u"]["input_tokens"] == 150 and recs[1]["u"]["output_tokens"] == 20

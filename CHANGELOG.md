@@ -30,6 +30,8 @@ Notable changes to TallyBar. Format follows
 - Grok: once the logged billing period has ended (no grok session since), the
   bar reads 0% with the reset projected to the current week instead of repeating
   last week's percentage with "Reset due"; "This week" counts the current week.
+- Codex token history no longer counts repeated usage events twice (Codex
+  re-emits a turn's usage without new tokens; about 0.2% of tokens on a real log).
 
 ## [0.1.0] — 2026-09-17
 

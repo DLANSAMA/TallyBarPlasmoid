@@ -37,7 +37,7 @@ _UNSET = object()
 _PARSE_CACHE_DIR = Path.home() / ".tallybar" / "cache"
 _CACHE_SCHEMA_VERSION = 1          # bump to invalidate ALL parse caches at once
 _CLAUDE_PARSE_VERSION = 3          # bump when _parse_claude_file's output shape changes
-_CODEX_PARSE_VERSION = 2           # bump when _parse_codex_file's output shape changes
+_CODEX_PARSE_VERSION = 3           # bump when _parse_codex_file's output shape changes
 _GROK_PARSE_VERSION = 3            # bump when _parse_grok_file's output shape changes
 _GEMINI_PARSE_VERSION = 2          # bump when _parse_gemini_file's output shape changes
 
@@ -270,7 +270,27 @@ def _parse_claude_file(path: Path, start: int = 0,
     return out
 
 
+def _usage_delta(total: dict[str, Any], prev: dict[str, Any] | None) -> dict[str, Any]:
+    """Per-field increase of a cumulative usage dict over the previous one (numeric fields)."""
+    if not prev:
+        return dict(total)
+    out: dict[str, Any] = {}
+    for key, value in total.items():
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            before = prev.get(key)
+            out[key] = max(0, value - before) if isinstance(before, (int, float)) else value
+    return out
+
+
 def _parse_codex_file(path: Path) -> list[dict[str, Any]] | None:
+    """Per-turn usage records from a Codex session JSONL.
+
+    Each ``token_count`` event carries the turn's ``last_token_usage`` and the session's
+    cumulative ``total_token_usage``. Codex re-emits the event without new usage (e.g. a
+    rate-limit refresh) — same cumulative total, same ``last_token_usage`` — so an event
+    whose total hasn't moved since the previous one is a REPEAT and is skipped (observed:
+    100 of 13,809 real events). An event with only the cumulative total contributes its
+    increase over the previous total, never the whole running sum."""
     try:
         handle = path.open("r", encoding="utf-8")
     except OSError:
@@ -278,6 +298,7 @@ def _parse_codex_file(path: Path) -> list[dict[str, Any]] | None:
     out: list[dict[str, Any]] = []
     with handle:
         current_model: str | None = None
+        prev_total: dict[str, Any] | None = None
         for line in handle:
             if '"model"' in line:
                 try:
@@ -297,7 +318,19 @@ def _parse_codex_file(path: Path) -> list[dict[str, Any]] | None:
                 continue
             payload = as_dict(record.get("payload"))
             info = as_dict(payload.get("info"))
-            usage = info.get("last_token_usage") or info.get("total_token_usage") or {}
+            last = info.get("last_token_usage")
+            total = info.get("total_token_usage")
+            total = total if isinstance(total, dict) and total else None
+            if total is not None and prev_total is not None and total == prev_total:
+                continue  # repeated token_count: the session's cumulative total hasn't moved
+            if isinstance(last, dict) and last:
+                usage: Any = last
+            elif total is not None:
+                usage = _usage_delta(total, prev_total)
+            else:
+                usage = {}
+            if total is not None:
+                prev_total = total
             if usage_token_total(usage) <= 0:
                 continue
             out.append({"t": record.get("timestamp"), "m": current_model, "u": slim_usage(usage)})
