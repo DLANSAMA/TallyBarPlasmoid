@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from accounting import default_provider, now_iso
-from parsers import parse_grok_billing_config
+from parsers import parse_grok_billing_config, relative_reset
 
 GROK_HOME = Path.home() / ".grok"
 GROK_LOG = GROK_HOME / "logs" / "unified.jsonl"
@@ -156,14 +156,46 @@ def _latest_billing_event(log_path: Path) -> dict[str, Any] | None:
     return pending_period_only
 
 
-def grok_billing_period(log_path: Path | None = None) -> tuple[dt.datetime, dt.datetime] | None:
+def _parse_period_ts(s: Any) -> dt.datetime | None:
+    if not isinstance(s, str) or not s:
+        return None
+    try:
+        ts = dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=dt.timezone.utc)
+
+
+def roll_period_forward(start: dt.datetime | None, end: dt.datetime, period_type: str,
+                        now: dt.datetime) -> tuple[dt.datetime | None, dt.datetime | None, bool]:
+    """The billing period CURRENT at ``now``, given the last one the CLI logged.
+
+    Returns ``(start, end, ended)``. The billing event is only written when the grok CLI
+    runs, so after a quiet week the newest event describes a period that is already over —
+    and its ``creditUsagePercent`` describes nothing current. A WEEKLY period is projected
+    forward in whole periods (xAI's weekly pool rolls from the period boundary); any other
+    type that has ended returns ``(None, None, True)`` — the current window is unknowable."""
+    if end > now:
+        return start, end, False
+    if "WEEK" not in (period_type or "").upper():
+        return None, None, True
+    length = (end - start) if start is not None and end > start else dt.timedelta(days=7)
+    periods = int((now - end) / length) + 1
+    new_start = end + (periods - 1) * length
+    return new_start, new_start + length, True
+
+
+def grok_billing_period(log_path: Path | None = None,
+                        now: dt.datetime | None = None) -> tuple[dt.datetime, dt.datetime] | None:
     """Return the current billing-period (start, end) from the latest billing event, or None.
 
     Parses the ``currentPeriod.start`` / ``currentPeriod.end`` ISO strings from the most-recent
     usable ``billing: fetched credits config`` event (same selection as the Weekly bar).
     Trailing ``Z`` is normalised to ``+00:00``; a naive datetime is assumed UTC.  Returns
     ``None`` when the log is missing, the event is absent, or the period strings are not both
-    parseable / ``start < end``.
+    parseable / ``start < end``. A period that has already ENDED is rolled forward to the one
+    current at ``now`` (see ``roll_period_forward``) — else "This week" counted last week's
+    tokens — or ``None`` when a non-weekly period ended and the current window is unknown.
     """
     path = log_path if log_path is not None else GROK_LOG
     event = _latest_billing_event(path)
@@ -175,25 +207,15 @@ def grok_billing_period(log_path: Path | None = None) -> tuple[dt.datetime, dt.d
     period = parsed.get("period")
     if not isinstance(period, dict):
         return None
-    start_str = period.get("start")
-    end_str = period.get("end")
-    if not isinstance(start_str, str) or not isinstance(end_str, str):
-        return None
-
-    def _parse(s: str) -> dt.datetime | None:
-        try:
-            ts = dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=dt.timezone.utc)
-        return ts
-
-    start = _parse(start_str)
-    end = _parse(end_str)
+    start = _parse_period_ts(period.get("start"))
+    end = _parse_period_ts(period.get("end"))
     if start is None or end is None or start >= end:
         return None
-    return (start, end)
+    current = now or dt.datetime.now(dt.timezone.utc)
+    new_start, new_end, _ended = roll_period_forward(start, end, str(period.get("type") or ""), current)
+    if new_start is None or new_end is None:
+        return None
+    return (new_start, new_end)
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +239,7 @@ def run_grok_local(
     timeout: float = 12.0,  # noqa: ARG001 — signature parity with other local providers
     log_path: Path | None = None,
     grok_home: Path | None = None,
+    now: dt.datetime | None = None,
 ) -> dict[str, Any]:
     """Build a Grok provider dict from local Grok Build state.
 
@@ -284,4 +307,30 @@ def run_grok_local(
     period = parsed.get("period")
     if period:
         result["period"] = period
+        _roll_ended_period(result, period, now or dt.datetime.now(dt.timezone.utc))
     return result
+
+
+def _roll_ended_period(result: dict[str, Any], period: dict[str, Any], now: dt.datetime) -> None:
+    """An ended period's percentage describes nothing current: the pool has reset, so the
+    bar reads 0% (the CLI hasn't reported usage in the new period yet) and the reset moves
+    to the projected end of the current period. Mutates ``result`` in place."""
+    end = _parse_period_ts(period.get("end"))
+    if end is None or not result.get("limits"):
+        return
+    start = _parse_period_ts(period.get("start"))
+    new_start, new_end, ended = roll_period_forward(start, end, str(period.get("type") or ""), now)
+    if not ended:
+        return
+    limit = dict(result["limits"][0])
+    limit["percent"] = 0.0
+    limit.pop("resetAt", None)
+    limit["reset"] = ""
+    rolled: dict[str, Any] = {k: v for k, v in period.items() if k not in ("start", "end")}
+    if new_start is not None and new_end is not None:
+        limit["resetAt"] = new_end.isoformat()
+        limit["reset"] = relative_reset(limit["resetAt"])
+        rolled.update(start=new_start.isoformat(), end=new_end.isoformat(), projected=True)
+    result["limits"] = [limit] + list(result["limits"][1:])
+    result["period"] = rolled
+    result["message"] = "Grok billing period ended — 0% until the next Grok session reports usage"

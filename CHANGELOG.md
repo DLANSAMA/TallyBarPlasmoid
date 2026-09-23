@@ -27,6 +27,9 @@ Notable changes to TallyBar. Format follows
   session — or mix cookies from two Google accounts.
 - The custom monthly-budget field reads amounts in your locale: "12,50" in a
   decimal-comma locale is $12.50, not $1250.
+- Grok: once the logged billing period has ended (no grok session since), the
+  bar reads 0% with the reset projected to the current week instead of repeating
+  last week's percentage with "Reset due"; "This week" counts the current week.
 
 ## [0.1.0] — 2026-09-17
 

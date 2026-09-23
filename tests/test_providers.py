@@ -1187,7 +1187,8 @@ def test_run_grok_local_skips_midperiod_null_percent(tmp_path):
     ]
     log_path = logs / "unified.jsonl"
     log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, log_path=log_path)
+    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, log_path=log_path,
+                                  now=dt.datetime(2026, 7, 15, 17, 0, tzinfo=dt.timezone.utc))
     assert res["status"] == "ok"
     assert res["limits"][0]["percent"] == 46.0
     assert res["period"]["start"] == start
@@ -1213,7 +1214,8 @@ def test_run_grok_local_new_period_without_percent_is_zero(tmp_path):
     ]
     log_path = logs / "unified.jsonl"
     log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, log_path=log_path)
+    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, log_path=log_path,
+                                  now=dt.datetime(2026, 7, 18, 15, 0, tzinfo=dt.timezone.utc))
     assert res["status"] == "ok"
     assert res["limits"][0]["percent"] == 0.0
     assert res["period"]["start"] == new_start
@@ -1236,7 +1238,7 @@ def test_grok_billing_period_follows_new_period_without_percent(tmp_path):
         ]) + "\n",
         encoding="utf-8",
     )
-    result = grok_billing_period(log_path=log)
+    result = grok_billing_period(log_path=log, now=dt.datetime(2026, 7, 18, 15, 0, tzinfo=dt.timezone.utc))
     assert result is not None
     start, end = result
     assert start == dt.datetime.fromisoformat(new_start)
@@ -1277,7 +1279,7 @@ def test_grok_billing_period_returns_aware_datetimes(tmp_path):
     log = tmp_path / "unified.jsonl"
     log.write_text(_billing_event_line(start_iso, end_iso) + "\n", encoding="utf-8")
 
-    result = grok_billing_period(log_path=log)
+    result = grok_billing_period(log_path=log, now=dt.datetime(2026, 7, 10, 20, 0, tzinfo=dt.timezone.utc))
     assert result is not None
     start, end = result
     assert start.tzinfo is not None
@@ -1435,3 +1437,65 @@ def test_grok_without_a_timestamp_falls_back_and_is_not_marked_stale(tmp_path):
     assert res["status"] == "ok"
     assert res["fetchedAt"]                 # falls back to now
     assert res.get("stale") is not True     # unknown age is not evidence of staleness
+
+
+# --- An ENDED billing period no longer shows last period's percentage ---
+
+def test_run_grok_local_zeroes_bar_after_period_ends(tmp_path):
+    """The billing event is only logged when the grok CLI runs. After a quiet week the newest
+    event describes a period that is over — the pool has reset, so the bar must read 0% with
+    the reset projected to the current period's end, not last week's 85% and "Reset due"."""
+    from providers import grok as grok_mod
+    home = tmp_path / ".grok"
+    logs = home / "logs"
+    logs.mkdir(parents=True)
+    start = "2026-07-11T13:20:44+00:00"
+    end = "2026-07-18T13:20:44+00:00"
+    log_path = logs / "unified.jsonl"
+    log_path.write_text(_billing_line(ts="2026-07-17T12:00:00Z", percent=85.0, start=start, end=end) + "\n",
+                        encoding="utf-8")
+    now = dt.datetime(2026, 7, 29, 9, 0, tzinfo=dt.timezone.utc)  # 1.8 periods after it ended
+    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, log_path=log_path, now=now)
+    limit = res["limits"][0]
+    assert limit["percent"] == 0.0
+    assert limit["resetAt"] == "2026-08-01T13:20:44+00:00"   # 07-18 + 2 whole weeks
+    assert res["period"]["start"] == "2026-07-25T13:20:44+00:00" and res["period"]["projected"] is True
+    assert "ended" in res["message"]
+    assert res["stale"] is True   # the vendor reading itself is still old
+
+
+def test_run_grok_local_keeps_percent_within_the_period(tmp_path):
+    from providers import grok as grok_mod
+    home = tmp_path / ".grok"
+    logs = home / "logs"
+    logs.mkdir(parents=True)
+    log_path = logs / "unified.jsonl"
+    log_path.write_text(_billing_line(ts="2026-07-17T12:00:00Z", percent=85.0,
+                                      start="2026-07-11T13:20:44+00:00", end="2026-07-18T13:20:44+00:00") + "\n",
+                        encoding="utf-8")
+    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, log_path=log_path,
+                                  now=dt.datetime(2026, 7, 17, 13, 0, tzinfo=dt.timezone.utc))
+    assert res["limits"][0]["percent"] == 85.0
+    assert "projected" not in res["period"]
+
+
+def test_grok_billing_period_rolls_forward_after_period_ends(tmp_path):
+    """The "This week" token window must follow the current period, not the ended one."""
+    from providers.grok import grok_billing_period
+    log = tmp_path / "unified.jsonl"
+    log.write_text(_billing_line(ts="2026-07-17T12:00:00Z", percent=85.0,
+                                 start="2026-07-11T13:20:44+00:00", end="2026-07-18T13:20:44+00:00") + "\n",
+                   encoding="utf-8")
+    start, end = grok_billing_period(log_path=log, now=dt.datetime(2026, 7, 20, tzinfo=dt.timezone.utc))
+    assert start == dt.datetime(2026, 7, 18, 13, 20, 44, tzinfo=dt.timezone.utc)
+    assert end == dt.datetime(2026, 7, 25, 13, 20, 44, tzinfo=dt.timezone.utc)
+
+
+def test_roll_period_forward_non_weekly_ended_is_unknown():
+    from providers.grok import roll_period_forward
+    s0 = dt.datetime(2026, 6, 1, tzinfo=dt.timezone.utc)
+    e0 = dt.datetime(2026, 7, 1, tzinfo=dt.timezone.utc)
+    assert roll_period_forward(s0, e0, "USAGE_PERIOD_TYPE_MONTHLY", dt.datetime(2026, 7, 5, tzinfo=dt.timezone.utc)) \
+        == (None, None, True)
+    assert roll_period_forward(s0, e0, "USAGE_PERIOD_TYPE_MONTHLY", dt.datetime(2026, 6, 5, tzinfo=dt.timezone.utc)) \
+        == (s0, e0, False)
