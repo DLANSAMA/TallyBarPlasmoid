@@ -41,6 +41,8 @@ Notable changes to TallyBar. Format follows
 - Notification text from providers is shown literally: characters like `<` and
   `&` in an error message are escaped instead of being interpreted as markup
   (which could garble the text or turn a link in a response into a live link).
+- On a shared machine, Antigravity usage is only read from your own language
+  servers — another user's (whose token is visible in the process list) is ignored.
 
 ## [0.1.0] — 2026-09-17
 

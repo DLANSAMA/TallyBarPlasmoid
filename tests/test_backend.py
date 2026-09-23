@@ -109,7 +109,8 @@ async def test_find_antigravity_process_local():
 
     with patch.dict(sys.modules, {"psutil": None}), \
             patch("os.listdir", return_value=["1234"]), \
-            patch("builtins.open", side_effect=scoped_open):
+            patch("builtins.open", side_effect=scoped_open), \
+            patch.object(providers.antigravity, "_owned_by_current_user", return_value=True):
         # find_antigravity_processes memoizes its scan for the life of the process; drop
         # that memo so this test observes a fresh /proc scan regardless of test ordering.
         providers.antigravity._reset_process_scan_cache()
@@ -1376,3 +1377,36 @@ async def test_build_snapshot_respects_worst_case_bound():
     elapsed = _time.monotonic() - started
     assert snap["ok"] is True
     assert elapsed <= backend.refresh_worst_case_seconds(args.timeout) + 0.5, elapsed
+
+
+
+# --- The process scan only considers the current user's processes ---
+
+def test_process_scan_skips_other_users_language_servers():
+    """/proc/<pid>/cmdline is world-readable: another user's language server (and its CSRF
+    token) must not be picked up on a shared machine."""
+    mine = "language_server\0--app_data_dir=antigravity\0--csrf_token\0MINE\0"
+    theirs = "language_server\0--app_data_dir=antigravity\0--csrf_token\0THEIRS\0"
+    cmdlines = {"/proc/100/cmdline": mine, "/proc/200/cmdline": theirs}
+    real_open = open
+
+    def scoped_open(path, *args, **kwargs):
+        if str(path) in cmdlines:
+            return mock_open(read_data=cmdlines[str(path)])()
+        return real_open(path, *args, **kwargs)
+
+    with patch.dict(sys.modules, {"psutil": None}), \
+            patch("os.listdir", return_value=["100", "200"]), \
+            patch("builtins.open", side_effect=scoped_open), \
+            patch.object(providers.antigravity, "_owned_by_current_user", side_effect=lambda pid: pid == 100):
+        providers.antigravity._reset_process_scan_cache()
+        found = providers.antigravity.find_antigravity_processes()
+    providers.antigravity._reset_process_scan_cache()
+    assert found == [(100, "MINE", "http")]
+
+
+def test_owned_by_current_user_real_proc():
+    import os as _os
+    assert providers.antigravity._owned_by_current_user(_os.getpid()) is True
+    assert providers.antigravity._owned_by_current_user(1) is (_os.getuid() == 0)   # init: root's
+    assert providers.antigravity._owned_by_current_user(2**22 + 12345) is False     # no such pid

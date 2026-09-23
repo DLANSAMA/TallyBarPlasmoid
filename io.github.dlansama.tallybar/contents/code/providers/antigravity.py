@@ -165,6 +165,19 @@ def _reset_process_scan_cache() -> None:
     _process_scan_cache = None
 
 
+def _owned_by_current_user(pid: int) -> bool:
+    """True iff ``pid`` belongs to the user running the backend.
+
+    /proc/<pid>/cmdline is world-readable on a default Linux, so on a shared machine the scan
+    would otherwise also match ANOTHER user's Antigravity language server — lifting its CSRF
+    token from the cmdline, querying its loopback API, and folding that user's usage into
+    this user's ledger. Unknown/vanished processes count as not ours (fail closed)."""
+    try:
+        return os.stat(f"/proc/{pid}").st_uid == os.getuid()
+    except OSError:
+        return False
+
+
 def _scan_antigravity_processes() -> list[tuple[int, str, str]]:
     """Every running Antigravity language server as ``(pid, csrf_token, scheme)``.
 
@@ -173,15 +186,23 @@ def _scan_antigravity_processes() -> list[tuple[int, str, str]]:
     Antigravity CLI (``agy``) serves the same API in-process (token-less). Querying all of them
     is what lets token capture cover every surface, not just whichever process is found first.
     Real language servers sort before agy processes so account-level calls that take the first
-    process keep preferring the Desktop/IDE server when one is up.
+    process keep preferring the Desktop/IDE server when one is up. Only the current user's
+    processes are considered (``_owned_by_current_user``).
     """
     found: dict[int, tuple[int, str, str]] = {}
     try:
         import psutil
-        for proc in psutil.process_iter(['pid', 'cmdline']):
+        my_uid = os.getuid()
+        for proc in psutil.process_iter(['pid', 'cmdline', 'uids']):
             try:
                 cmdline = proc.info.get('cmdline') or []
                 if not cmdline:
+                    continue
+                uids = proc.info.get('uids')
+                if uids is not None:
+                    if uids.real != my_uid:
+                        continue
+                elif not _owned_by_current_user(proc.info['pid']):
                     continue
                 parsed = (_parse_language_server_cmdline(" ".join(cmdline), cmdline)
                           or _parse_agy_cmdline(cmdline))
@@ -199,6 +220,8 @@ def _scan_antigravity_processes() -> list[tuple[int, str, str]]:
         proc_entries = []
     for pid_str in proc_entries:
         if not pid_str.isdigit() or int(pid_str) in found:
+            continue
+        if not _owned_by_current_user(int(pid_str)):
             continue
         try:
             with open(f"/proc/{pid_str}/cmdline", "r", encoding="utf-8", errors="replace") as f:
