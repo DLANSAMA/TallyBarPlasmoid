@@ -121,6 +121,17 @@ function needsAttention(provider, muted) {
     return false;
 }
 
+// Escape text for a desktop-notification BODY. The freedesktop Notifications spec treats
+// the body as markup (<b>, <a href>, <img>) and Plasma renders it, while the summary is
+// plain text — so only the body is escaped. Bodies carry provider/API error messages
+// (e.g. a Codex app-server error string), which must render literally: a "<" or "&" would
+// otherwise garble the text, and an <a href>/<img> from a response would become a live
+// link or a remote image fetch in the notification.
+function escapeNotificationMarkup(text) {
+    return String(text === undefined || text === null ? "" : text)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 function menuMoneySpacing(text) {
     return String(text || "").replace(/\$(?=\d)/g, "$ ");
 }
@@ -217,6 +228,7 @@ if (typeof module !== 'undefined') {
         statusIsBad: statusIsBad,
         usageLimits: usageLimits,
         needsAttention: needsAttention,
+        escapeNotificationMarkup: escapeNotificationMarkup,
         menuMoneySpacing: menuMoneySpacing,
         normalizedCostLine: normalizedCostLine,
         costLineValue: costLineValue,

@@ -38,6 +38,9 @@ Notable changes to TallyBar. Format follows
 - The tray attention badge and the panel's bars and warning pulse ignore
   extra-usage and credit rows (e.g. Claude overage spend), matching the
   notifications, so a nearly-spent overage cap no longer reads as a full usage window.
+- Notification text from providers is shown literally: characters like `<` and
+  `&` in an error message are escaped instead of being interpreted as markup
+  (which could garble the text or turn a link in a response into a live link).
 
 ## [0.1.0] — 2026-09-17
 

@@ -461,8 +461,9 @@ PlasmoidItem {
     // makes every invocation a distinct source.
     property int notifySeq: 0
 
-    // Fire desktop notifications. Reuses the existing root.shellQuote (defined above) to
-    // escape the title/body for the shell — they come from provider labels + numbers.
+    // Fire desktop notifications. root.shellQuote escapes the title/body for the SHELL; the
+    // body is additionally markup-escaped (UIHelpers.escapeNotificationMarkup) because the
+    // notification server renders body markup and bodies can carry provider/API messages.
     function fireNotifications(list) {
         for (let i = 0; i < list.length; ++i) {
             const n = list[i];
@@ -472,7 +473,7 @@ PlasmoidItem {
             const cmd = "TALLYBAR_NSEQ=" + (++root.notifySeq) + " "
                 + "notify-send --app-name=TallyBar --urgency=" + urgency
                 + " --icon=utilities-system-monitor -- "
-                + root.shellQuote(n.title) + " " + root.shellQuote(n.body || "");
+                + root.shellQuote(n.title) + " " + root.shellQuote(UIHelpers.escapeNotificationMarkup(n.body || ""));
             notifier.connectSource(cmd);
         }
     }

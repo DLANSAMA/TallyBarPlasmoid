@@ -134,3 +134,20 @@ def test_usage_limits_drops_extra_usage_rows():
 ])
 def test_needs_attention(provider, muted, expected):
     assert _run_js_fn("needsAttention", provider, muted) is expected
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("Codex app-server error: <a href='https://x'>login</a>", "Codex app-server error: &lt;a href='https://x'&gt;login&lt;/a&gt;"),
+    ("R&D budget <img src=http://t/p.png>", "R&amp;D budget &lt;img src=http://t/p.png&gt;"),
+    ("$12.00 of $50 this month (24%).", "$12.00 of $50 this month (24%)."),
+    (None, ""),
+])
+def test_escape_notification_markup(text, expected):
+    assert _run_js_fn("escapeNotificationMarkup", text) == expected
+
+
+def test_notifications_escape_body_markup():
+    """main.qml must route every notification body through the markup escape."""
+    qml = (UI_HELPERS_JS.parent.parent / "main.qml").read_text(encoding="utf-8")
+    assert "shellQuote(UIHelpers.escapeNotificationMarkup(n.body" in qml
+    assert "shellQuote(n.body" not in qml
