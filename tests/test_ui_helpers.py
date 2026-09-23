@@ -151,3 +151,18 @@ def test_notifications_escape_body_markup():
     qml = (UI_HELPERS_JS.parent.parent / "main.qml").read_text(encoding="utf-8")
     assert "shellQuote(UIHelpers.escapeNotificationMarkup(n.body" in qml
     assert "shellQuote(n.body" not in qml
+
+
+def test_status_is_bad_is_not_re_inlined_in_qml():
+    """lib/ui_helpers.js holds the ONE bad-status set; a QML statusIsBad may only delegate
+    to it (CompactRepresentation used to carry its own copy of the switch)."""
+    import re
+    ui = UI_HELPERS_JS.parent.parent
+    for qml in sorted(ui.rglob("*.qml")):
+        src = qml.read_text(encoding="utf-8")
+        m = re.search(r"function statusIsBad\([^)]*\)\s*\{(.*?)\n\s{4}\}", src, re.S)
+        if not m:
+            continue
+        body = m.group(1)
+        assert "UIHelpers.statusIsBad(" in body and "case " not in body, (
+            f"{qml.name} re-implements statusIsBad instead of delegating to ui_helpers.js")

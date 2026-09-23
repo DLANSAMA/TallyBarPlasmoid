@@ -80,24 +80,8 @@ Item {
     // (usage-keyed amber/red recolour stays locked out). Mirrors FullRepresentation's
     // tabStatusBad set, plus the sign-in / not-running actionable states.
     function statusIsBad(status) {
-        switch (status) {
-        case "missing-cookies":
-        case "missing-cli":
-        case "unauthorized":
-        case "api-error":
-        case "error":
-        case "timeout":
-        case "wallet-locked":
-        case "wallet-state-unknown":
-        case "not-running":
-        case "no-port":
-        case "missing-oauth":
-        case "oauth-expired":
-        case "oauth-unavailable":
-            return true;
-        default:
-            return false;
-        }
+        // The ONE bad-status set lives in lib/ui_helpers.js (shared with FullRepresentation).
+        return UIHelpers.statusIsBad(status);
     }
     // A muted provider is dropped from the badge/dim logic (still visible in popup).
     function isMuted() {
