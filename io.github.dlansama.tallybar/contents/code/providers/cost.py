@@ -763,6 +763,14 @@ _MODEL_ENUM_NAMES: dict[int, str] = {
     1264: "Gemini 3.6 Flash (High)",
     1265: "Gemini 3.6 Flash (Medium)",
     1266: "Gemini 3.6 Flash (Low)",
+    # Gemini 3.7 Flash (M298-M300) and 3.8 Flash (M318-M320) effort trios, confirmed live
+    # via GetAvailableModels (the ledger's learnedModelNames, 2026-10-01).
+    1298: "Gemini 3.7 Flash (High)",
+    1299: "Gemini 3.7 Flash (Medium)",
+    1300: "Gemini 3.7 Flash (Low)",
+    1318: "Gemini 3.8 Flash (High)",
+    1319: "Gemini 3.8 Flash (Medium)",
+    1320: "Gemini 3.8 Flash (Low)",
 }
 
 
@@ -909,9 +917,14 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
         # unknown at capture stores a family-fallback "model" string plus the raw "me"
         # enum — once the enum gets mapped, pricing/attribution heal retroactively.
         # CLI entries (display-name string, no "me") and disk entries ("me" only) are
-        # unaffected by the order.
+        # unaffected by the order. The same static → learned → entry-string chain as
+        # _resolve_model_display: a disk entry whose enum is known only from
+        # learnedModelNames must bill at that model's rate, not the Pro default, or the
+        # breakdown names one model while the cost is computed for another.
         me_key = e.get("me")
-        m = _MODEL_ENUM_NAMES.get(me_key) if isinstance(me_key, int) else None
+        m = None
+        if isinstance(me_key, int):
+            m = _MODEL_ENUM_NAMES.get(me_key) or learned_names.get(me_key)
         if not m:
             m = e.get("model")  # CLI entries carry a display-name string
         if not m:

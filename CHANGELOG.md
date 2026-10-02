@@ -7,6 +7,14 @@ Notable changes to TallyBar. Format follows
 ## [Unreleased]
 
 ### Fixed
+- Antigravity cost was overstated for models newer than TallyBar's built-in list
+  (Gemini 3.7 and 3.8 Flash among them): generations read from the conversation
+  databases were billed at Gemini 3.1 Pro rates even though the breakdown showed the
+  right model. They now bill at the model's own rate (about 31% lower 30-day
+  Antigravity cost on a real ledger). Past months already archived keep their
+  recorded figures. Without a pricing cache (first run, offline), Gemini 3.5 Flash
+  was billed at 3.5 Flash-Lite's rate and 3.6-3.8 Flash at Gemini 3.1 Pro's; the
+  built-in table now carries Google's published rates for them.
 - Claude cost on a first run or offline (no pricing cache yet) now uses the right
   rates for Claude Opus 5.5, Opus 5, Sonnet 5.5, Sonnet 5, Fable 5.1 and Mythos 5 / 5.1.
   The built-in price table predated these models, so they were billed at older Sonnet

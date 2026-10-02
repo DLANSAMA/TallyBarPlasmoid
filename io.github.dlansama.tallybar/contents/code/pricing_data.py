@@ -105,8 +105,18 @@ _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
     ("gpt-4o-mini",          {"input":  0.15, "output":  0.60, "cache_read":  0.075}),
     ("gpt-4o",               {"input":  2.50, "output": 10.00, "cache_read":  1.25}),
     # Google Gemini
+    # Rates from ai.google.dev/gemini-api/docs/pricing (2026-10-01). Every Flash version
+    # needs its own exact key ("gemini-3.5-flash" would otherwise family-match
+    # "gemini-3.5-flash-lite"). 3.6/3.7/3.8 Flash are on an introductory rate through
+    # 2026-12-31 and list at $1.50 / $7.50 / $0.15 from 2027-01-01: update these rows then
+    # (the live catalog is used whenever it has the key).
     ("gemini-3.1-pro",       {"input":  2.00, "output": 12.00, "cache_read":  0.20}),
-    ("gemini-3.5-flash",     {"input":  0.30, "output":  2.50, "cache_read":  0.075}),
+    ("gemini-3.8-flash",     {"input":  0.75, "output":  3.75, "cache_read":  0.075}),
+    ("gemini-3.7-flash",     {"input":  0.75, "output":  3.75, "cache_read":  0.075}),
+    ("gemini-3.6-flash",     {"input":  0.75, "output":  3.75, "cache_read":  0.075}),
+    ("gemini-3.5-flash-lite",{"input":  0.30, "output":  2.50, "cache_read":  0.03}),
+    ("gemini-3.5-flash",     {"input":  1.50, "output":  9.00, "cache_read":  0.15}),
+    ("gemini-3.1-flash-lite",{"input":  0.25, "output":  1.50, "cache_read":  0.025}),
     ("gemini-2.5-pro",       {"input":  1.25, "output": 10.00, "cache_read":  0.31}),
     ("gemini-2.5-flash-lite",{"input":  0.10, "output":  0.40, "cache_read":  0.025}),
     ("gemini-2.5-flash",     {"input":  0.30, "output":  2.50, "cache_read":  0.075}),

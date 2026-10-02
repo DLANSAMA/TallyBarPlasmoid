@@ -271,6 +271,50 @@ def test_unmapped_enum_shows_self_documenting_placeholder_not_other(monkeypatch,
     assert "Other" not in labels and "Unknown" not in labels
 
 
+_FLASH_38 = {"input": 0.75, "output": 3.75, "cache_read": 0.075}
+_PRO_31 = {"input": 2.0, "output": 12.0, "cache_read": 0.2}
+
+
+def _summary_for_disk_entry(monkeypatch, tmp_path, me, learned=None):
+    """Summarize a ledger holding ONE disk-scan entry (enum only, no model string)."""
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
+    ledger = tmp_path / "ide_ledger.json"
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", ledger)
+    catalog = {"gemini-3.8-flash": _FLASH_38, "gemini-3.1-pro": _PRO_31}
+    monkeypatch.setattr(costmod, "model_pricing", lambda name, *a, **k: dict(catalog.get(name, {})))
+    today = dt.date.today().isoformat()
+    body = {"trackingStarted": today,
+            "entries": {"disk-stem:0": {"d": today, "me": me, "u": 1000, "c": 200, "o": 500}}}
+    if learned:
+        body["learnedModelNames"] = learned
+    ledger.write_text(json.dumps(body))
+    return costmod.antigravity_ledger_cost_summary()
+
+
+# 1000 input + 200 cache read + 500 output: $0.00264 at 3.8 Flash, $0.00804 at the Pro default.
+_FLASH_38_COST = (1000 * 0.75 + 200 * 0.075 + 500 * 3.75) / 1e6
+
+
+def test_learned_enum_bills_at_its_learned_model_not_the_pro_default(monkeypatch, tmp_path):
+    """A disk entry carries only the model enum. When that enum is known only from the
+    ledger's learnedModelNames, the breakdown already showed the learned name, but pricing
+    skipped the learned table and billed the gemini-3.1-pro default (about 3x for Flash)."""
+    assert 1999 not in costmod._MODEL_ENUM_NAMES  # this test is about a LEARNED-only enum
+    summary = _summary_for_disk_entry(monkeypatch, tmp_path, 1999,
+                                      learned={"1999": "Gemini 3.8 Flash (High)"})
+    assert summary["cost30d"] == pytest.approx(_FLASH_38_COST)
+    assert {row["model"] for row in summary["modelBreakdown"]} == {"Gemini 3.8 Flash"}
+
+
+def test_static_enum_table_prices_gemini_3_8_flash_without_learned_names(monkeypatch, tmp_path):
+    """Cold start / a machine that never ran the live RPC: no learnedModelNames, so the
+    static table alone must name and price the current Flash enums."""
+    for me in (1318, 1319, 1320):
+        summary = _summary_for_disk_entry(monkeypatch, tmp_path, me)
+        assert summary["cost30d"] == pytest.approx(_FLASH_38_COST), me
+
+
 def test_no_summary_without_tokens(cli_paths, monkeypatch, tmp_path):
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ide_ledger.json")

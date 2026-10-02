@@ -265,10 +265,10 @@ def test_embedded_fallback_anthropic_has_1h_write_at_2x_input():
 
 def test_litellm_prefixed_model_id_resolves_to_live_price_not_fallback():
     raw = {
-        "gemini/gemini-3.5-flash": {
+        "gemini/gemini-3.5-flash": {  # deliberately != the embedded fallback row
             "litellm_provider": "gemini", "mode": "chat",
-            "input_cost_per_token": 1.5e-06, "output_cost_per_token": 9.0e-06,
-            "cache_read_input_token_cost": 1.5e-07,
+            "input_cost_per_token": 1.25e-06, "output_cost_per_token": 8.0e-06,
+            "cache_read_input_token_cost": 1.25e-07,
         },
         "xai/grok-4": {
             "litellm_provider": "xai", "mode": "chat",
@@ -280,9 +280,9 @@ def test_litellm_prefixed_model_id_resolves_to_live_price_not_fallback():
     with patch.object(pricing_data, "_load_cache", return_value=active):
         # Bare (un-prefixed) query form -> live rate, not the embedded fallback.
         gemini_prices = pricing_data.get_pricing("gemini-3.5-flash")
-        assert gemini_prices["input"] == pytest.approx(1.5)
-        assert gemini_prices["output"] == pytest.approx(9.0)
-        assert gemini_prices["cache_read"] == pytest.approx(0.15)
+        assert gemini_prices["input"] == pytest.approx(1.25)
+        assert gemini_prices["output"] == pytest.approx(8.0)
+        assert gemini_prices["cache_read"] == pytest.approx(0.125)
         fallback = dict(pricing_data._FALLBACK_PRICING)
         assert gemini_prices != fallback["gemini-3.5-flash"]
 
@@ -391,3 +391,24 @@ def test_memo_written_when_catalog_unchanged():
     pricing_data._resolve_memo.clear()
     assert pricing_data.get_pricing("steady-model")["input"] == 2.0
     assert "steady-model" in pricing_data._resolve_memo
+
+
+# Google's published per-MTok rates (ai.google.dev/gemini-api/docs/pricing, 2026-10-01;
+# 3.6-3.8 Flash at the introductory rate that runs through 2026-12-31).
+_GEMINI_FLASH_PRICES = {
+    "gemini-3.8-flash":      {"input": 0.75, "output": 3.75, "cache_read": 0.075},
+    "gemini-3.7-flash":      {"input": 0.75, "output": 3.75, "cache_read": 0.075},
+    "gemini-3.6-flash":      {"input": 0.75, "output": 3.75, "cache_read": 0.075},
+    "gemini-3.5-flash":      {"input": 1.50, "output": 9.00, "cache_read": 0.15},
+    "gemini-3.5-flash-lite": {"input": 0.30, "output": 2.50, "cache_read": 0.03},
+    "gemini-3.1-flash-lite": {"input": 0.25, "output": 1.50, "cache_read": 0.025},
+}
+
+
+def test_offline_fallback_prices_current_gemini_flash_models_exactly(monkeypatch, tmp_path):
+    """Antigravity usage is mostly Gemini Flash. Offline, 3.6-3.8 Flash resolved to {} (so
+    the Antigravity summary billed them at the Pro default), and the 3.5 Flash row held
+    3.5 Flash-Lite's rate."""
+    monkeypatch.setattr(pricing_data, "PRICING_CACHE_PATH", tmp_path / "missing" / "pricing_cache.json")
+    for model, expected in _GEMINI_FLASH_PRICES.items():
+        assert pricing_data.get_pricing(model) == expected, model
