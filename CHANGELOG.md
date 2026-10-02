@@ -7,6 +7,11 @@ Notable changes to TallyBar. Format follows
 ## [Unreleased]
 
 ### Fixed
+- Claude cost on a first run or offline (no pricing cache yet) now uses the right
+  rates for Claude Opus 5.5, Opus 5, Sonnet 5.5, Sonnet 5, Fable 5.1 and Mythos 5 / 5.1.
+  The built-in price table predated these models, so they were billed at older Sonnet
+  rates or the wrong cache-read rate (about 16% too high over 30 days on a real log).
+  Online pricing was already correct.
 - Antigravity CLI cost was understated: cache reads captured from the CLI's
   conversation databases were collapsed to each conversation's peak instead of
   billed per call, while the same calls captured live were billed in full. Every

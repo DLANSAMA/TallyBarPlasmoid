@@ -56,13 +56,44 @@ def test_fallback_supplements_models_missing_from_live_catalog():
 
 
 def test_embedded_exact_match_claude_sonnet_5_not_sonnet_4():
-    """claude-sonnet-5 must resolve to its own row (3.0/15.0), not fall through to a
-    differently-versioned sonnet-4-x key via substring matching."""
+    """claude-sonnet-5 must resolve to its own row (2.0/10.0), not fall through to a
+    differently-versioned sonnet-4-x key (3.0/15.0) via substring matching."""
     with patch.object(pricing_data, "_load_cache", return_value=None), \
          patch.object(pricing_data, "_load_cache_stale", return_value=None):
         prices = pricing_data.get_pricing("claude-sonnet-5")
-        assert prices["input"] == 3.0
-        assert prices["output"] == 15.0
+        assert prices["input"] == 2.0
+        assert prices["output"] == 10.0
+
+
+# Anthropic's published per-MTok rates (identical to the LiteLLM catalog on 2026-10-01).
+# Note the cache reads: Opus 5.5 reads at 0.05x input and Fable/Mythos 5.1 at 0.025x, so a
+# table that derived reads as 0.1x input would fail here.
+_CLAUDE_5_PRICES = {
+    "claude-opus-5-5":   {"input": 4.00, "output": 20.00, "cache_write": 5.00, "cache_write_1h": 8.00, "cache_read": 0.20},
+    "claude-opus-5":     {"input": 5.00, "output": 25.00, "cache_write": 6.25, "cache_write_1h": 10.00, "cache_read": 0.50},
+    "claude-sonnet-5-5": {"input": 2.00, "output": 10.00, "cache_write": 2.50, "cache_write_1h": 4.00, "cache_read": 0.20},
+    "claude-sonnet-5":   {"input": 2.00, "output": 10.00, "cache_write": 2.50, "cache_write_1h": 4.00, "cache_read": 0.20},
+    "claude-fable-5-1":  {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 0.25},
+    "claude-fable-5":    {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 1.00},
+    "claude-mythos-5-1": {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 0.25},
+    "claude-mythos-5":   {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 1.00},
+}
+
+
+def test_offline_fallback_prices_every_current_claude_model_exactly(monkeypatch, tmp_path):
+    """First run / offline / CI: no pricing cache on disk, so get_pricing bills straight
+    off _FALLBACK_PRICING. Every current Claude model must resolve to its exact published
+    rates — not {} (usage_cost_usd then bills the claude-sonnet-4 family default), and
+    not a shorter family key (claude-opus-5-5 -> claude-opus-5, claude-fable-5-1 ->
+    claude-fable-5's 4x cache-read rate)."""
+    monkeypatch.setattr(pricing_data, "PRICING_CACHE_PATH", tmp_path / "missing" / "pricing_cache.json")
+    for model, expected in _CLAUDE_5_PRICES.items():
+        assert pricing_data.get_pricing(model) == expected, model
+    assert pricing_data._active_pricing == list(pricing_data._FALLBACK_PRICING)
+    for key, prices in pricing_data._FALLBACK_PRICING:
+        if key.startswith("claude-"):
+            assert pricing_data.get_pricing(key), key
+            assert {"input", "output", "cache_write", "cache_write_1h", "cache_read"} <= prices.keys(), key
 
 
 def test_embedded_exact_match_grok_46_not_grok_4():

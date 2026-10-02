@@ -61,13 +61,25 @@ _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
     # cache_write_1h is the 1-hour write rate (2x input) — usage_cost_usd splits
     # cache_creation by the on-disk ephemeral_1h/5m breakdown and bills each portion
     # at its own rate. (LiteLLM is the source of truth; this ships for offline use.)
+    # cache_read is NOT always 0.1x input: Opus 5.5 reads at 0.05x and Fable/Mythos 5.1
+    # at 0.025x, so copy each published rate rather than deriving it. Every 5.x model
+    # needs its own exact key — family matching would price "claude-opus-5-5" off a
+    # "claude-opus-5" row, and with no matching row at all usage_cost_usd falls back to
+    # the claude-sonnet-4 family default.
+    # Rates: Anthropic's published pricing, identical to the LiteLLM catalog (2026-10-01).
+    ("claude-fable-5-1",     {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 0.25}),
     ("claude-fable-5",       {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 1.00}),
+    ("claude-mythos-5-1",    {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 0.25}),
+    ("claude-mythos-5",      {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 1.00}),
+    ("claude-opus-5-5",      {"input":  4.00, "output": 20.00, "cache_write":  5.00, "cache_write_1h":  8.00, "cache_read": 0.20}),
+    ("claude-opus-5",        {"input":  5.00, "output": 25.00, "cache_write":  6.25, "cache_write_1h": 10.00, "cache_read": 0.50}),
+    ("claude-sonnet-5-5",    {"input":  2.00, "output": 10.00, "cache_write":  2.50, "cache_write_1h":  4.00, "cache_read": 0.20}),
+    ("claude-sonnet-5",      {"input":  2.00, "output": 10.00, "cache_write":  2.50, "cache_write_1h":  4.00, "cache_read": 0.20}),
     ("claude-opus-4-8",      {"input":  5.00, "output": 25.00, "cache_write":  6.25, "cache_write_1h": 10.00, "cache_read": 0.50}),
     ("claude-opus-4-7",      {"input":  5.00, "output": 25.00, "cache_write":  6.25, "cache_write_1h": 10.00, "cache_read": 0.50}),
     ("claude-opus-4-6",      {"input":  5.00, "output": 25.00, "cache_write":  6.25, "cache_write_1h": 10.00, "cache_read": 0.50}),
     ("claude-opus-4-5",      {"input":  5.00, "output": 25.00, "cache_write":  6.25, "cache_write_1h": 10.00, "cache_read": 0.50}),
     ("claude-opus-4-1",      {"input": 15.00, "output": 75.00, "cache_write": 18.75, "cache_write_1h": 30.00, "cache_read": 1.50}),
-    ("claude-sonnet-5",      {"input":  3.00, "output": 15.00, "cache_write":  3.75, "cache_write_1h":  6.00, "cache_read": 0.30}),
     ("claude-sonnet-4-6",    {"input":  3.00, "output": 15.00, "cache_write":  3.75, "cache_write_1h":  6.00, "cache_read": 0.30}),
     ("claude-sonnet-4-5",    {"input":  3.00, "output": 15.00, "cache_write":  3.75, "cache_write_1h":  6.00, "cache_read": 0.30}),
     ("claude-haiku-4-5",     {"input":  1.00, "output":  5.00, "cache_write":  1.25, "cache_write_1h":  2.00, "cache_read": 0.10}),
