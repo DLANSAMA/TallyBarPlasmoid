@@ -875,22 +875,22 @@ def test_parse_cache_codex_transparent(tmp_path):
     assert "Today: $1.10" in warm["today"]   # model resolved from cache, priced correctly
 
 
-def test_local_summary_deadline_stops_walk_without_crashing(tmp_path):
-    # A deadline already in the past must stop the file walk before it does any I/O (not
-    # raise, not hang) -- a slow cold parse mustn't burn the whole cost-scan budget. And
-    # the cut-short walk must NOT persist a partial file map into the on-disk parse cache
-    # (the cache must stay a pure function of a COMPLETE walk's file bytes, never a
-    # partial/inconsistent snapshot masquerading as a full one).
+def test_local_summary_deadline_stops_walk_and_raises(tmp_path):
+    # A deadline already in the past stops the file walk before it does any I/O, and the
+    # summarizer RAISES rather than returning a summary built from partial records (which
+    # would show understated totals as if complete). Nothing was parsed, so nothing is
+    # checkpointed.
     proj = tmp_path / "proj"
     proj.mkdir()
     (proj / "a.jsonl").write_text(json.dumps(_claude_rec("r1", 5000)) + "\n", encoding="utf-8")
     cache = tmp_path / "cache"
 
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
-        expired = accounting.local_claude_token_summary(
+    with patch("accounting.model_pricing", return_value=_FLAT_PRICES), \
+            pytest.raises(accounting.LogScanIncomplete):
+        accounting.local_claude_token_summary(
             projects_dir=proj, now=_NOW, cache_dir=cache, deadline=time.time() - 1000)
-    assert expired is None                                  # no time to parse anything
-    assert not (cache / "claude_logs.json").exists()         # incomplete walk -> no cache write
+    assert not (cache / "claude_logs.json").exists()         # no progress -> no cache write
+    assert issubclass(accounting.LogScanIncomplete, TimeoutError)   # -> cost_summary_timeout
 
     # A deadline comfortably in the future must behave exactly like no deadline at all.
     with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
@@ -904,7 +904,7 @@ def test_local_summary_deadline_stops_walk_without_crashing(tmp_path):
 def test_local_summary_deadline_threads_through_gemini_walker(tmp_path):
     # Gemini's summarizer passes BOTH walker= and deadline= to _cached_log_records --
     # guard that the two kwargs coexist correctly (an expired deadline still short-circuits
-    # the walker-driven walk cleanly) and that an ample deadline is fully transparent.
+    # the walker-driven walk, and raises) and that an ample deadline is fully transparent.
     session = {"messages": [{
         "type": "gemini", "timestamp": _NOW.isoformat(), "model": "gemini-3.5-flash",
         "tokens": {"input": 100000, "output": 4000, "cached": 30000,
@@ -913,10 +913,10 @@ def test_local_summary_deadline_threads_through_gemini_walker(tmp_path):
     (tmp_path / "session-a.json").write_text(json.dumps(session), encoding="utf-8")
     cache = tmp_path / "cache"
 
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
-        expired = accounting.local_gemini_token_summary(
+    with patch("accounting.model_pricing", return_value=_FLAT_PRICES), \
+            pytest.raises(accounting.LogScanIncomplete):
+        accounting.local_gemini_token_summary(
             gemini_dir=tmp_path, now=_NOW, cache_dir=cache, deadline=time.time() - 1000)
-    assert expired is None
     assert not (cache / "gemini_logs.json").exists()
 
     with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
@@ -1756,3 +1756,117 @@ def test_codex_total_only_events_contribute_their_increase(tmp_path):
     recs = accounting._parse_codex_file(f)
     assert [r["u"]["total_tokens"] for r in recs] == [110, 170]
     assert recs[1]["u"]["input_tokens"] == 150 and recs[1]["u"]["output_tokens"] == 20
+
+
+# --- A deadline-cut walk checkpoints, so a cold cache converges across refreshes ---------
+# A parse-version bump empties the cache; if the full re-parse didn't fit one refresh and a
+# cut walk saved nothing, every refresh restarted from zero and the scan never finished
+# (the "Cost scan timed out" banner stuck for good on a large history).
+
+class _FakeClock:
+    """Stands in for log_parsers.time: the walk's deadline check is its only clock read."""
+
+    def __init__(self, start=1000.0):
+        self.now = start
+
+    def time(self):
+        return self.now
+
+
+def _counting_parser(clock, seconds_per_file, parsed):
+    def parse(path):
+        parsed.append(path.name)
+        clock.now += seconds_per_file
+        return [{"f": path.name}]
+    return parse
+
+
+def _three_files(tmp_path):
+    root = tmp_path / "logs"
+    root.mkdir()
+    for name in ("a.jsonl", "b.jsonl", "c.jsonl"):
+        (root / name).write_text("{}\n", encoding="utf-8")
+    return root, (lambda r: sorted(r.glob("*.jsonl")))
+
+
+def test_cut_walk_checkpoints_and_the_next_walk_resumes(tmp_path, monkeypatch):
+    root, walker = _three_files(tmp_path)
+    cache = tmp_path / "cache" / "x_logs.json"
+    clock = _FakeClock()
+    monkeypatch.setattr(_lp, "time", clock)
+    parsed: list[str] = []
+    parser = _counting_parser(clock, 10.0, parsed)
+    # The walk stops _CHECKPOINT_MARGIN_SECONDS before the deadline: a and b fit, c doesn't.
+    deadline = clock.now + 15.0 + _lp._CHECKPOINT_MARGIN_SECONDS
+
+    with pytest.raises(_lp.LogScanIncomplete):
+        _lp._cached_log_records(root, "*.jsonl", cache, parser, 7, walker=walker, deadline=deadline)
+    assert parsed == ["a.jsonl", "b.jsonl"]
+    saved = json.loads(cache.read_text())
+    assert saved["version"] == 7
+    assert sorted(Path(k).name for k in saved["files"]) == ["a.jsonl", "b.jsonl"]   # progress kept
+
+    # Next refresh: only c is parsed; the result equals a cache-less full parse.
+    parsed.clear()
+    records = _lp._cached_log_records(root, "*.jsonl", cache, parser, 7, walker=walker,
+                                      deadline=clock.now + 100.0)
+    assert parsed == ["c.jsonl"]
+    truth = _lp._cached_log_records(root, "*.jsonl", None, _counting_parser(_FakeClock(), 0, []), 7,
+                                    walker=walker)
+    assert records == truth
+    assert sorted(Path(k).name for k in json.loads(cache.read_text())["files"]) == ["a.jsonl", "b.jsonl", "c.jsonl"]
+
+
+def test_cold_cache_converges_even_when_no_refresh_fits_a_full_parse(tmp_path, monkeypatch):
+    """Each refresh has time for ONE file. The old all-or-nothing save never finished;
+    with checkpoints the third refresh completes."""
+    root, walker = _three_files(tmp_path)
+    cache = tmp_path / "cache" / "x_logs.json"
+    clock = _FakeClock()
+    monkeypatch.setattr(_lp, "time", clock)
+    parsed: list[str] = []
+    parser = _counting_parser(clock, 10.0, parsed)
+    outcomes = []
+    for _refresh in range(3):
+        deadline = clock.now + 5.0 + _lp._CHECKPOINT_MARGIN_SECONDS
+        try:
+            _lp._cached_log_records(root, "*.jsonl", cache, parser, 7, walker=walker, deadline=deadline)
+            outcomes.append("complete")
+        except _lp.LogScanIncomplete:
+            outcomes.append("cut")
+    assert outcomes == ["cut", "cut", "complete"]
+    assert parsed == ["a.jsonl", "b.jsonl", "c.jsonl"]           # each file parsed exactly once
+
+
+def test_cut_walk_keeps_unvisited_entries_of_a_same_version_cache(tmp_path, monkeypatch):
+    root, walker = _three_files(tmp_path)
+    cache = tmp_path / "cache" / "x_logs.json"
+    clock = _FakeClock()
+    monkeypatch.setattr(_lp, "time", clock)
+    parsed: list[str] = []
+    parser = _counting_parser(clock, 10.0, parsed)
+    _lp._cached_log_records(root, "*.jsonl", cache, parser, 7, walker=walker)    # warm, complete
+    _bump_mtime(root / "a.jsonl")                                              # a changed
+    parsed.clear()
+    with pytest.raises(_lp.LogScanIncomplete):
+        _lp._cached_log_records(root, "*.jsonl", cache, parser, 7, walker=walker,
+                                deadline=clock.now + 5.0 + _lp._CHECKPOINT_MARGIN_SECONDS)
+    assert parsed == ["a.jsonl"]
+    files = json.loads(cache.read_text())["files"]
+    assert sorted(Path(k).name for k in files) == ["a.jsonl", "b.jsonl", "c.jsonl"]  # b, c kept
+
+
+def test_compute_local_cost_summaries_never_archives_a_cut_scan(monkeypatch):
+    """A cut walk propagates out of the cost scan, so update_cost_archive never sees a
+    partial month total and build_snapshot reports cost_summary_timeout."""
+    from providers import cost as costmod
+    archived = []
+    monkeypatch.setattr(costmod, "update_cost_archive", lambda *a, **k: archived.append(a))
+
+    def cut(**_kw):
+        raise accounting.LogScanIncomplete("cut")
+
+    monkeypatch.setattr(accounting, "local_codex_token_summary", cut)
+    with pytest.raises(TimeoutError):
+        costmod.compute_local_cost_summaries(deadline=time.time() + 60)
+    assert archived == []

@@ -16,6 +16,10 @@ Notable changes to TallyBar. Format follows
   turned off stays off.
 
 ### Fixed
+- "Cost scan timed out" no longer sticks after an update that changes how logs are
+  read. With a large Claude history the first full re-read could take longer than one
+  refresh allows, and because none of that work was kept, every refresh started over.
+  Progress is now saved as it goes, so the re-read finishes over the next few refreshes.
 - The provider chips in Settings no longer run past the right edge of the card.
 - Antigravity CLI 1.2 and later: TallyBar can read usage and plan status from a
   running `agy` session again. `agy` now requires a security token on its local API,

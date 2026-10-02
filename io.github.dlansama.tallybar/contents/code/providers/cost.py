@@ -1197,9 +1197,10 @@ def compute_local_cost_summaries(deadline: float | None = None) -> dict[str, dic
     finish — keeping the summaries OUT of ``providers`` until then is what makes a scan
     timeout a clean no-op (no torn write to roll back). The ``deadline`` is threaded into
     the Antigravity ledger's per-DB scan loop exactly as before, AND into each local-log
-    summarizer's file walk (accounting._cached_log_records) — a slow cold parse checks in
-    against the same budget instead of running unbounded and self-perpetuating across
-    refreshes with no incremental checkpoint."""
+    summarizer's file walk (accounting._cached_log_records). A walk the deadline cuts
+    checkpoints its parse cache and raises LogScanIncomplete (a TimeoutError), so a slow
+    cold parse finishes over several refreshes instead of restarting each time, and no
+    summary — nor the cost archive below — is ever built from partial records."""
     from accounting import (local_claude_token_summary, local_codex_token_summary,
                             local_gemini_token_summary, local_grok_token_summary)
     from .grok import grok_billing_period

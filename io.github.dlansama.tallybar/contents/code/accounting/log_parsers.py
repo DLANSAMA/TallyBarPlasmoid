@@ -41,6 +41,17 @@ _CLAUDE_PARSE_VERSION = 5          # bump when _parse_claude_file's output shape
 _CODEX_PARSE_VERSION = 3           # bump when _parse_codex_file's output shape changes
 _GROK_PARSE_VERSION = 3            # bump when _parse_grok_file's output shape changes
 _GEMINI_PARSE_VERSION = 2          # bump when _parse_gemini_file's output shape changes
+# A deadline-cut walk stops this long BEFORE the deadline so its checkpoint save lands
+# while the process is still alive (the scan runs on a daemon thread that dies with the
+# one-shot backend). A 45 MB Claude cache saves in ~0.2 s; 1.5 s leaves room for a larger
+# cache and for GIL contention with the provider fetches.
+_CHECKPOINT_MARGIN_SECONDS = 1.5
+
+
+class LogScanIncomplete(TimeoutError):
+    """A parse-cache walk ran out of time. Its progress is checkpointed to the cache, but
+    the records are partial, so no summary may be built from them. A TimeoutError, so the
+    cost scan reports ``cost_summary_timeout`` exactly like the outer timeout."""
 
 
 def _load_parse_cache(cache_path: Path, parse_version: int) -> dict[str, dict[str, Any]]:
@@ -152,13 +163,24 @@ def _cached_log_records(root: Path, pattern: str, cache_path: Path | None,
                         parser, parse_version: int, walker=None,
                         deadline: float | None = None,
                         incremental: bool = False) -> list[dict[str, Any]]:
+    """Every record under ``root``, re-parsing only files whose bytes changed since the
+    cached parse.
+
+    A walk cut by ``deadline`` CHECKPOINTS what it parsed and raises LogScanIncomplete. It
+    stops ``_CHECKPOINT_MARGIN_SECONDS`` early so the save lands before the backend exits.
+    Without the checkpoint, a cold cache (first run, or a parse-version bump) whose full
+    parse doesn't fit one refresh would restart from zero every time and never finish. A
+    partial cache is safe because each entry is reused only while its file's mtime and size
+    match, and a file missing from the cache is simply parsed. Partial records are not
+    safe, hence the raise."""
     old_files = _load_parse_cache(cache_path, parse_version) if cache_path is not None else {}
     new_files: dict[str, dict[str, Any]] = {}
     records: list[dict[str, Any]] = []
     changed = False
     complete = True
+    stop_at = None if deadline is None else deadline - _CHECKPOINT_MARGIN_SECONDS
     for path in (walker(root) if walker is not None else root.rglob(pattern)):
-        if deadline is not None and time.time() >= deadline:
+        if stop_at is not None and time.time() >= stop_at:
             complete = False
             break
         try:
@@ -210,6 +232,12 @@ def _cached_log_records(root: Path, pattern: str, cache_path: Path | None,
         records.extend(recs)
     if cache_path is not None and complete and (changed or len(new_files) != len(old_files)):
         _save_parse_cache(cache_path, parse_version, new_files)
+    elif cache_path is not None and not complete and changed:
+        # Unvisited files keep their old (still-valid) entries; a later COMPLETE walk
+        # rebuilds the map from scratch, which prunes deleted files.
+        _save_parse_cache(cache_path, parse_version, {**old_files, **new_files})
+    if not complete:
+        raise LogScanIncomplete(f"log scan of {root.name or root} ran out of time; progress saved")
     return records
 
 

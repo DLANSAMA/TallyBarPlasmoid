@@ -368,6 +368,38 @@ async def test_cost_summary_timeout_leaves_providers_intact():
         assert "_SENTINEL_" not in (prov.get("costSummary") or {})  # apply was skipped on timeout
 
 
+@pytest.mark.asyncio
+async def test_cut_log_scan_reports_a_cost_timeout_not_partial_totals():
+    """A parse-cache walk the deadline cuts raises LogScanIncomplete (after checkpointing).
+    It lands in the same branch as the outer timeout: the banner flag is set and no summary
+    is applied, so understated totals never show as if complete."""
+    from accounting import LogScanIncomplete
+    args = MagicMock()
+    args.no_network = False
+    args.timeout = 1.0
+
+    def cut_compute(deadline=None):
+        raise LogScanIncomplete("log scan of projects ran out of time; progress saved")
+
+    async def fast_ok(func, *a, **k):
+        return {"status": "ok", "limits": []}
+
+    async def benign_rpc(*a, **k):
+        return {"label": "Codex", "status": "not-running", "limits": []}
+
+    with patch("backend.load_config", return_value={}), \
+         patch("backend.load_snapshot", return_value={}), \
+         patch("backend.collect_browser_sessions", return_value=([], {})), \
+         patch("backend.run_threaded_provider", side_effect=fast_ok), \
+         patch("backend.run_codex_rpc", side_effect=benign_rpc), \
+         patch("backend.compute_local_cost_summaries", side_effect=cut_compute):
+        res = await backend.build_snapshot(args)
+
+    assert res["diagnostics"].get("cost_summary_timeout") is True
+    assert "cost_summary_error" not in res["diagnostics"]
+    assert all("costSummary" not in p for p in res["providers"].values())
+
+
 # --- Codex RPC -> cookie fallback selection in build_snapshot ---
 
 async def _build_snapshot_codex(codex_rpc_result, codex_cookie_result):
