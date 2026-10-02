@@ -83,6 +83,13 @@ def test_cli_priced_per_model_not_pro_default(cli_paths, monkeypatch, tmp_path):
     """A Flash CLI session must cost less than the same tokens at the Pro default rate."""
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ide_ledger.json")
+    # A pinned catalog: the resolution order is under test, not today's LiteLLM rates
+    # (this used to read whatever the developer's own pricing cache held). No 3.6 Flash
+    # and no gpt-oss key, so those two must come from _EXTRA_MODEL_PRICES.
+    catalog = {"gemini-3.5-flash": {"input": 1.5, "output": 9.0, "cache_read": 0.15},
+               "gemini-3.1-pro": {"input": 2.0, "output": 12.0, "cache_read": 0.2},
+               "claude-opus-4-6": {"input": 5.0, "output": 25.0, "cache_read": 0.5}}
+    monkeypatch.setattr(costmod, "model_pricing", lambda name, *a, **k: dict(catalog.get(name, {})))
     today = dt.date.today().isoformat()
     toks = {"u": 100000, "c": 0, "o": 50000, "t": 0, "x": 0}
 
@@ -98,7 +105,7 @@ def test_cli_priced_per_model_not_pro_default(cli_paths, monkeypatch, tmp_path):
     opus_cost = cost_with({"model": "Claude Opus 4.6 (Thinking)", **toks})
     # GPT-OSS has no catalog price -> our embedded estimate (cheap), must NOT fall back to Pro.
     oss_cost = cost_with({"model": "GPT-OSS 120B", **toks})
-    # Gemini 3.6 Flash: no LiteLLM key yet -> the _EXTRA_MODEL_PRICES estimate
+    # Gemini 3.6 Flash: no catalog key here -> the _EXTRA_MODEL_PRICES estimate
     # ($1.50/$7.50, output cheaper than 3.5 Flash's $9), must NOT fall back to Pro.
     flash36_cost = cost_with({"model": "Gemini 3.6 Flash (High)", **toks})
     assert 0 < oss_cost < flash36_cost < flash_cost < pro_cost < opus_cost
