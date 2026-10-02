@@ -18,6 +18,10 @@ Notable changes to TallyBar. Format follows
   is now estimated from the visible text and tool input they produced, and hovering
   the cost section says how many output tokens were estimated. Main-session messages
   are unaffected.
+- Claude messages logged without a request id are counted once. Some Claude Code
+  transcripts carry no request id on any line, so each of their messages was billed
+  once per content block (two to three times), and a message repeated from another
+  session was billed again (about 2% of 30-day Claude cost on a real log).
 - The snapshot's `diagnostics.unpriced_models` names any Claude model in the logs that
   has no price of its own and is billed at the family default rate.
 - Antigravity CLI cost was understated: cache reads captured from the CLI's

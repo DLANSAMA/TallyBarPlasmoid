@@ -523,6 +523,42 @@ def test_either_final_marker_disables_the_estimate(tmp_path, stop_reason, detail
     assert "estimatedOutputTokens" not in summary
 
 
+def _fork_line(msg_id, uuid, cache_read, out, request_id=None):
+    """A transcript line as Claude Code writes it; a forked session's copy has no requestId."""
+    rec = {"type": "assistant", "timestamp": _NOW.isoformat(), "uuid": uuid,
+           "message": {"id": msg_id, "model": "claude-opus-5-5", "stop_reason": None,
+                       "usage": {"input_tokens": 10, "cache_read_input_tokens": cache_read,
+                                 "output_tokens": out},
+                       "content": [{"type": "text", "text": "x"}]}}
+    if request_id:
+        rec["requestId"] = request_id
+    return json.dumps(rec) + "\n"
+
+
+def test_requestid_less_messages_and_their_copies_count_once(tmp_path):
+    """Some transcripts carry no requestId on any line, and some of them repeat another
+    session's messages. Keyed on requestId-then-uuid, each requestId-less message was
+    billed once per content-block line, and a repeated one again. Every one of those lines
+    shares the message id, so each message must count exactly once."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    # Parent: message A, two content-block lines, with requestId.
+    (proj / "parent.jsonl").write_text(
+        _fork_line("msg_A", "u-a1", 1000, 40, request_id="req_A")
+        + _fork_line("msg_A", "u-a2", 1000, 40, request_id="req_A"), encoding="utf-8")
+    # No requestId anywhere: message A repeated, then message B in three lines.
+    (proj / "fork.jsonl").write_text(
+        _fork_line("msg_A", "u-a1", 1000, 40) + _fork_line("msg_A", "u-a2", 1000, 40)
+        + _fork_line("msg_B", "u-b1", 2000, 60) + _fork_line("msg_B", "u-b2", 2000, 60)
+        + _fork_line("msg_B", "u-b3", 2000, 60), encoding="utf-8")
+    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+        summary = accounting.local_claude_token_summary(projects_dir=tmp_path, now=_NOW, cache_dir=None)
+    # A: 10 + 1000 + 40 = 1050 once; B: 10 + 2000 + 60 = 2070 once.
+    # requestId-then-uuid keying gave 3 x 1050 + 3 x 2070 = 9360.
+    assert summary["tokens30d"] == 1050 + 2070
+    assert summary["cost30d"] == pytest.approx((1050 + 2070) * 10 / 1e6)
+
+
 def test_unpriced_claude_model_is_named(tmp_path):
     proj = tmp_path / "proj"
     proj.mkdir()

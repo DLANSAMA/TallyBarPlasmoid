@@ -37,7 +37,7 @@ _UNSET = object()
 
 _PARSE_CACHE_DIR = Path.home() / ".tallybar" / "cache"
 _CACHE_SCHEMA_VERSION = 1          # bump to invalidate ALL parse caches at once
-_CLAUDE_PARSE_VERSION = 4          # bump when _parse_claude_file's output shape changes
+_CLAUDE_PARSE_VERSION = 5          # bump when _parse_claude_file's output shape changes
 _CODEX_PARSE_VERSION = 3           # bump when _parse_codex_file's output shape changes
 _GROK_PARSE_VERSION = 3            # bump when _parse_grok_file's output shape changes
 _GEMINI_PARSE_VERSION = 2          # bump when _parse_gemini_file's output shape changes
@@ -262,6 +262,13 @@ def _parse_claude_file(path: Path, start: int = 0,
     mangled line now raises UnicodeDecodeError, which is skipped alongside JSONDecodeError
     rather than escaping the way it used to in text mode.
 
+    The dedup key ``r`` is the API message id, falling back to ``requestId`` and then the
+    line uuid. Every line of one message (one per content block, each carrying the full
+    usage) shares that id, and so does a copy of the message in another transcript. Some
+    transcripts carry no ``requestId`` on any line (they have no ``version`` field either,
+    and some repeat another session's messages); keying on ``requestId`` first billed each
+    such message once per content-block line, and a repeated message again.
+
     Subagent transcripts (any file under a ``subagents/`` directory) carry two extra
     per-line fields for the summarizer's output estimate: ``f`` marks a line that holds
     final usage (a non-null ``stop_reason`` or ``usage.output_tokens_details``), and a
@@ -303,7 +310,7 @@ def _parse_claude_file(path: Path, start: int = 0,
                 "t": record.get("timestamp"),
                 "m": message.get("model") or record.get("model"),
                 "u": slim_usage(usage),
-                "r": str(record.get("requestId") or record.get("uuid") or ""),
+                "r": str(message.get("id") or record.get("requestId") or record.get("uuid") or ""),
             }
             if subagent:
                 if (message.get("stop_reason") is not None
