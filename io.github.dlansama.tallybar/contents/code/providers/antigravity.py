@@ -24,6 +24,7 @@ from typing import Any
 from accounting import (
     antigravity_credit_state,
     antigravity_tier,
+    now_iso,
 )
 from http_helpers import scrub_credentials
 from io_helpers import atomic_write_text
@@ -95,6 +96,8 @@ ANTIGRAVITY_REMOTE_BASE_URL = "https://cloudcode-pa.googleapis.com"
 # percentages won't match /usage. The host isn't in any config (it's baked into the agy binary),
 # so antigravity_cloudcode_host() detects it from agy's own request logs, defaulting to prod.
 ANTIGRAVITY_CLOUDCODE_LOG_DIR = Path.home() / ".gemini" / "antigravity-cli" / "log"
+# agy CSRF tokens recovered from the commands agy runs, keyed by agy pid (see _find_agy_csrf_token).
+ANTIGRAVITY_CLI_SESSIONS_PATH = Path.home() / ".tallybar" / "antigravity" / "cli_sessions.json"
 _ANTIGRAVITY_CLOUDCODE_HOST_RE = re.compile(r"https://([A-Za-z0-9.-]*cloudcode-pa\.googleapis\.com)")
 ANTIGRAVITY_BINARY_SCAN_CHUNK_BYTES = 10 * 1024 * 1024  # 10 MiB window when scanning the language-server binary for OAuth client pairs
 ANTIGRAVITY_BINARY_SCAN_OVERLAP_BYTES = 1024  # carry-over so an OAuth id/secret split across two read chunks is still matched
@@ -123,20 +126,120 @@ def _parse_language_server_cmdline(cmd_str: str, args: list[str]) -> tuple[str, 
     return token, scheme
 
 
-def _parse_agy_cmdline(args: list[str]) -> tuple[str, str] | None:
-    """If a process cmdline is the Antigravity CLI (``agy``), return ``("", "http")``.
+def _parse_agy_cmdline(args: list[str], pid: int | None = None) -> tuple[str, str] | None:
+    """If a process cmdline is the Antigravity CLI (``agy``), return ``(csrf_token, "http")``.
 
-    The CLI runs an *in-process* server on loopback that speaks the same Connect-RPC
-    API as the Desktop/IDE language servers but requires NO CSRF token (verified live
-    2026-06-09: GetAllCascadeTrajectories / GetCascadeTrajectoryGeneratorMetadata /
-    GetUserStatus / GetAvailableModels all answer token-less on the CLI's listening
-    ports, plain http). The empty token tells the POST helpers to omit the CSRF
-    header. Without this, CLI sessions are invisible to the RPC harvest — agy's
-    cmdline is just ``agy``, which fails the language-server gate above.
+    The CLI runs an *in-process* server on loopback that speaks the same Connect-RPC API
+    as the Desktop/IDE language servers (plain http on one of its listening ports). agy
+    1.2.x guards it with a CSRF token — without the header every call fails 401 "missing
+    CSRF token" — but, unlike a language server, puts it nowhere on its cmdline:
+    ``_find_agy_csrf_token(pid)`` recovers it. With no pid, or when it can't be found,
+    the token is empty and the POST helpers omit the header (what older, token-less agy
+    builds accepted). Without this, CLI sessions are invisible to the RPC harvest —
+    agy's cmdline is just ``agy``, which fails the language-server gate above.
     """
     if not args or os.path.basename(args[0] or "") != "agy":
         return None
-    return "", "http"
+    return (_find_agy_csrf_token(pid) if pid is not None else ""), "http"
+
+
+def _find_agy_csrf_token(agy_pid: int, proc_root: str = "/proc") -> str:
+    """agy's loopback CSRF token, or "" when it can't be recovered.
+
+    agy keeps the token off its cmdline and out of its own environment, and hands it as
+    ``ANTIGRAVITY_CSRF_TOKEN`` only to the commands its agent runs (shells, scripts — not
+    its statusLine command, not its MCP servers; checked against agy 1.2.14). So the token
+    is readable only while agy is running a command. The first refresh that catches one
+    records the token under agy's pid and process start time in
+    ``ANTIGRAVITY_CLI_SESSIONS_PATH`` (0600), and later refreshes reuse it for as long as
+    that agy process lives. Each agy serves its own token, so another process's record is
+    never used.
+    """
+    start = _proc_start_time(agy_pid, proc_root)
+    if start is None:
+        return ""
+    sessions = _load_agy_sessions()
+    entry = sessions.get(str(agy_pid))
+    if isinstance(entry, dict) and entry.get("start") == start:
+        token = entry.get("csrf_token")
+        if isinstance(token, str) and token:
+            return token
+    found = _agy_descendant_env(agy_pid, proc_root)
+    if not found:
+        return ""
+    token, address = found
+    live = {pid: rec for pid, rec in sessions.items()
+            if pid.isdigit() and isinstance(rec, dict)
+            and rec.get("start") is not None and rec.get("start") == _proc_start_time(int(pid), proc_root)}
+    live[str(agy_pid)] = {"csrf_token": token, "address": address, "start": start,
+                          "updated_at": now_iso()}
+    try:
+        atomic_write_text(ANTIGRAVITY_CLI_SESSIONS_PATH, json.dumps({"sessions": live}))
+    except OSError:
+        pass  # best-effort: the token is still used for this refresh
+    return token
+
+
+def _load_agy_sessions() -> dict[str, Any]:
+    try:
+        data = json.loads(ANTIGRAVITY_CLI_SESSIONS_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    sessions = data.get("sessions") if isinstance(data, dict) else None
+    return sessions if isinstance(sessions, dict) else {}
+
+
+def _proc_stat_fields(pid: int | str, proc_root: str = "/proc") -> list[str] | None:
+    """``/proc/<pid>/stat`` fields from ``state`` (field 3) on; the comm before them may hold
+    spaces and parentheses, so split after its LAST ``)``."""
+    try:
+        with open(f"{proc_root}/{pid}/stat", "rb") as fh:
+            return fh.read().rsplit(b")", 1)[1].decode("ascii", "replace").split()
+    except (OSError, IndexError):
+        return None
+
+
+def _proc_start_time(pid: int, proc_root: str = "/proc") -> str | None:
+    """The process start time (stat field 22), which tells a live pid from a reused one."""
+    fields = _proc_stat_fields(pid, proc_root)
+    return fields[19] if fields and len(fields) > 19 else None
+
+
+def _agy_descendant_env(agy_pid: int, proc_root: str = "/proc") -> tuple[str, str] | None:
+    """``(ANTIGRAVITY_CSRF_TOKEN, ANTIGRAVITY_LS_ADDRESS)`` from the environment of any
+    current-user process descended from ``agy_pid`` (tool commands often run a level or two
+    below it, under a shell), or None."""
+    try:
+        names = [n for n in os.listdir(proc_root) if n.isdigit()]
+    except OSError:
+        return None
+    my_uid = os.getuid()
+    parent: dict[str, str] = {}
+    for name in names:
+        try:
+            if os.stat(f"{proc_root}/{name}").st_uid != my_uid:
+                continue
+        except OSError:
+            continue
+        fields = _proc_stat_fields(name, proc_root)
+        if fields and len(fields) > 1:
+            parent[name] = fields[1]
+    target = str(agy_pid)
+    for name in parent:
+        node, hops = parent.get(name), 0
+        while node is not None and node != target and hops < 16:
+            node, hops = parent.get(node), hops + 1
+        if node != target:
+            continue
+        try:
+            with open(f"{proc_root}/{name}/environ", "rb") as fh:
+                env = dict(v.split(b"=", 1) for v in fh.read().split(b"\0") if b"=" in v)
+        except OSError:
+            continue
+        token = env.get(b"ANTIGRAVITY_CSRF_TOKEN", b"").decode("utf-8", "replace")
+        if token:
+            return token, env.get(b"ANTIGRAVITY_LS_ADDRESS", b"").decode("utf-8", "replace")
+    return None
 
 
 # One-shot-process scan memo. The backend runs as `python3 backend.py --once` and exits,
@@ -186,10 +289,11 @@ def _scan_antigravity_processes() -> list[tuple[int, str, str]]:
     Antigravity CLI (``agy``) serves the same API in-process (token-less). Querying all of them
     is what lets token capture cover every surface, not just whichever process is found first.
     Real language servers sort before agy processes so account-level calls that take the first
-    process keep preferring the Desktop/IDE server when one is up. Only the current user's
-    processes are considered (``_owned_by_current_user``).
+    process keep preferring the Desktop/IDE server when one is up, then token-less entries
+    last. Only the current user's processes are considered (``_owned_by_current_user``).
     """
     found: dict[int, tuple[int, str, str]] = {}
+    agy_pids: set[int] = set()
     try:
         import psutil
         my_uid = os.getuid()
@@ -204,8 +308,11 @@ def _scan_antigravity_processes() -> list[tuple[int, str, str]]:
                         continue
                 elif not _owned_by_current_user(proc.info['pid']):
                     continue
-                parsed = (_parse_language_server_cmdline(" ".join(cmdline), cmdline)
-                          or _parse_agy_cmdline(cmdline))
+                parsed = _parse_language_server_cmdline(" ".join(cmdline), cmdline)
+                if parsed is None:
+                    parsed = _parse_agy_cmdline(cmdline, proc.info['pid'])
+                    if parsed:
+                        agy_pids.add(proc.info['pid'])
                 if parsed:
                     found[proc.info['pid']] = (proc.info['pid'], parsed[0], parsed[1])
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
@@ -229,10 +336,14 @@ def _scan_antigravity_processes() -> list[tuple[int, str, str]]:
         except OSError:
             continue
         args = cmdline.split("\0")
-        parsed = _parse_language_server_cmdline(cmdline, args) or _parse_agy_cmdline(args)
+        parsed = _parse_language_server_cmdline(cmdline, args)
+        if parsed is None:
+            parsed = _parse_agy_cmdline(args, int(pid_str))
+            if parsed:
+                agy_pids.add(int(pid_str))
         if parsed:
             found[int(pid_str)] = (int(pid_str), parsed[0], parsed[1])
-    return sorted(found.values(), key=lambda t: t[1] == "")
+    return sorted(found.values(), key=lambda t: (t[0] in agy_pids, t[1] == ""))
 
 
 def find_antigravity_process() -> tuple[int, str, str] | None:

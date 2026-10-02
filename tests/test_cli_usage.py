@@ -3,6 +3,7 @@
 import datetime as dt
 import io
 import json
+import stat
 import sys
 from pathlib import Path
 
@@ -853,14 +854,102 @@ def test_cli_statusline_superseded_by_ledger_coverage(monkeypatch, tmp_path):
     assert names == {"Gemini 3.5 Flash", "Gemini 3.1 Pro"}
 
 
-def test_agy_cmdline_discovered_tokenless():
-    # The agy CLI serves the language-server RPC in-process with NO CSRF token; its
-    # cmdline is just "agy" (which the language-server gate rejects).
+def test_agy_cmdline_discovered():
+    # The agy CLI serves the language-server RPC in-process; its cmdline is just "agy"
+    # (which the language-server gate rejects). Without a pid there is no token to look up.
     assert agmod._parse_agy_cmdline(["agy"]) == ("", "http")
     assert agmod._parse_agy_cmdline(["/usr/local/bin/agy", "--continue"]) == ("", "http")
     assert agmod._parse_agy_cmdline(["agy-helper"]) is None
     assert agmod._parse_agy_cmdline([]) is None
     assert agmod._parse_language_server_cmdline("agy", ["agy"]) is None
+
+
+def _fake_proc(root, pid, ppid, env=None, start=1000):
+    """A /proc/<pid> entry: stat (ppid = field 4, start time = field 22) and environ."""
+    d = root / str(pid)
+    d.mkdir(parents=True)
+    fields = ["S", str(ppid)] + ["0"] * 17 + [str(start), "0", "0"]
+    (d / "stat").write_text(f"{pid} (sh (x)) " + " ".join(fields))  # comm may hold spaces/parens
+    (d / "environ").write_bytes(b"\0".join(f"{k}={v}".encode() for k, v in (env or {}).items()) + b"\0")
+
+
+_TOOL_ENV = {"PATH": "/bin", "ANTIGRAVITY_CSRF_TOKEN": "xyz", "ANTIGRAVITY_LS_ADDRESS": "localhost:33387"}
+
+
+def test_agy_csrf_token_found_below_agy_and_remembered(monkeypatch, tmp_path):
+    """agy 1.2.x answers 401 "missing CSRF token" without the header and hands the token only
+    to the commands its agent runs (not to its MCP servers or statusLine). A tool command two
+    levels down carries it; the backend saves it under agy's pid + start time so later
+    refreshes work while no command is running, and drops records of exited processes."""
+    sessions = tmp_path / "antigravity" / "cli_sessions.json"
+    monkeypatch.setattr(agmod, "ANTIGRAVITY_CLI_SESSIONS_PATH", sessions)
+    sessions.parent.mkdir()
+    sessions.write_text(json.dumps({"sessions": {"999": {"csrf_token": "gone", "start": "5"}}}))
+    proc = tmp_path / "proc"
+    _fake_proc(proc, 4242, 1, start=777)                                   # agy
+    _fake_proc(proc, 300, 4242, {"PATH": "/bin"})                          # an MCP server
+    _fake_proc(proc, 301, 4242)                                            # a shell ...
+    _fake_proc(proc, 302, 301, _TOOL_ENV)                                  # ... running a tool
+    _fake_proc(proc, 400, 9999, {"ANTIGRAVITY_CSRF_TOKEN": "another-agys-token"})
+    (proc / "self").mkdir()
+    assert agmod._find_agy_csrf_token(4242, proc_root=str(proc)) == "xyz"
+    saved = json.loads(sessions.read_text())["sessions"]
+    assert list(saved) == ["4242"]
+    assert saved["4242"]["csrf_token"] == "xyz" and saved["4242"]["start"] == "777"
+    assert saved["4242"]["address"] == "localhost:33387"
+    assert stat.S_IMODE(sessions.stat().st_mode) == 0o600
+
+    # The tool has finished: the saved record still answers for this agy process...
+    import shutil
+    shutil.rmtree(proc / "302")
+    assert agmod._find_agy_csrf_token(4242, proc_root=str(proc)) == "xyz"
+    # ...but not for a new process that reused the pid (different start time).
+    shutil.rmtree(proc / "4242")
+    _fake_proc(proc, 4242, 1, start=888)
+    assert agmod._find_agy_csrf_token(4242, proc_root=str(proc)) == ""
+
+
+def test_agy_csrf_token_never_taken_from_another_agys_record(monkeypatch, tmp_path):
+    sessions = tmp_path / "cli_sessions.json"
+    sessions.write_text(json.dumps({"sessions": {"5151": {"csrf_token": "tok-b", "start": "1000"}}}))
+    monkeypatch.setattr(agmod, "ANTIGRAVITY_CLI_SESSIONS_PATH", sessions)
+    proc = tmp_path / "proc"
+    _fake_proc(proc, 4242, 1)
+    _fake_proc(proc, 5151, 1)
+    assert agmod._find_agy_csrf_token(4242, proc_root=str(proc)) == ""
+    assert agmod._find_agy_csrf_token(5151, proc_root=str(proc)) == "tok-b"
+
+
+def test_agy_csrf_token_empty_when_no_source_has_it(monkeypatch, tmp_path):
+    """Fail open: an empty token keeps the old request shape (no CSRF header)."""
+    monkeypatch.setattr(agmod, "ANTIGRAVITY_CLI_SESSIONS_PATH", tmp_path / "missing.json")
+    proc = tmp_path / "proc"
+    _fake_proc(proc, 4242, 1)
+    _fake_proc(proc, 300, 4242, {"PATH": "/bin"})
+    assert agmod._find_agy_csrf_token(4242, proc_root=str(proc)) == ""
+    assert agmod._find_agy_csrf_token(31337, proc_root=str(proc)) == ""  # agy already gone
+    (tmp_path / "corrupt.json").write_text("{not json")
+    monkeypatch.setattr(agmod, "ANTIGRAVITY_CLI_SESSIONS_PATH", tmp_path / "corrupt.json")
+    assert agmod._find_agy_csrf_token(4242, proc_root=str(proc)) == ""
+    assert not (tmp_path / "missing.json").exists()
+
+
+def test_scan_keeps_language_servers_ahead_of_an_agy_with_a_token(monkeypatch):
+    """Account-level calls take the first process. Once agy carries a token it must still
+    rank after a Desktop/IDE language server (sorting on 'has a token' alone put it first)."""
+    import types
+    uid = types.SimpleNamespace(real=agmod.os.getuid())
+    procs = [types.SimpleNamespace(info={"pid": 10, "cmdline": ["agy"], "uids": uid}),
+             types.SimpleNamespace(info={"pid": 20, "uids": uid, "cmdline": [
+                 "/opt/antigravity/language_server", "--app_data_dir", "antigravity",
+                 "--csrf_token", "ls-token"]})]
+    fake_psutil = types.SimpleNamespace(
+        process_iter=lambda attrs: iter(procs),
+        NoSuchProcess=OSError, AccessDenied=OSError, ZombieProcess=OSError)
+    monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+    monkeypatch.setattr(agmod.os, "listdir", lambda path: [])
+    monkeypatch.setattr(agmod, "_find_agy_csrf_token", lambda pid, proc_root="/proc": "agy-token")
+    assert agmod._scan_antigravity_processes() == [(20, "ls-token", "http"), (10, "agy-token", "http")]
 
 
 def test_local_rpc_csrf_header_omitted_when_tokenless(monkeypatch):

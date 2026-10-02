@@ -7,6 +7,10 @@ Notable changes to TallyBar. Format follows
 ## [Unreleased]
 
 ### Fixed
+- Antigravity CLI 1.2 and later: TallyBar can read usage and plan status from a
+  running `agy` session again. `agy` now requires a security token on its local API,
+  which it shares only with the commands it runs; TallyBar picks it up the first time
+  it sees one running and remembers it for that session. No setup needed.
 - Antigravity cost was overstated for models newer than TallyBar's built-in list
   (Gemini 3.7 and 3.8 Flash among them): generations read from the conversation
   databases were billed at Gemini 3.1 Pro rates even though the breakdown showed the
