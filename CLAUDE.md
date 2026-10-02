@@ -6,7 +6,7 @@ changed and why belongs in commit messages and [`CHANGELOG.md`](CHANGELOG.md), n
 
 ## What this is
 
-TallyBar is a **KDE Plasma 6 widget (Plasmoid)** monitoring AI session usage (Codex/OpenAI, Gemini, Claude, Antigravity, Grok). Two halves:
+TallyBar is a **KDE Plasma 6 widget (Plasmoid)** monitoring AI session usage (Codex/OpenAI, Gemini, Claude, Antigravity, Grok, Grok Bot). Two halves:
 - **QML frontend** (`io.github.dlansama.tallybar/contents/ui/`) — `main.qml` (state), `CompactRepresentation.qml`, `FullRepresentation.qml`, `CostPopout.qml`, `SettingsPopout.qml`, modular sections in `ui/components/` (`UsageLimitCard.qml`, `ProviderTabBar.qml`, `CostSection.qml`, `ActionFooter.qml`, etc.) and helpers in `ui/lib/` (`format.js`, `ui_helpers.js`).
 - **Python backend** (`io.github.dlansama.tallybar/contents/code/`) — one-shot CLI, prints JSON, exits.
 
@@ -47,6 +47,7 @@ Runtime: stdlib-only (no third-party deps). `.venv` is for pytest only. Release:
 - `providers/codex.py` — `codex` CLI JSON-RPC + OpenAI cookie fallback.
 - `providers/claude.py` — Claude browser-API path.
 - `providers/grok.py` — Grok Build weekly credit bar from the local `unified.jsonl` log; no network.
+- `providers/grok_bot.py` — Grok Bot weekly bar from Cursor's dashboard service, signed in through the Grok Bot desktop app; network only.
 - `providers/cost.py` — cost enrichment + Antigravity token-capture pipeline (`update_antigravity_token_ledger`).
 - `providers/__init__.py` — re-exports public names backend.py imports.
 - `parsers.py` — pure payload → limit-row functions. No I/O.
@@ -150,6 +151,15 @@ Runtime: stdlib-only (no third-party deps). `.venv` is for pytest only. Release:
 - `unified.jsonl` rotates, so per-day totals are mirrored into `~/.tallybar/grok_archive.json` (`merge_grok_archive`: a day only ever grows, 120 days kept, change-gated, `.bak` mirror).
 - The CLI's `grok-build`/`grok-composer` models are subscription-proxied and absent from LiteLLM → priced at xAI's published coding-model API rate via the embedded `pricing_data` rows ("Cost (if pay-per-use)"). `grok-4.6` needs its own exact key or family matching resolves it to `grok-4`.
 → `tests/test_providers.py::test_run_grok_local_*`, `::test_grok_*`, `tests/test_accounting.py::test_local_grok_*`, `tests/test_parsers.py::test_parse_grok_billing_config_weekly_credits`.
+
+**Grok Bot (`grokbot`) is a network provider, separate from Grok Build.** `providers/grok_bot.run_grok_bot` shares nothing with `run_grok_local`: no `~/.grok` logs, no Grok archive, no cost scan, no cost card. It is an `api_task`, so `--no-network` never schedules it (status `idle`), and it is carried forward like claude/gemini/codex.
+- **Bearer:** the account's `cursor-access-token` in `~/.config/Grok Bot/sand-secrets.json` (`active` account, else the only one; `cursor-accounts` is plain JSON). Values are `plaintext:v1:<b64>`, `scoped:v1:<64 hex>:<b64>`, or a base64 Chromium `v10`/`v11` blob, decrypted with `cookies.decrypt_chromium_value(family="chromium")` and the Chromium Safe Storage password from the provider's OWN `KWalletClient(background=…)`, opened only when a value is encrypted and closed straight after. Its `wallet-locked`/`wallet-state-unknown` is the provider's status, never relabelled through the gemini/claude cookie loop. Never refreshed; the refresh token and profile (email) are never read. No store or no signed-in account is `not-running`; a value that won't decrypt, or a 401, is `unauthorized`.
+- **Secrets never reach output:** the token, machine id, account scope and checksum are never interpolated into a message or diagnostic. Error messages are fixed strings plus the HTTP status and the validated Connect `code`, never a response body or `str(exc)`. `http_text` refuses redirects for any request carrying `Authorization` (`_RefuseRedirects`): urllib's default handler copies the bearer onto the redirect target, `http://` included. → `tests/test_http_helpers.py::test_refuse_redirects_*`.
+- **Weekly bar** = `GetSandUsageStatus.usagePercent`, already a percent (clamped 0–100, never ×100). Pooled team allowance or no finite percent → `ok` with no bar, never an invented 0%. **On-demand row** only when `hasNonZeroIncludedLimit` is true, both `spendLimitUsage` cent fields are numbers, and `0 < individualLimit < 2147483647` (int32 max is the app's "unlimited"). Label `On-demand` puts it in the existing extra-usage slot.
+- **`x-cursor-checksum` follows the app's JavaScript (`Tg`/`kut`), not Python intuition:** JS `>>` is int32 with a five-bit shift count, so `t>>40`/`t>>32` are `t>>8`/`t`. Python's real 40/32-bit shifts zero the first two bytes and produce a checksum the app never sends.
+→ `tests/test_providers.py::test_grok_bot_*`, `tests/test_backend.py::test_grok_bot_*`.
+
+**A saved `config.providers` is the enabled set relative to `providerCatalog`.** `public_config` enables every `PROVIDER_ORDER` key the saved list names OR the catalog it was saved under didn't know (absent catalog = the five pre-Grok-Bot keys), so a provider added in a release appears instead of reading as "turned off". `update_config_values` settles the stored list against its old catalog BEFORE stamping `providerCatalog = PROVIDER_ORDER` on every save; reversing that order would hide a new provider on the first unrelated save. → `tests/test_backend.py::test_public_config_*`, `::test_update_config_values_settles_*`.
 
 ## Frontend contracts
 

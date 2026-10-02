@@ -37,6 +37,7 @@ as a month heat grid. Clicking any bar or day expands it into a per-model breakd
 | **Gemini**      | daily usage, Google One AI credit pool            | gemini.google.com, using your browser's existing session                |
 | **Antigravity** | Gemini window, Claude/GPT window, plan            | the local Antigravity language server, plus Google's Cloud Code API     |
 | **Grok**        | weekly window                                     | the `grok` CLI's local session and log files                            |
+| **Grok Bot**    | weekly window; on-demand spend when capped        | the Grok Bot desktop app's sign-in, against Cursor's dashboard service  |
 
 Cost is computed separately, from **local log files only** — the transcripts
 each CLI already writes to `~/.claude`, `~/.codex`, `~/.gemini`, `~/.grok` and
@@ -44,6 +45,7 @@ Antigravity's trajectory databases. Tokens are priced against the
 [LiteLLM](https://github.com/BerriAI/litellm) model catalog (fetched once and
 cached on disk), which is why the heading reads *"Cost (if pay-per-use)"* — it
 is what your usage *would* have cost on the API, not what you were charged.
+Grok Bot has no local cost history yet: its tab shows the weekly bar only.
 
 Clicking the cost row opens a separate chart window with a 7-day bar chart, a
 month grid, a 24-hour histogram, and a per-model breakdown you can expand by
@@ -108,6 +110,9 @@ Each provider connects itself:
   (Chrome, Chromium, Brave, Edge or Firefox). If you are signed in to claude.ai
   or gemini.google.com in one of those, there is nothing to configure; if you
   are not, the widget shows a **Sign in** button that opens the right page.
+- **Grok Bot** uses the sign-in the Grok Bot desktop app keeps: open the app and
+  sign in once. That sign-in is encrypted with the Chromium Safe Storage key, so
+  reading it needs KWallet, like the browser cookies.
 
 On a machine with none of these installed, the widget still starts and shows one
 status line per provider (`No matching browser cookies`, `Grok Build data dir
@@ -233,8 +238,8 @@ pushing a `v*` tag builds the `.plasmoid`, stamps the version into
 ## Known limitations
 
 - **Linux/KDE only.** It is a Plasma 6 applet; there is no port to anything else.
-- **The Claude and Gemini readings depend on unofficial endpoints** — the same
-  ones their web UIs call, with your own session. They are not public APIs and
+- **The Claude, Gemini and Grok Bot readings depend on unofficial endpoints** — the
+  same ones their own apps call, with your own session. They are not public APIs and
   can change without notice. When one does, that provider degrades to a status
   message and the others keep working.
 - **Grok's weekly bar is only as fresh as the CLI's last run.** xAI's own

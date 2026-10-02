@@ -40,6 +40,7 @@ from providers import (
     run_codex_rpc,
     run_gemini_web,
     run_google_one_credits,
+    run_grok_bot,
     run_grok_local,
     run_openai_cookie_api,
 )
@@ -83,6 +84,7 @@ __all__ = [
     "run_codex_rpc",
     "run_gemini_web",
     "run_google_one_credits",
+    "run_grok_bot",
     "run_grok_local",
     "run_openai_cookie_api",
     "run_threaded_provider",
@@ -94,7 +96,11 @@ __all__ = [
     "update_refresh_interval",
 ]
 
-PROVIDER_ORDER = ("codex", "claude", "gemini", "antigravity", "grok")
+PROVIDER_ORDER = ("codex", "claude", "gemini", "antigravity", "grok", "grokbot")
+# The provider keys of a config written before `providerCatalog` existed. A saved
+# `providers` list is the ENABLED set, so a key missing from it means "turned off" only
+# if the catalog the list was saved under knew that key (see _enabled_providers).
+_LEGACY_PROVIDER_CATALOG = ("codex", "claude", "gemini", "antigravity", "grok")
 CONFIG_PATH = Path.home() / ".tallybar" / "config.json"
 SNAPSHOT_PATH = Path.home() / ".tallybar" / "last_snapshot.json"
 NOTIFY_STATE_PATH = Path.home() / ".tallybar" / "notify_state.json"
@@ -201,10 +207,27 @@ def load_config() -> dict[str, Any]:
         return {}
 
 
+def _enabled_providers(config: dict[str, Any]) -> list[str]:
+    """The enabled provider tabs, in canonical order.
+
+    A saved ``providers`` list is the enabled set as of the catalog it was saved under
+    (``providerCatalog``; absent = the five pre-catalog keys). A provider that catalog did
+    not know is NEW, not switched off, so it is enabled; one the catalog knew and the list
+    omits stays off. No saved list (or nothing left) means every provider."""
+    saved = config.get("providers")
+    if not isinstance(saved, list):
+        return list(PROVIDER_ORDER)
+    catalog = config.get("providerCatalog")
+    if not isinstance(catalog, list):
+        catalog = list(_LEGACY_PROVIDER_CATALOG)
+    enabled = [p for p in PROVIDER_ORDER if p in saved or p not in catalog]
+    return enabled or list(PROVIDER_ORDER)
+
+
 def public_config(config: dict[str, Any]) -> dict[str, Any]:
     return {
         "path": str(CONFIG_PATH),
-        "providers": config.get("providers", list(PROVIDER_ORDER)),
+        "providers": _enabled_providers(config),
         "refreshIntervalMinutes": config.get("refreshIntervalMinutes"),
         "notificationsEnabled": config.get("notificationsEnabled", True),
         "notificationThresholds": config.get("notificationThresholds", list(DEFAULT_NOTIFY_THRESHOLDS)),
@@ -758,6 +781,11 @@ def update_config_values(updates: dict[str, Any]) -> dict[str, Any]:
             raise TimeoutError("could not acquire config lock (another write in progress)")
         try:
             config = load_config()
+            # Settle a saved enabled-list against the catalog it was written under BEFORE
+            # this save stamps the current catalog below — otherwise any unrelated save would
+            # turn a provider added since (absent from the old list) into "switched off".
+            if isinstance(config.get("providers"), list):
+                config["providers"] = _enabled_providers(config)
             if "notificationsEnabled" in updates:
                 config["notificationsEnabled"] = bool(updates["notificationsEnabled"])
             if "panelDisplayMode" in updates:
@@ -799,6 +827,9 @@ def update_config_values(updates: dict[str, Any]) -> dict[str, Any]:
                         config["monthlyBudget"] = budget
                 except (TypeError, ValueError):
                     pass
+            # The saved `providers` list is now relative to today's catalog: a provider added
+            # in a later release shows up as new; one the user turns off here stays off.
+            config["providerCatalog"] = list(PROVIDER_ORDER)
             return save_config(config)
         finally:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
@@ -818,6 +849,9 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         # Grok: local-only (context gauge from ~/.grok session signals + token/cost history
         # from ~/.grok logs). run_grok_local fills limits; apply_cost_summaries adds the card.
         "grok": {**default_provider("Grok", "local-grok-logs"), "accentColor": "#1d9bf0"},
+        # Grok Bot: a separate product and meter from Grok Build — network-only (Cursor's
+        # dashboard service, signed in through the Grok Bot desktop app). No cost card.
+        "grokbot": {**default_provider("Grok Bot", "grok-bot"), "accentColor": "#e6e6e6"},
     }
     diagnostics: dict[str, Any] = {}
 
@@ -929,6 +963,20 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
                     )
                     api_tasks["claude"] = group.create_task(
                         bounded_provider(run_claude_api(cookies, args.timeout, prev_claude), args.timeout, providers["claude"])
+                    )
+
+                    # Grok Bot opens its own KWallet handle, so it needs --background to
+                    # know whether an unlock prompt is allowed.
+                    def _run_grok_bot(timeout: float) -> dict[str, Any]:
+                        return run_grok_bot(timeout, background=bool(args.background))
+
+                    api_tasks["grokbot"] = group.create_task(
+                        run_threaded_provider(
+                            _run_grok_bot,
+                            args.timeout,
+                            timeout=args.timeout,
+                            fallback=providers["grokbot"],
+                        )
                     )
                     # The OpenAI cookie-API GET is a FALLBACK for a failed codex CLI
                     # RPC — it is fired lazily (post-group, serialized) only when the
@@ -1057,6 +1105,11 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
             providers["claude"],
             "Claude"
         )
+        providers["grokbot"] = get_task_result(
+            api_tasks.get("grokbot"),
+            providers["grokbot"],
+            "Grok Bot"
+        )
 
         # Lazy OpenAI cookie fallback: only fire the authenticated chatgpt.com GET
         # when the local codex CLI RPC path did NOT succeed. bounded_provider applies
@@ -1104,6 +1157,8 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         # Google One credits need the network; drop the misleading plan-status
         # credit figures so they aren't shown with stale/wrong numbers offline.
         apply_google_one_credits(providers["antigravity"], None)
+        # Grok Bot has no local data at all; it was never scheduled.
+        providers["grokbot"].update(status="idle", message="Network skipped (--no-network)")
 
     browser_status = (diagnostics.get("browser") or {}).get("kwallet", {}).get("status")
     # wallet-locked (isOpen said "closed") and wallet-state-unknown (isOpen couldn't be
@@ -1126,12 +1181,12 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
                 )
 
     # Bounded last-known-good carry-forward for the network providers. A transient blip
-    # (Cloudflare challenge / one-off timeout) on Claude/Gemini/Codex — but with the other
+    # (Cloudflare challenge / one-off timeout) on Claude/Gemini/Codex/Grok Bot — but with the other
     # providers live — would otherwise overwrite the cache with an error card. Freeze the last
     # good reading for a short grace window off the SAME cached snapshot loaded up top; beyond
     # the window the real error resurfaces. No-op for non-transient statuses (e.g. the offline
     # branch's cookies-ready/missing-cookies) or when the provider already has limits.
-    for _name in ("claude", "gemini", "codex"):
+    for _name in ("claude", "gemini", "codex", "grokbot"):
         providers[_name] = carry_forward_provider_last_good(providers[_name], cached_snapshot)
 
     # Claude Code statusLine fallback (integrations/claude_code/statusline_capture.py): when

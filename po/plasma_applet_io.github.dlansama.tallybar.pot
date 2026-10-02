@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: plasma_applet_io.github.dlansama.tallybar\n"
 "Report-Msgid-Bugs-To: https://github.com/DLANSAMA/TallyBarPlasmoid/issues\n"
-"POT-Creation-Date: 2026-10-01 22:38-0400\n"
+"POT-Creation-Date: 2026-10-02 00:12-0400\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -110,216 +110,232 @@ msgid "TOP MODELS · 30 DAYS"
 msgstr ""
 
 #: io.github.dlansama.tallybar/contents/ui/CostPopout.qml:866
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:729
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:749
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:763
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:791
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:737
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:757
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:771
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:799
 msgid "%1 tok"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:393
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:395
 msgid "Backend error — showing last values (%1)"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:395
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:397
 msgid "Post-refresh step failed — alerts and cache may be stale"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:397
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:399
 msgid "Cost scan timed out — totals may be stale"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:400
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:402
 msgid "KWallet is locked — unlock it for full usage data"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:402
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:404
 msgid "KWallet state couldn't be checked — some usage may be missing"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:404
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:406
 msgid "Cost summary error — totals may be incomplete"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:406
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:408
 msgid "Some providers failed to load — data may be partial"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:408
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:410
 msgid "Price list update failed — costs use cached rates"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:420
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:422
 msgid "Codex isn't running — start the Codex app to read usage."
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:421
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:423
 msgid "Antigravity isn't running — open it to read live session usage."
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:422
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:424
 msgid "No recent Grok session — start one to see usage."
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:423
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:425
+msgid ""
+"Not signed in to Grok Bot — open Grok Bot and sign in to see its weekly "
+"usage."
+msgstr ""
+
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:426
 msgid "%1 isn't running."
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:467
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:470
 msgid ""
 "No supported browser profiles found — sign in to %1 in Chrome, Firefox, or a "
 "Chromium browser."
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:476
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:479
 msgid "Sign in to %1 in %2, then refresh."
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:500
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:503
 msgid "Fetching usage data…"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:502
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:506
+msgid "KWallet is locked. Unlock it to read your Grok Bot sign-in."
+msgstr ""
+
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:508
+msgid ""
+"KWallet state couldn't be checked. Unlock it and refresh to read your Grok "
+"Bot sign-in."
+msgstr ""
+
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:510
 msgid "KWallet is locked. Unlock it to read this provider's session cookies."
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:504
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:512
 msgid ""
 "KWallet state couldn't be checked. Unlock it and refresh to read this "
 "provider's session cookies."
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:512
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:520
 msgid "Couldn't reach %1."
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:513
-#: io.github.dlansama.tallybar/contents/ui/main.qml:217
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:521
+#: io.github.dlansama.tallybar/contents/ui/main.qml:223
 msgid "No usage data"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:670
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:678
 msgid "%1 today"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:672
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:680
 msgid "%1 this month"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:672
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:680
 msgid "%1 this week"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:726
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:746
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:760
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:734
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:754
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:768
 msgid "No usage"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:914
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:922
 msgid "Usage Dashboard"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:915
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:923
 #: io.github.dlansama.tallybar/contents/ui/components/UsageLimitCard.qml:70
 msgid "Usage"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:919
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:927
 msgid "Status Page"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:920
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:928
 msgid "Status"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:924
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:932
 msgid "Refresh Now"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:925
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:933
 msgid "Refresh"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:929
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:930
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:937
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:938
 #: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:98
 msgid "Settings"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:938
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:946
 msgid "Close Panel"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1055
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1063
 msgid "Refreshing"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1061
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1069
 msgid "Cached · "
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1066
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1074
 msgid " (paused: screen locked)"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1068
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1076
 msgid " (cached)"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1070
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1072
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1078
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1080
 msgid "Updated just now"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1075
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1083
 msgid "Updated %1m ago"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1078
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1086
 msgid "Updated %1h ago"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1079
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1087
 #, javascript-format
 msgid "Updated %1d ago"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1082
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1090
 msgid "Waiting for update"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1155
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1163
 msgid "Other"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/main.qml:154
+#: io.github.dlansama.tallybar/contents/ui/main.qml:160
 msgid "%1 exited with %2"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/main.qml:159
+#: io.github.dlansama.tallybar/contents/ui/main.qml:165
 msgid "invalid backend JSON: %1"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/main.qml:214
+#: io.github.dlansama.tallybar/contents/ui/main.qml:220
 msgid "Refreshing %1 usage"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/main.qml:279
-#: io.github.dlansama.tallybar/contents/ui/main.qml:301
+#: io.github.dlansama.tallybar/contents/ui/main.qml:285
+#: io.github.dlansama.tallybar/contents/ui/main.qml:307
 msgid "Backend did not respond in time"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/main.qml:405
-#: io.github.dlansama.tallybar/contents/ui/main.qml:517
+#: io.github.dlansama.tallybar/contents/ui/main.qml:411
+#: io.github.dlansama.tallybar/contents/ui/main.qml:523
 msgid "JSON processing failed: %1"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/main.qml:594
+#: io.github.dlansama.tallybar/contents/ui/main.qml:600
 msgid "TallyBar · test notification"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/main.qml:595
+#: io.github.dlansama.tallybar/contents/ui/main.qml:601
 msgid "Usage alerts are working."
 msgstr ""
 
@@ -372,60 +388,60 @@ msgstr ""
 msgid "SHOW PROVIDERS"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:296
+#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:298
 msgid "Show %1"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:309
+#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:311
 msgid "MUTE ALERTS"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:348
+#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:352
 msgid "Mute %1 alerts"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:373
-#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:444
+#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:377
+#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:448
 msgid "Usage notifications"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:390
+#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:394
 msgid "Test"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:401
+#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:405
 msgid "Send a test notification"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:457
+#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:461
 msgid "ALERT WHEN USAGE PASSES"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:498
+#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:502
 msgid "Alert at %1 percent usage"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:511
+#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:515
 msgid "MONTHLY BUDGET"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:519
+#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:523
 msgid "Off"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:554
+#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:558
 msgid "No monthly budget"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:554
+#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:558
 msgid "Monthly budget %1"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:585
+#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:589
 msgid "Custom…"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:599
+#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:603
 msgid "Set a custom monthly budget"
 msgstr ""
 

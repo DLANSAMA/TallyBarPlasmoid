@@ -9,6 +9,7 @@ function tabLabel(provider) {
     if (provider === "codex") return "Codex";
     if (provider === "claude") return "Claude";
     if (provider === "grok") return "Grok";
+    if (provider === "grokbot") return "Grok Bot";
     return "Codex";
 }
 
@@ -18,6 +19,9 @@ function providerShortLabel(key) {
     if (key === "gemini") return "Gemini";
     if (key === "antigravity") return "Antigr.";
     if (key === "grok") return "Grok";
+    // "Bot", not "Grok Bot": the settings chips share a fixed width six ways, and the
+    // neighbouring chip already reads "Grok".
+    if (key === "grokbot") return "Bot";
     return key;
 }
 
@@ -51,6 +55,8 @@ function dashboardUrl(providerKey) {
         return "https://claude.ai/settings/usage";
     if (providerKey === "grok")
         return "https://grok.com/?_s=usage";
+    if (providerKey === "grokbot")
+        return "https://cursor.com/dashboard?tab=billing";
     return "https://chatgpt.com/codex/settings/usage";
 }
 
@@ -61,7 +67,7 @@ function statusUrl(providerKey) {
         return "https://status.openai.com/";
     if (providerKey === "claude")
         return "https://status.claude.com/";
-    if (providerKey === "grok")
+    if (providerKey === "grok" || providerKey === "grokbot")
         return "https://status.x.ai/";
     return "https://status.openai.com/";
 }

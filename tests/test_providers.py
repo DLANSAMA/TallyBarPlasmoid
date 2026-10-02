@@ -1557,3 +1557,386 @@ async def test_usage_summary_transient_error_is_not_remembered():
         res = await providers.claude.run_claude_api([_cookie("claude.ai")], timeout=1.0)
     assert res["status"] == "ok" and "usage" in seen
     assert "usageSummaryUnavailableSince" not in res
+
+
+# ---------------------------------------------------------------------------
+# run_grok_bot (providers/grok_bot.py) — no live network, no real wallet, no real
+# ~/.config/Grok Bot/sand-secrets.json: the store, HTTP and KWallet are all injected.
+# ---------------------------------------------------------------------------
+
+import base64  # noqa: E402
+import hashlib  # noqa: E402
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
+import urllib.error  # noqa: E402
+
+from providers import grok_bot  # noqa: E402
+
+_GB_SCOPE = "ab" * 32
+_GB_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJncm9rLWJvdC11c2VyIn0.c2lnbmF0dXJl"
+_GB_MACHINE_ID = "11111111-2222-4333-8444-555555555555"
+_GB_NOW_MS = 1_700_000_000_000
+_GB_USAGE = {
+    "usagePercent": 42.0,
+    "nextResetTimestampUtc": "2099-01-05T00:00:00Z",
+    "grokPlanLabel": "Grok Pro",
+    "cursorPlanName": "Pro",
+}
+
+
+def _gb_plain(text: str) -> str:
+    return "plaintext:v1:" + base64.b64encode(text.encode()).decode()
+
+
+def _gb_store(tmp_path, *, token=None, machine_id=None, team=None, active=_GB_SCOPE,
+              accounts=None, extra=None):
+    """Write a sand-secrets.json shaped like the app's (cursor-accounts is plain JSON)."""
+    account = {"cursor-access-token": _gb_plain(_GB_TOKEN) if token is None else token}
+    if team is not None:
+        account["cursor-selected-team-id"] = team
+    store = {
+        "cursor-machine-id": _gb_plain(_GB_MACHINE_ID) if machine_id is None else machine_id,
+        "cursor-accounts": json.dumps({
+            "active": active,
+            "accounts": {_GB_SCOPE: account} if accounts is None else accounts,
+        }),
+    }
+    store.update(extra or {})
+    path = tmp_path / "sand-secrets.json"
+    path.write_text(json.dumps(store))
+    return path
+
+
+class _GbHttp:
+    """Records every request; answers from a url -> (status, body) map."""
+
+    def __init__(self, responses=None, exc=None):
+        self.responses = responses or {}
+        self.exc = exc
+        self.calls = []
+
+    def __call__(self, url, jar, timeout, method="GET", body=None, headers=None):
+        self.calls.append({"url": url, "method": method, "body": body, "headers": dict(headers or {})})
+        if self.exc is not None:
+            raise self.exc
+        return self.responses[url]
+
+
+class _GbWallet:
+    def __init__(self, status="ok", passwords=None):
+        self.status = status
+        self.passwords = passwords or {}
+        self.closed = False
+
+    def safe_storage_passwords(self):
+        return self.passwords
+
+    def close(self):
+        self.closed = True
+
+
+def _gb_usage_http(usage=None, period=None):
+    responses = {grok_bot.GROK_BOT_USAGE_URL: (200, json.dumps(_GB_USAGE if usage is None else usage))}
+    if period is not None:
+        responses[grok_bot.GROK_BOT_PERIOD_URL] = (200, json.dumps(period))
+    return _GbHttp(responses)
+
+
+def _gb_run(tmp_path, http, *, store=None, wallet=None, **kw):
+    wallets = []
+
+    def factory(**kwargs):
+        w = wallet or _GbWallet()
+        wallets.append((w, kwargs))
+        return w
+
+    result = grok_bot.run_grok_bot(
+        5.0,
+        background=kw.pop("background", True),
+        secrets_path=store if store is not None else _gb_store(tmp_path),
+        http_text=http,
+        wallet_factory=factory,
+        now_ms=_GB_NOW_MS,
+    )
+    return result, wallets
+
+
+def _gb_assert_no_secrets(result):
+    dumped = json.dumps(result)
+    for secret in (_GB_TOKEN, _GB_MACHINE_ID, _GB_SCOPE, grok_bot.cursor_checksum(_GB_MACHINE_ID, _GB_NOW_MS)):
+        assert secret not in dumped
+
+
+def test_grok_bot_checksum_matches_the_apps_own_tg():
+    """Vectors from running the app's own kut/Tg (sand 0.63.0 main-app.cjs) under node with
+    Date.now pinned. JS `>>` is int32 with a 5-bit shift count, so `t>>40`/`t>>32` are
+    `t>>8`/`t`: the first two bytes repeat the last two. Zeroing them (the obvious Python
+    shift) gives "paaotEjt…" for the first vector — a checksum the app never sends."""
+    assert grok_bot.cursor_checksum(_GB_MACHINE_ID, 1_700_000_000_000) == "Vfb45Bi9" + _GB_MACHINE_ID
+    assert grok_bot.cursor_checksum(_GB_MACHINE_ID, 1_759_350_000_000) == "fQwOF9Oq" + _GB_MACHINE_ID
+
+
+def test_grok_bot_weekly_row_from_usage_status(tmp_path):
+    http = _gb_usage_http()
+    res, wallets = _gb_run(tmp_path, http)
+    assert res["status"] == "ok" and res["label"] == "Grok Bot" and res["source"] == "grok-bot"
+    assert len(res["limits"]) == 1
+    row = res["limits"][0]
+    assert row["label"] == "Weekly" and row["percent"] == 42.0 and row["unit"] == "percent"
+    assert row["windowMinutes"] == 10080
+    assert row["resetAt"].startswith("2099-01-05T00:00:00")
+    assert res["tier"] == "Grok Pro"
+    assert res["fetchedAt"]
+    # Plaintext secrets need no wallet; no included limit means no period request.
+    assert wallets == []
+    assert [c["url"] for c in http.calls] == [grok_bot.GROK_BOT_USAGE_URL]
+    _gb_assert_no_secrets(res)
+
+
+def test_grok_bot_request_shape(tmp_path):
+    http = _gb_usage_http()
+    _gb_run(tmp_path, http, store=_gb_store(tmp_path, team=_gb_plain("4242")))
+    call = http.calls[0]
+    assert call["method"] == "POST" and call["body"] == b"{}"
+    h = call["headers"]
+    assert h["Content-Type"] == "application/json"
+    assert h["Connect-Protocol-Version"] == "1"
+    assert h["Authorization"] == f"Bearer {_GB_TOKEN}"
+    assert h["User-Agent"] == ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                               "(KHTML, like Gecko) Sand/0.63.0 Safari/537.36")
+    assert h["x-cursor-client-type"] == "sand"
+    assert h["x-cursor-client-source"] == "sand-desktop"
+    assert h["x-cursor-client-version"] == "0.63.0"
+    assert h["x-cursor-client-os"] == "linux"
+    assert h["x-sand-box-namespace"] == "prod"
+    assert h["x-ghost-mode"] == "true"
+    assert h["x-cursor-checksum"] == "Vfb45Bi9" + _GB_MACHINE_ID
+    assert h["x-cursor-team-id"] == "4242"
+
+
+@pytest.mark.parametrize("team", [None, _gb_plain("0"), _gb_plain("-3"), _gb_plain("team")])
+def test_grok_bot_team_header_only_for_a_positive_id(tmp_path, team):
+    http = _gb_usage_http()
+    _gb_run(tmp_path, http, store=_gb_store(tmp_path, team=team))
+    assert "x-cursor-team-id" not in http.calls[0]["headers"]
+
+
+@pytest.mark.parametrize("brand", [2, "SAND_BILLING_BRAND_GROK"])
+def test_grok_bot_grok_brand_tier_reads_as_a_week(tmp_path, brand):
+    res, _ = _gb_run(tmp_path, _gb_usage_http({**_GB_USAGE, "billingBrand": brand}))
+    assert res["tier"] == "Grok Pro week"
+    assert [r["label"] for r in res["limits"]] == ["Weekly"]   # not a second percent bar
+    no_label = {k: v for k, v in _GB_USAGE.items() if k != "grokPlanLabel"}
+    res, _ = _gb_run(tmp_path, _gb_usage_http({**no_label, "billingBrand": brand}))
+    assert res["tier"] == "SuperGrok week"
+
+
+def test_grok_bot_cursor_brand_falls_back_to_cursor_plan_name(tmp_path):
+    usage = {"usagePercent": 5, "billingBrand": 1, "cursorPlanName": "Pro"}
+    res, _ = _gb_run(tmp_path, _gb_usage_http(usage))
+    assert res["tier"] == "Pro"
+
+
+def test_grok_bot_pooled_allowance_has_no_bar(tmp_path):
+    res, _ = _gb_run(tmp_path, _gb_usage_http({**_GB_USAGE, "usesPooledEnterpriseAllowance": True}))
+    assert res["status"] == "ok"
+    assert res["limits"] == []                 # never an invented 0% bar
+    assert "pooled" in res["message"]
+
+
+def test_grok_bot_missing_percent_has_no_bar(tmp_path):
+    usage = {k: v for k, v in _GB_USAGE.items() if k != "usagePercent"}
+    res, _ = _gb_run(tmp_path, _gb_usage_http(usage))
+    assert res["status"] == "ok" and res["limits"] == []
+
+
+def test_grok_bot_percent_is_clamped_not_scaled(tmp_path):
+    res, _ = _gb_run(tmp_path, _gb_usage_http({**_GB_USAGE, "usagePercent": 140.5}))
+    assert res["limits"][0]["percent"] == 100.0
+    res, _ = _gb_run(tmp_path, _gb_usage_http({**_GB_USAGE, "usagePercent": 0.4}))
+    assert res["limits"][0]["percent"] == 0.4
+
+
+@pytest.mark.parametrize("reset", [
+    "2099-01-05T00:00:00Z",
+    {"seconds": "4071254400", "nanos": 0},
+    4071254400,
+    4071254400000,
+])
+def test_grok_bot_reset_timestamp_shapes(reset):
+    row = grok_bot.map_grok_bot_weekly({"usagePercent": 1, "nextResetTimestampUtc": reset})
+    assert row["resetAt"] == "2099-01-05T00:00:00+00:00"
+
+
+def test_grok_bot_on_demand_row(tmp_path):
+    usage = {**_GB_USAGE, "hasNonZeroIncludedLimit": True}
+    period = {"spendLimitUsage": {"individualUsed": 250, "individualLimit": 5000}}
+    http = _gb_usage_http(usage, period)
+    res, _ = _gb_run(tmp_path, http)
+    assert [r["label"] for r in res["limits"]] == ["Weekly", "On-demand"]
+    od = res["limits"][1]
+    assert od["used"] == 2.5 and od["limit"] == 50.0 and od["unit"] == "usd"
+    assert od["percent"] == 5.0 and "windowMinutes" not in od
+    # The existing on-demand slot renders it: isExtraUsage + "This month: $used / $limit".
+    from accounting import enrich_ui_formatting
+    snap = {"grokbot": res}
+    enrich_ui_formatting(snap)
+    assert od["isExtraUsage"] is True and res["limits"][0]["isExtraUsage"] is False
+    assert snap["grokbot"]["formattedExtraUsageDetail"] == "This month: $ 2.50 / $ 50.00"
+    assert [c["url"] for c in http.calls] == [grok_bot.GROK_BOT_USAGE_URL, grok_bot.GROK_BOT_PERIOD_URL]
+
+
+@pytest.mark.parametrize("spend", [
+    {"individualLimit": 5000},                          # individualUsed missing
+    {"individualUsed": 250},                            # individualLimit missing
+    {"individualUsed": 250, "individualLimit": 0},
+    {"individualUsed": 250, "individualLimit": 2147483647},   # the app's "unlimited"
+    {"individualUsed": 250, "individualLimit": 3000000000},
+])
+def test_grok_bot_no_on_demand_row_without_a_real_limit(tmp_path, spend):
+    usage = {**_GB_USAGE, "hasNonZeroIncludedLimit": True}
+    res, _ = _gb_run(tmp_path, _gb_usage_http(usage, {"spendLimitUsage": spend}))
+    assert [r["label"] for r in res["limits"]] == ["Weekly"]
+
+
+def test_grok_bot_on_demand_needs_an_included_limit_and_a_weekly_bar(tmp_path):
+    period = {"spendLimitUsage": {"individualUsed": 250, "individualLimit": 5000}}
+    http = _gb_usage_http(_GB_USAGE, period)             # hasNonZeroIncludedLimit absent
+    res, _ = _gb_run(tmp_path, http)
+    assert len(http.calls) == 1 and [r["label"] for r in res["limits"]] == ["Weekly"]
+    pooled = {**_GB_USAGE, "hasNonZeroIncludedLimit": True, "usesPooledEnterpriseAllowance": True}
+    http = _gb_usage_http(pooled, period)
+    res, _ = _gb_run(tmp_path, http)
+    assert len(http.calls) == 1 and res["limits"] == []
+
+
+def test_grok_bot_period_failure_keeps_the_weekly_bar(tmp_path):
+    usage = {**_GB_USAGE, "hasNonZeroIncludedLimit": True}
+    http = _GbHttp({grok_bot.GROK_BOT_USAGE_URL: (200, json.dumps(usage)),
+                    grok_bot.GROK_BOT_PERIOD_URL: (500, "boom")})
+    res, _ = _gb_run(tmp_path, http)
+    assert res["status"] == "ok" and [r["label"] for r in res["limits"]] == ["Weekly"]
+
+
+def test_grok_bot_http_error_never_echoes_the_body(tmp_path):
+    body = json.dumps({"code": "permission_denied",
+                       "message": f"bad Authorization: Bearer {_GB_TOKEN} checksum {_GB_MACHINE_ID}"})
+    res, _ = _gb_run(tmp_path, _GbHttp({grok_bot.GROK_BOT_USAGE_URL: (403, body)}))
+    assert res["status"] == "api-error"
+    assert "HTTP 403" in res["message"] and "permission_denied" in res["message"]
+    assert _GB_TOKEN not in res["message"]
+    _gb_assert_no_secrets(res)
+
+
+def test_grok_bot_401_is_unauthorized(tmp_path):
+    res, _ = _gb_run(tmp_path, _GbHttp({grok_bot.GROK_BOT_USAGE_URL: (401, f"Bearer {_GB_TOKEN}")}))
+    assert res["status"] == "unauthorized"
+    assert "sign in again" in res["message"]
+    _gb_assert_no_secrets(res)
+
+
+def test_grok_bot_415_is_api_error(tmp_path):
+    res, _ = _gb_run(tmp_path, _GbHttp({grok_bot.GROK_BOT_USAGE_URL: (415, "")}))
+    assert res["status"] == "api-error" and "415" in res["message"]
+
+
+def test_grok_bot_timeout_and_network_errors(tmp_path):
+    res, _ = _gb_run(tmp_path, _GbHttp(exc=urllib.error.URLError(TimeoutError("timed out"))))
+    assert res["status"] == "timeout"
+    res, _ = _gb_run(tmp_path, _GbHttp(exc=ValueError(f"Bearer {_GB_TOKEN}")))
+    assert res["status"] == "api-error" and "ValueError" in res["message"]
+    _gb_assert_no_secrets(res)
+
+
+def test_grok_bot_no_store_is_not_running(tmp_path):
+    http = _GbHttp()
+    res, wallets = _gb_run(tmp_path, http, store=tmp_path / "missing" / "sand-secrets.json")
+    assert res["status"] == "not-running" and "sign in" in res["message"]
+    assert http.calls == [] and wallets == []
+
+
+@pytest.mark.parametrize("accounts, active", [
+    ({}, None),                                                     # nobody signed in
+    ({_GB_SCOPE: {"cursor-refresh-token": "x"}}, _GB_SCOPE),        # no access token
+    ({_GB_SCOPE: {}, "cd" * 32: {}}, None),                         # several, none active
+])
+def test_grok_bot_no_signed_in_account_is_not_running(tmp_path, accounts, active):
+    http = _GbHttp()
+    res, _ = _gb_run(tmp_path, http, store=_gb_store(tmp_path, accounts=accounts, active=active))
+    assert res["status"] == "not-running" and http.calls == []
+
+
+def test_grok_bot_single_account_is_used_without_an_active_marker(tmp_path):
+    http = _gb_usage_http()
+    res, _ = _gb_run(tmp_path, http, store=_gb_store(tmp_path, active=None))
+    assert res["status"] == "ok"
+
+
+def test_grok_bot_undecryptable_blob_is_unauthorized(tmp_path):
+    blob = "v10" + "x" * 32
+    wrapped = base64.b64encode(blob.encode()).decode()
+    http = _GbHttp()
+    res, wallets = _gb_run(tmp_path, http, store=_gb_store(tmp_path, token=wrapped),
+                           wallet=_GbWallet(passwords={"chromium": [b"wrong"]}))
+    assert res["status"] == "unauthorized"
+    assert wrapped not in res["message"] and "v10" not in res["message"]
+    assert http.calls == []
+    assert wallets and wallets[0][0].closed
+
+
+@pytest.mark.parametrize("status", ["wallet-locked", "wallet-state-unknown"])
+def test_grok_bot_locked_wallet_status_comes_from_the_client(tmp_path, status):
+    wrapped = base64.b64encode(b"v10" + b"\0" * 32).decode()
+    http = _GbHttp()
+    res, wallets = _gb_run(tmp_path, http, store=_gb_store(tmp_path, token=wrapped),
+                           wallet=_GbWallet(status=status), background=True)
+    assert res["status"] == status
+    assert http.calls == []
+    w, kwargs = wallets[0]
+    assert w.closed and kwargs["background"] is True
+
+
+_GB_OPENSSL = shutil.which("openssl")
+
+
+def _gb_encrypt_v10(password: bytes, plaintext: bytes) -> bytes:
+    """A real Chromium/Electron v10 blob (same recipe as
+    test_cookies_decrypt_and_orchestration._encrypt_v10_cbc)."""
+    from crypto import LINUX_IV, SALT
+    key = hashlib.pbkdf2_hmac("sha1", password, SALT, 1, 16)
+    ct = subprocess.run([_GB_OPENSSL, "enc", "-aes-128-cbc", "-K", key.hex(), "-iv", LINUX_IV.hex()],
+                        input=plaintext, capture_output=True, check=True).stdout
+    return b"v10" + ct
+
+
+@pytest.mark.skipif(_GB_OPENSSL is None, reason="openssl CLI not available")
+def test_grok_bot_decrypts_with_the_chromium_safe_storage_password(tmp_path):
+    from crypto import OpenSslEvp
+    if not OpenSslEvp().available:
+        pytest.skip("libcrypto unavailable")
+    password = b"chromium-safe-storage-password"
+
+    def wrap(text):
+        return base64.b64encode(_gb_encrypt_v10(password, text.encode())).decode()
+
+    store = _gb_store(
+        tmp_path,
+        token=wrap(_GB_TOKEN),
+        machine_id=f"scoped:v1:{_GB_SCOPE}:" + wrap(_GB_MACHINE_ID),
+        team=wrap("77"),
+    )
+    http = _gb_usage_http()
+    res, wallets = _gb_run(tmp_path, http, store=store,
+                           wallet=_GbWallet(passwords={"chromium": [password]}))
+    assert res["status"] == "ok"
+    assert len(wallets) == 1 and wallets[0][0].closed          # opened once, then closed
+    h = http.calls[0]["headers"]
+    assert h["Authorization"] == f"Bearer {_GB_TOKEN}"
+    assert h["x-cursor-checksum"].endswith(_GB_MACHINE_ID)
+    assert h["x-cursor-team-id"] == "77"
+    _gb_assert_no_secrets(res)
+
+
+def test_grok_bot_store_path_lives_under_config():
+    # conftest rehomes it per test; the shape is what the app uses (Electron userData).
+    assert grok_bot.GROK_BOT_SECRETS_PATH.parts[-3:] == (".config", "Grok Bot", "sand-secrets.json")

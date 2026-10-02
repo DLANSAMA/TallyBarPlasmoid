@@ -16,3 +16,10 @@ These assets are provider marks, not TallyBar-owned artwork. Keep them unmodifie
   for the fill colour (`#6d6978` inactive / `white` selected, matching the other switcher
   marks) and a tightened `viewBox` so it carries the same visual weight as its siblings —
   the path data is untouched. Replaces an earlier placeholder X mark drawn for this repo.
+- `../tallybar-provider-icons/grokbot-*.svg`: The Grok Bot mark, a trademark of xAI /
+  SpaceXAI. Geometry taken from Grok Bot 0.63.0 (`/opt/Grok Bot/resources/app.asar` →
+  `dist/renderer/assets/index.eager-common-CN0nwxVh.js`): the outline path `h7` plus the
+  resting eye rings `Nn[0]`, the same three paths as
+  `https://asvg.app/assets/svg/grok-bot/grok-bot-logomark-mono.svg`. Only the fill
+  (`#6d6978` inactive / `#ffffff` selected) and the combination into one even-odd path, so
+  the eyes are real holes under `isMask`, are changed.

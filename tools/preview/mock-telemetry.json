@@ -2573,6 +2573,29 @@
       ],
       "tier": "SuperGrok",
       "accentColor": "#d0d0d0"
+    },
+    "grokbot": {
+      "label": "Grok Bot",
+      "status": "ok",
+      "source": "grok-bot",
+      "message": "Grok Bot weekly usage",
+      "limits": [
+        {
+          "label": "Weekly",
+          "percent": 38.0,
+          "reset": "Resets in 3d 4h",
+          "unit": "percent",
+          "windowMinutes": 10080,
+          "isExtraUsage": false,
+          "formattedUsedText": "38% used",
+          "formattedDetailText": "",
+          "formattedDetailLeft": "",
+          "formattedDetailRight": "",
+          "pacePercent": 54.0
+        }
+      ],
+      "tier": "SuperGrok week",
+      "accentColor": "#e6e6e6"
     }
   },
   "diagnostics": {},
@@ -2582,7 +2605,8 @@
       "claude",
       "gemini",
       "antigravity",
-      "grok"
+      "grok",
+      "grokbot"
     ],
     "refreshIntervalMinutes": 5,
     "notificationsEnabled": true,

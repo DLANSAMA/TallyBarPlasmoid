@@ -29,7 +29,7 @@ PlasmoidItem {
     // --set-config call returns, well before a slower concurrent refresh's backend process exits.
     property int configWriteSeq: 0
     property int configSeqAtRefreshStart: 0
-    property var providerOrder: ["codex", "claude", "gemini", "antigravity", "grok"]
+    property var providerOrder: ["codex", "claude", "gemini", "antigravity", "grok", "grokbot"]
     property var activeProviders: activeProviderTabs()
     property var telemetry: ({
         "ok": false,
@@ -63,6 +63,12 @@ PlasmoidItem {
                 "label": "Grok",
                 "status": "loading",
                 "source": "local-grok-logs",
+                "limits": []
+            },
+            "grokbot": {
+                "label": "Grok Bot",
+                "status": "loading",
+                "source": "grok-bot",
                 "limits": []
             }
         }

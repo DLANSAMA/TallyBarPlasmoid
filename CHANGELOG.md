@@ -6,7 +6,17 @@ Notable changes to TallyBar. Format follows
 
 ## [Unreleased]
 
+### Added
+- A Grok Bot tab: the weekly usage bar from the Grok Bot desktop app's sign-in, plus
+  an on-demand spend line when the account has a spend limit. It sits beside the Grok
+  tab, which still reads the Grok Build CLI; the two are different products with
+  different meters. Reading the sign-in needs KWallet. There is no Grok Bot cost
+  history yet.
+- Existing setups get the new tab without touching Settings. A provider tab you had
+  turned off stays off.
+
 ### Fixed
+- The provider chips in Settings no longer run past the right edge of the card.
 - Antigravity CLI 1.2 and later: TallyBar can read usage and plan status from a
   running `agy` session again. `agy` now requires a security token on its local API,
   which it shares only with the commands it runs; TallyBar picks it up the first time

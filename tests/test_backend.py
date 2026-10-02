@@ -1,4 +1,5 @@
 import datetime as dt
+import json
 from pathlib import Path
 from unittest.mock import patch, mock_open, MagicMock
 
@@ -1410,3 +1411,99 @@ def test_owned_by_current_user_real_proc():
     assert providers.antigravity._owned_by_current_user(_os.getpid()) is True
     assert providers.antigravity._owned_by_current_user(1) is (_os.getuid() == 0)   # init: root's
     assert providers.antigravity._owned_by_current_user(2**22 + 12345) is False     # no such pid
+
+
+# --- Grok Bot: network-only, wired through run_threaded_provider ---------------------
+
+async def _grokbot_snapshot(no_network, grok_bot_result=None, cached=None):
+    """build_snapshot with every provider mocked. run_threaded_provider really calls the
+    Grok Bot adapter (so the wiring is exercised) and stubs everything else."""
+    args = MagicMock()
+    args.no_network = no_network
+    args.background = True
+    args.timeout = 1.0
+    scheduled = []
+
+    async def threaded(func, *a, **k):
+        scheduled.append(func.__name__)
+        if func.__name__ == "_run_grok_bot":
+            return func(*a)
+        return {"status": "ok", "limits": []}
+
+    async def benign_rpc(*a, **k):
+        return {"label": "Codex", "status": "not-running", "limits": []}
+
+    grok_bot = MagicMock(return_value=grok_bot_result)
+    with patch("backend.load_config", return_value={}), \
+         patch("backend.load_snapshot", return_value=cached or {}), \
+         patch("backend.collect_browser_sessions", return_value=([], {})), \
+         patch("backend.run_threaded_provider", side_effect=threaded), \
+         patch("backend.run_codex_rpc", side_effect=benign_rpc), \
+         patch("backend.run_grok_bot", grok_bot), \
+         patch("providers.grok_bot._default_http_text", side_effect=AssertionError("network used")), \
+         patch("backend.compute_local_cost_summaries", side_effect=lambda deadline=None: {}):
+        res = await backend.build_snapshot(args)
+    return res, grok_bot, scheduled
+
+
+@pytest.mark.asyncio
+async def test_grok_bot_is_not_scheduled_with_no_network():
+    res, grok_bot, scheduled = await _grokbot_snapshot(no_network=True)
+    grok_bot.assert_not_called()
+    assert "_run_grok_bot" not in scheduled
+    gb = res["providers"]["grokbot"]
+    assert gb["label"] == "Grok Bot" and gb["status"] == "idle"
+    assert "network" in gb["message"].lower()
+    assert gb["accentColor"] == "#e6e6e6"
+
+
+@pytest.mark.asyncio
+async def test_grok_bot_runs_with_the_background_flag():
+    live = {"label": "Grok Bot", "status": "ok", "source": "grok-bot",
+            "limits": [{"label": "Weekly", "percent": 42.0, "windowMinutes": 10080}]}
+    res, grok_bot, scheduled = await _grokbot_snapshot(no_network=False, grok_bot_result=live)
+    grok_bot.assert_called_once_with(1.0, background=True)
+    assert res["providers"]["grokbot"]["limits"][0]["percent"] == 42.0
+
+
+@pytest.mark.asyncio
+async def test_grok_bot_transient_failure_carries_the_last_good_bar():
+    good = [{"label": "Weekly", "percent": 30.0}]
+    cached = _cached_provider("Grok Bot", good, ts_offset=60.0)
+    failing = {"label": "Grok Bot", "status": "api-error", "limits": [], "message": "HTTP 503"}
+    res, _, _ = await _grokbot_snapshot(no_network=False, grok_bot_result=failing, cached=cached)
+    gb = res["providers"]["grokbot"]
+    assert gb["status"] == "ok" and gb["stale"] is True
+    assert gb["limits"][0]["percent"] == 30.0
+
+
+# --- Enabled-tab migration: a provider added in a release is new, not "turned off" ----
+
+def test_public_config_without_a_saved_list_enables_every_provider():
+    assert backend.public_config({})["providers"] == list(backend.PROVIDER_ORDER)
+    assert "grokbot" in backend.PROVIDER_ORDER
+
+
+def test_public_config_pre_catalog_list_gains_grok_bot_but_keeps_removals():
+    # Saved before Grok Bot existed, with Grok switched off by the user.
+    old = {"providers": ["codex", "claude", "gemini", "antigravity"]}
+    assert backend.public_config(old)["providers"] == ["codex", "claude", "gemini", "antigravity", "grokbot"]
+
+
+def test_public_config_respects_grok_bot_turned_off_after_the_catalog_knew_it():
+    cfg = {"providers": ["codex", "claude"], "providerCatalog": list(backend.PROVIDER_ORDER)}
+    assert backend.public_config(cfg)["providers"] == ["codex", "claude"]
+
+
+def test_update_config_values_settles_the_old_list_before_stamping_the_catalog(tmp_path, monkeypatch):
+    monkeypatch.setattr(backend, "CONFIG_PATH", tmp_path / ".tallybar" / "config.json")
+    backend.CONFIG_PATH.parent.mkdir(parents=True)
+    backend.CONFIG_PATH.write_text(json.dumps({"providers": ["codex", "claude", "gemini", "antigravity"]}))
+    # An unrelated save must not turn Grok Bot (absent from the old list) into "off".
+    out = backend.update_config_values({"notificationsEnabled": False})
+    assert out["providerCatalog"] == list(backend.PROVIDER_ORDER)
+    assert out["providers"] == ["codex", "claude", "gemini", "antigravity", "grokbot"]
+    # Now the user turns Grok Bot off: it stays off.
+    out = backend.update_config_values({"providers": ["codex", "claude", "gemini", "antigravity"]})
+    assert backend.public_config(out)["providers"] == ["codex", "claude", "gemini", "antigravity"]
+    assert backend.public_config(backend.load_config())["providers"] == ["codex", "claude", "gemini", "antigravity"]

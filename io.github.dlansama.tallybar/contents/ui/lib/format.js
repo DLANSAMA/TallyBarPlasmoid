@@ -78,6 +78,7 @@ function providerAccent(providerKey) {
     if (providerKey === "gemini") return "#2f74f5";
     if (providerKey === "antigravity") return "#30b795";
     if (providerKey === "grok") return "#1d9bf0";
+    if (providerKey === "grokbot") return "#e6e6e6";
     return "#218df4"; // codex / default
 }
 
