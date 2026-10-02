@@ -523,6 +523,17 @@ def test_either_final_marker_disables_the_estimate(tmp_path, stop_reason, detail
     assert "estimatedOutputTokens" not in summary
 
 
+def test_unpriced_claude_model_is_named(tmp_path):
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "s.jsonl").write_text(_cc_line("req_1", "u-1", 9, []), encoding="utf-8")
+    with patch("accounting.model_pricing", return_value={}):
+        summary = accounting.local_claude_token_summary(projects_dir=tmp_path, now=_NOW, cache_dir=None)
+    assert summary["unpricedModels"] == ["claude-opus-5-5"]
+    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+        summary = accounting.local_claude_token_summary(projects_dir=tmp_path, now=_NOW, cache_dir=None)
+    assert "unpricedModels" not in summary
+
 
 def test_local_codex_token_summary(tmp_path):
     # OpenAI/Codex shape: cached_input_tokens ⊂ input_tokens, reasoning ⊂ output_tokens.

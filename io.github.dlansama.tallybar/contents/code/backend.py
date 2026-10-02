@@ -1150,6 +1150,10 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     try:
         summaries = await cost_scan
         apply_cost_summaries(providers, summaries)
+        unpriced = {name: s["unpricedModels"] for name, s in (summaries or {}).items()
+                    if isinstance(s, dict) and s.get("unpricedModels")}
+        if unpriced:
+            diagnostics["unpriced_models"] = unpriced
     except (TimeoutError, asyncio.TimeoutError):
         diagnostics["cost_summary_timeout"] = True
     except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):

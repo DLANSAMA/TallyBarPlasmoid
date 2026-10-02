@@ -16,6 +16,7 @@ from parsers import as_dict
 from .formatting import parse_timestamp
 from .pricing import (
     DEFAULT_MODEL_FOR_PROVIDER,
+    has_catalog_price,
     slim_usage,
     usage_cost_usd,
     usage_token_total,
@@ -643,6 +644,12 @@ def local_claude_token_summary(
                             hourly=hourly_token_usage(hourly),
                             model_costs=model_costs,
                             estimated_output_tokens=estimated_output)
+    # A model with no price of its own (one newer than both the live catalog and the
+    # embedded fallback) is billed at the claude-sonnet-4 family default. Name it, so
+    # build_snapshot can surface it as a diagnostic rather than mis-price it silently.
+    unpriced = sorted(m for m in model_costs if not has_catalog_price(m))
+    if summary is not None and unpriced:
+        summary["unpricedModels"] = unpriced
     return summary
 
 

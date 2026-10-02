@@ -18,6 +18,8 @@ Notable changes to TallyBar. Format follows
   is now estimated from the visible text and tool input they produced, and hovering
   the cost section says how many output tokens were estimated. Main-session messages
   are unaffected.
+- The snapshot's `diagnostics.unpriced_models` names any Claude model in the logs that
+  has no price of its own and is billed at the family default rate.
 - Antigravity CLI cost was understated: cache reads captured from the CLI's
   conversation databases were collapsed to each conversation's peak instead of
   billed per call, while the same calls captured live were billed in full. Every

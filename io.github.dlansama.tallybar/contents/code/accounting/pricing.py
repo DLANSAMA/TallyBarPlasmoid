@@ -60,6 +60,12 @@ def _family_default_pricing(model: str | None) -> dict[str, float]:
     return _get_pricing_fn()(DEFAULT_MODEL_FOR_PROVIDER[family])
 
 
+def has_catalog_price(model: str | None) -> bool:
+    """True when ``model`` resolves to a price of its own (live catalog or embedded
+    fallback). False means usage_cost_usd bills it at its family's default rate instead."""
+    return bool(_get_pricing_fn()(model))
+
+
 def usage_cost_usd(usage: Any, model: str | None) -> float:
     """Compute USD cost for one assistant message's usage dict.
 
