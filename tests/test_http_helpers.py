@@ -215,3 +215,67 @@ def test_http_helpers_reject_non_https_before_opening(monkeypatch):
     for fn in (http_json, http_text):
         with pytest.raises(ValueError):
             fn("http://claude.ai/x", CookieJar(), 1.0)
+
+
+# --- bearer requests never follow a redirect --------------------------------------
+
+def test_http_text_refuses_redirects_only_for_bearer_requests():
+    seen = []
+
+    def fake_build_opener(*handlers):
+        seen.append(handlers)
+        return _FakeOpener(_FakeResp(200, b"ok"))
+
+    with patch.object(http_helpers.urllib.request, "build_opener", side_effect=fake_build_opener):
+        http_helpers.http_text("https://x", CookieJar(), 1.0, "POST", b"{}", {"Authorization": "Bearer t"})
+        http_helpers.http_text("https://x", CookieJar(), 1.0, headers={"Accept": "*/*"})
+    assert any(isinstance(h, http_helpers._RefuseRedirects) for h in seen[0])
+    assert not any(isinstance(h, http_helpers._RefuseRedirects) for h in seen[1])   # cookie callers unchanged
+
+
+def test_refuse_redirects_never_forwards_the_bearer():
+    """Loopback end to end: a 302 to a second server is raised as HTTPError and the bearer
+    never reaches the redirect target (CPython's default handler would copy it there)."""
+    import threading
+    import urllib.request
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    hits = []
+
+    class Target(BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits.append(self.headers.get("Authorization"))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    target = HTTPServer(("127.0.0.1", 0), Target)
+
+    class Redirector(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{target.server_port}/steal")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    source = HTTPServer(("127.0.0.1", 0), Redirector)
+    threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in (source, target)]
+    for t in threads:
+        t.start()
+    try:
+        opener = urllib.request.build_opener(http_helpers._RefuseRedirects())
+        req = urllib.request.Request(f"http://127.0.0.1:{source.server_port}/", data=b"{}",
+                                     method="POST", headers={"Authorization": "Bearer secret"})
+        with pytest.raises(urllib.error.HTTPError) as err:
+            opener.open(req, timeout=5)
+        assert err.value.code == 302
+        assert hits == []
+    finally:
+        for s in (source, target):
+            s.shutdown()
+            s.server_close()
