@@ -429,6 +429,101 @@ def test_local_claude_summary_uses_final_streamed_output(tmp_path):
     assert "175K tok" in summary["today"]
 
 
+def _cc_line(request_id, uuid, out, content, stop_reason=None, details=False):
+    """One Claude Code transcript line: one content block of one streamed message."""
+    usage = {"input_tokens": 10, "cache_read_input_tokens": 1000, "output_tokens": out}
+    if details:
+        usage["output_tokens_details"] = {"thinking_tokens": 0}
+    return json.dumps({
+        "type": "assistant", "timestamp": _NOW.isoformat(), "requestId": request_id,
+        "uuid": uuid, "version": "2.1.284",
+        "message": {"model": "claude-opus-5-5", "stop_reason": stop_reason,
+                    "usage": usage, "content": content},
+    }) + "\n"
+
+
+def _write_subagent_fixture(root):
+    """A main session plus two subagent transcripts (one nested under workflows/).
+
+    stale (subagent): a tool-call message Claude Code 2.1.284 logged with only its
+      start-of-message usage — every line has stop_reason null, no output_tokens_details
+      and output_tokens 5. Visible output: 600 chars of text + a 400-char tool input
+      (compact JSON) = 1000 chars -> estimated at 250 output tokens. Its text line is
+      written twice (same uuid) and must count once.
+    final (subagent): a partial line, then the end_turn line with real usage (50). Its
+      4000 visible chars must NOT replace the logged figure.
+    main: a main-session message shaped exactly like the stale one (4000 visible chars,
+      output 7). Main-session transcripts are never estimated.
+    """
+    text_block = [{"type": "text", "text": "t" * 600}]
+    tool_block = [{"type": "tool_use", "id": "toolu_1", "name": "Bash",
+                   "input": {"command": "a" * 386}}]          # '{"command":"' + 386 + '"}' = 400
+    session = root / "proj" / "sess-1"
+    workflow = session / "subagents" / "workflows" / "wf-1"
+    workflow.mkdir(parents=True)
+    (workflow / "agent-a1.jsonl").write_text(
+        _cc_line("req_stale", "u-text", 5, text_block)
+        + _cc_line("req_stale", "u-text", 5, text_block)
+        + _cc_line("req_stale", "u-tool", 5, tool_block), encoding="utf-8")
+    (session / "subagents" / "agent-b1.jsonl").write_text(
+        _cc_line("req_final", "u-b1", 3, [{"type": "text", "text": "b" * 4000}])
+        + _cc_line("req_final", "u-b2", 50, [], stop_reason="end_turn", details=True),
+        encoding="utf-8")
+    (root / "proj" / "sess-1.jsonl").write_text(
+        _cc_line("req_main", "u-m1", 7, [{"type": "text", "text": "m" * 4000}]), encoding="utf-8")
+
+
+def test_subagent_output_estimated_when_no_line_carries_final_usage(tmp_path):
+    _write_subagent_fixture(tmp_path)
+    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+        summary = accounting.local_claude_token_summary(projects_dir=tmp_path, now=_NOW,
+                                                        cache_dir=None)
+    assert summary is not None
+    # main 10+1000+7 + stale 10+1000+250 (estimated) + final 10+1000+50 = 3337 tokens.
+    # Without the estimate the stale message bills output 5: 3092 tokens.
+    assert summary["tokens30d"] == 3337
+    assert summary["cost30d"] == pytest.approx(3337 * 10 / 1e6)
+    assert summary["breakdown"] == "Input 30 · Output 307 · Cached 3K"
+    # Only the estimated part is flagged: 250 estimated - 5 logged.
+    assert summary["estimatedOutputTokens"] == 245
+
+
+def test_subagent_estimate_survives_the_incremental_parse_cache(tmp_path):
+    _write_subagent_fixture(tmp_path)
+    cache = tmp_path / "cache"
+    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+        truth = accounting.local_claude_token_summary(projects_dir=tmp_path, now=_NOW, cache_dir=None)
+        cold = accounting.local_claude_token_summary(projects_dir=tmp_path, now=_NOW, cache_dir=cache)
+        warm = accounting.local_claude_token_summary(projects_dir=tmp_path, now=_NOW, cache_dir=cache)
+    assert cold == truth and warm == truth
+
+
+def test_main_session_and_final_lines_carry_no_estimate_fields(tmp_path):
+    _write_subagent_fixture(tmp_path)
+    main = _lp._parse_claude_file(tmp_path / "proj" / "sess-1.jsonl")
+    assert [set(r) for r in main] == [{"t", "m", "u", "r"}]
+    sub = _lp._parse_claude_file(tmp_path / "proj" / "sess-1" / "subagents" / "agent-b1.jsonl")
+    assert sub[0]["v"] == 4000 and sub[0]["i"] == "u-b1" and "f" not in sub[0]
+    assert sub[1]["f"] == 1 and "v" not in sub[1]
+
+
+@pytest.mark.parametrize("stop_reason, details", [("tool_use", False), (None, True)])
+def test_either_final_marker_disables_the_estimate(tmp_path, stop_reason, details):
+    """Older Claude Code logged stop_reason without output_tokens_details; either marker
+    on any line means the logged output is real."""
+    agents = tmp_path / "proj" / "sess" / "subagents"
+    agents.mkdir(parents=True)
+    (agents / "agent-c.jsonl").write_text(
+        _cc_line("req_c", "u-c1", 4, [{"type": "text", "text": "c" * 4000}])
+        + _cc_line("req_c", "u-c2", 4, [], stop_reason=stop_reason, details=details),
+        encoding="utf-8")
+    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+        summary = accounting.local_claude_token_summary(projects_dir=tmp_path, now=_NOW, cache_dir=None)
+    assert summary["tokens30d"] == 10 + 1000 + 4
+    assert "estimatedOutputTokens" not in summary
+
+
+
 def test_local_codex_token_summary(tmp_path):
     # OpenAI/Codex shape: cached_input_tokens ⊂ input_tokens, reasoning ⊂ output_tokens.
     lines = [

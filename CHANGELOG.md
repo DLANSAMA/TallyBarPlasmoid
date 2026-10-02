@@ -12,6 +12,12 @@ Notable changes to TallyBar. Format follows
   The built-in price table predated these models, so they were billed at older Sonnet
   rates or the wrong cache-read rate (about 16% too high over 30 days on a real log).
   Online pricing was already correct.
+- Claude subagent messages that Claude Code logged without their final token usage
+  are no longer counted at a near-zero output figure. Several Claude Code versions do
+  this for many subagent turns (among them 2.1.258, 2.1.270 and 2.1.284). Their output
+  is now estimated from the visible text and tool input they produced, and hovering
+  the cost section says how many output tokens were estimated. Main-session messages
+  are unaffected.
 - Antigravity CLI cost was understated: cache reads captured from the CLI's
   conversation databases were collapsed to each conversation's peak instead of
   billed per call, while the same calls captured live were billed in full. Every

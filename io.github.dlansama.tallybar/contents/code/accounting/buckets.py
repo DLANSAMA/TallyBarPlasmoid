@@ -143,6 +143,7 @@ def token_summary(
     monthly: list[dict[str, Any]] | None = None,
     hourly: list[dict[str, Any]] | None = None,
     model_costs: dict[str, dict[str, Any]] | None = None,
+    estimated_output_tokens: int = 0,
 ) -> dict[str, Any] | None:
     if month_tokens <= 0 and today_tokens <= 0:
         return None
@@ -166,6 +167,10 @@ def token_summary(
         "projectedMonthlyCost": round(burn_rate * 30.0, 6),
         "modelBreakdown": model_rows,
     }
+    if estimated_output_tokens > 0:
+        # Output tokens in the 30-day totals that were estimated rather than read from a
+        # logged usage figure; the cost section explains them in a tooltip.
+        raw["estimatedOutputTokens"] = int(estimated_output_tokens)
 
     if today_cost > 0.0 or month_cost > 0.0:
         result: dict[str, Any] = {

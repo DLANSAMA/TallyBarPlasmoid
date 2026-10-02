@@ -88,6 +88,7 @@ Runtime: stdlib-only (no third-party deps). `.venv` is for pytest only. Release:
 - `usage_cost_usd` local-log shapes: Anthropic cache additive (never subtract from input); OpenAI subsets; Gemini `thoughts`+`tool` additive (the `tool` add is NOT double-counting).
 - Anthropic 1h cache writes = 2× input (`cache_write_1h`), NOT 1.25×. `_litellm_to_tallybar` **synthesizes** `cache_write_1h = 2× input` for any Anthropic model the live catalog omits — don't drop that synthesis.
 - Claude dedup: keep the FINAL (max-`output_tokens`) streamed line per `requestId`, not first-seen.
+- Claude subagent output estimate: a request in a `subagents/` transcript with no final-usage line (no line with a non-null `stop_reason` or `usage.output_tokens_details`) bills `max(logged, visible_chars // 4)` output, where visible chars are text plus compact tool_use input JSON, summed per line uuid. The added tokens are reported as `estimatedOutputTokens` (cost-section tooltip). Main-session transcripts are never estimated. → `tests/test_accounting.py::test_subagent_*`
 → `tests/test_accounting.py`, `tests/test_cli_usage.py`, `tests/test_pricing_data.py`.
 
 **`_pb_find_usage` gate is model-agnostic — never pin field 1.** Field 1 is the model enum and varies; pinning it to one enum silently drops every other model's usage.

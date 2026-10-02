@@ -1,5 +1,7 @@
 import QtQuick
+import QtQuick.Controls as QQC2
 import QtQuick.Layouts
+import "../lib/format.js" as Fmt
 
 Item {
     id: costSection
@@ -8,6 +10,10 @@ Item {
     property var cost: root.costSummary() || ({})
     property bool hasRealCost: root.hasCostSummary()
     property bool hasBreakdown: String(costSection.cost.breakdown || "").trim().length > 0
+    // Output tokens the backend estimated because the log had no final usage for them
+    // (subagent turns from some Claude Code versions). Explained on hover only, so the
+    // section's height — mirrored by costSectionHeight() — never changes.
+    property real estimatedOutputTokens: Number(costSection.cost.estimatedOutputTokens || 0)
 
     Layout.fillWidth: true
     Layout.preferredHeight: visible ? root.costSectionHeight() : 0
@@ -67,6 +73,9 @@ Item {
         cursorShape: Qt.PointingHandCursor
         hoverEnabled: true
         activeFocusOnTab: true
+        QQC2.ToolTip.delay: 450
+        QQC2.ToolTip.text: i18n("Includes about %1 estimated output tokens: some subagent messages were logged without their final usage.", Fmt.compactCount(costSection.estimatedOutputTokens))
+        QQC2.ToolTip.visible: costMouse.containsMouse && costSection.estimatedOutputTokens > 0
         onClicked: {
             root.toggleCostPopout();
         }

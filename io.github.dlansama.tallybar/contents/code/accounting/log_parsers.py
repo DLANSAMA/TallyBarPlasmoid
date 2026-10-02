@@ -36,7 +36,7 @@ _UNSET = object()
 
 _PARSE_CACHE_DIR = Path.home() / ".tallybar" / "cache"
 _CACHE_SCHEMA_VERSION = 1          # bump to invalidate ALL parse caches at once
-_CLAUDE_PARSE_VERSION = 3          # bump when _parse_claude_file's output shape changes
+_CLAUDE_PARSE_VERSION = 4          # bump when _parse_claude_file's output shape changes
 _CODEX_PARSE_VERSION = 3           # bump when _parse_codex_file's output shape changes
 _GROK_PARSE_VERSION = 3            # bump when _parse_grok_file's output shape changes
 _GEMINI_PARSE_VERSION = 2          # bump when _parse_gemini_file's output shape changes
@@ -220,6 +220,32 @@ def _resolve_cache_path(explicit_dir, provided_root, name: str) -> Path | None:
     return Path(explicit_dir) / name
 
 
+def _visible_output_chars(content: Any) -> int:
+    """Characters of model output a transcript line shows: text blocks plus the compact
+    JSON of each tool_use input. Thinking is excluded (current models log it empty), so
+    this undercounts what the model generated — callers use it only as a lower bound."""
+    if isinstance(content, str):
+        return len(content)
+    if not isinstance(content, list):
+        return 0
+    total = 0
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        kind = block.get("type")
+        if kind == "text":
+            text = block.get("text")
+            if isinstance(text, str):
+                total += len(text)
+        elif kind == "tool_use":
+            try:
+                total += len(json.dumps(block.get("input"), ensure_ascii=False,
+                                        separators=(",", ":")))
+            except (TypeError, ValueError):
+                pass
+    return total
+
+
 def _parse_claude_file(path: Path, start: int = 0,
                        end: int | None = None) -> list[dict[str, Any]] | None:
     """Parse a Claude session JSONL — the BYTE range ``[start, end)`` of it when given
@@ -234,11 +260,22 @@ def _parse_claude_file(path: Path, start: int = 0,
     opaque cookies from ``tell()``. ``json.loads`` takes bytes directly, and decoding a
     mangled line now raises UnicodeDecodeError, which is skipped alongside JSONDecodeError
     rather than escaping the way it used to in text mode.
+
+    Subagent transcripts (any file under a ``subagents/`` directory) carry two extra
+    per-line fields for the summarizer's output estimate: ``f`` marks a line that holds
+    final usage (a non-null ``stop_reason`` or ``usage.output_tokens_details``), and a
+    non-final line records its visible output size ``v`` keyed by its line uuid ``i``.
+    Several Claude Code versions log only the start-of-message usage for many subagent
+    turns (over 90% of them in 2.1.258 and 2.1.284), so no line of such a request ever
+    holds the real ``output_tokens`` and the max-output fold has nothing to recover.
+    Main-session lines never carry these fields. The flag derives from the path, which is
+    the parse cache's key, so the cache stays a pure function of each entry's file.
     """
     try:
         handle = path.open("rb")
     except OSError:
         return None
+    subagent = "subagents" in path.parts
     out: list[dict[str, Any]] = []
     with handle:
         if start > 0:
@@ -261,12 +298,22 @@ def _parse_claude_file(path: Path, start: int = 0,
             usage = message.get("usage") or record.get("usage")
             if usage_token_total(usage) <= 0:
                 continue
-            out.append({
+            rec: dict[str, Any] = {
                 "t": record.get("timestamp"),
                 "m": message.get("model") or record.get("model"),
                 "u": slim_usage(usage),
                 "r": str(record.get("requestId") or record.get("uuid") or ""),
-            })
+            }
+            if subagent:
+                if (message.get("stop_reason") is not None
+                        or (isinstance(usage, dict) and "output_tokens_details" in usage)):
+                    rec["f"] = 1
+                else:
+                    visible = _visible_output_chars(message.get("content"))
+                    if visible > 0:
+                        rec["v"] = visible
+                        rec["i"] = str(record.get("uuid") or "")
+            out.append(rec)
     return out
 
 
@@ -513,6 +560,12 @@ def local_claude_token_summary(
     hourly = empty_hourly_token_buckets(current)
     best: dict[str, dict[str, Any]] = {}
     keyless: list[dict[str, Any]] = []
+    # Subagent output estimate (see _parse_claude_file): requests that have a final-usage
+    # line, and the visible output of the others' non-final lines keyed by line uuid, so a
+    # line seen twice is counted once — the same idempotence the max-output fold has.
+    final_requests: set[str] = set()
+    visible_chars: dict[str, dict[str, int]] = {}
+    estimated_output = 0
 
     def _out_tokens(u: Any) -> int:
         if isinstance(u, dict):
@@ -534,9 +587,29 @@ def local_claude_token_summary(
         if not request_key:
             keyless.append(entry)
             continue
+        if record.get("f"):
+            final_requests.add(request_key)
+        visible = record.get("v")
+        if visible:
+            visible_chars.setdefault(request_key, {})[record.get("i") or ""] = visible
         prev = best.get(request_key)
         if prev is None or entry["out"] > prev["out"]:
             best[request_key] = entry
+
+    # A subagent request with no final-usage line bills max(logged output, visible
+    # characters // 4): a lower bound, since thinking tokens are not visible. Main-session
+    # requests never reach here (they carry no "v"); a final request keeps its logged output.
+    for request_key, chars in visible_chars.items():
+        if request_key in final_requests:
+            continue
+        entry = best[request_key]
+        estimate = sum(chars.values()) // 4
+        if estimate <= entry["out"]:
+            continue
+        if entry["timestamp"] >= thirty_days_ago:
+            estimated_output += estimate - entry["out"]
+        entry["usage"] = {**entry["usage"], "output_tokens": estimate}
+        entry["out"] = estimate
 
     for entry in (*best.values(), *keyless):
         usage = entry["usage"]
@@ -563,12 +636,14 @@ def local_claude_token_summary(
             today_cost += cost
             bucket_add(hourly[timestamp.hour], tokens, cost, model)
 
-    return token_summary(today_tokens, month_tokens, "local-claude-logs", today_cost, month_cost, tier,
-                         breakdown=(month_in, month_out, month_cached),
-                         daily=weekly_token_usage(daily),
-                         monthly=monthly_token_usage(monthly_buckets),
-                         hourly=hourly_token_usage(hourly),
-                         model_costs=model_costs)
+    summary = token_summary(today_tokens, month_tokens, "local-claude-logs", today_cost, month_cost, tier,
+                            breakdown=(month_in, month_out, month_cached),
+                            daily=weekly_token_usage(daily),
+                            monthly=monthly_token_usage(monthly_buckets),
+                            hourly=hourly_token_usage(hourly),
+                            model_costs=model_costs,
+                            estimated_output_tokens=estimated_output)
+    return summary
 
 
 def local_codex_token_summary(
