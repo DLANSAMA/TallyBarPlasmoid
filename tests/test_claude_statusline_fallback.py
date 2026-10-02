@@ -20,7 +20,10 @@ import providers.claude as claude_mod
 
 REPO_ROOT = Path(__file__).parent.parent
 SCRIPT = REPO_ROOT / "integrations" / "claude_code" / "statusline_capture.py"
-NOW = dt.datetime(2026, 9, 22, 12, 0, tzinfo=dt.timezone.utc)
+# The real clock, not a fixed date: parsers.usage_pace_detail reads dt.datetime.now(), so a
+# fixed NOW turns every capture's resetsAt into the past once the calendar passes it and the
+# pace detail (windowMinutes etc.) silently disappears.
+NOW = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
 
 
 def _capture(age_s=60.0, five=(30.0, 2 * 3600), seven=(57.0, 3 * 86400)):
