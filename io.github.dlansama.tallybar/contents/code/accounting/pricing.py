@@ -66,6 +66,25 @@ def has_catalog_price(model: str | None) -> bool:
     return bool(_get_pricing_fn()(model))
 
 
+def prompt_tier_prices(prices: dict[str, float], prompt_tokens: float) -> dict[str, float]:
+    """``prices`` switched to its prompt-length tier when ``prompt_tokens`` is OVER the
+    entry's ``long_context_threshold`` (pricing_data._long_context_tier); ``prices`` itself
+    otherwise, including a prompt of exactly the threshold.
+
+    Every rate moves to its ``long_`` value, output included: the tier prices the whole
+    request (Claude Haiku 5.5 bills 5x past 100K). The switched rates go into a NEW dict —
+    ``prices`` is the memoized catalog entry and must never be mutated.
+
+    ``prompt_tokens`` must be ONE request's prompt. A total summed over a day, a model or
+    a session can cross the threshold when no request did (or hide one that did), so a
+    caller holding only such a total can't pick a tier and bills it at the base rates."""
+    threshold = prices.get("long_context_threshold")
+    if not threshold or prompt_tokens <= threshold:
+        return prices
+    return {key: prices.get("long_" + key, rate) for key, rate in prices.items()
+            if not key.startswith("long_")}
+
+
 def usage_cost_usd(usage: Any, model: str | None) -> float:
     """Compute USD cost for one assistant message's usage dict.
 
@@ -115,14 +134,17 @@ def usage_cost_usd(usage: Any, model: str | None) -> float:
             cache_create = eph_1h + eph_5m
         cache_create_1h = min(eph_1h, cache_create)
 
-    # Prompt-length pricing (pricing_data._long_context_tier): once the prompt — fresh
-    # input + cache writes + cache reads — is OVER the threshold, every token of the
-    # request bills at the long-context rate, output included (Claude Haiku 5.5: 5x past
-    # 100K). Build a new dict: `prices` is the memoized catalog entry, never mutate it.
-    threshold = prices.get("long_context_threshold")
-    if threshold and input_tokens + tool + cache_create + cache_read_separate > threshold:
-        prices = {key: prices.get("long_" + key, rate) for key, rate in prices.items()
-                  if not key.startswith("long_")}
+    # Prompt-length pricing (prompt_tier_prices): this ONE request's prompt is everything
+    # it sent the model — fresh input + tool-use prompt + cache writes (breakdown-derived
+    # too) + cache reads. Every provider's usage shape reduces to that sum:
+    #   Anthropic (Claude): input_tokens, cache writes and cache reads are separate,
+    #     additive counts.
+    #   OpenAI (Codex) and xAI (Grok): input_tokens / prompt_tokens already include the
+    #     cached tokens (cached_within_input), which are not added again.
+    #   Gemini: `input` includes `cached`; the tool-use prompt adds on top.
+    # Cached tokens count toward the prompt for every provider, Gemini and xAI included
+    # (their pricing pages don't say): they are part of the prompt size each API reports.
+    prices = prompt_tier_prices(prices, input_tokens + tool + cache_create + cache_read_separate)
 
     cache_read_rate = prices.get("cache_read", prices.get("input", 0.0))
     cache_write_rate = prices.get("cache_write", prices.get("input", 0.0))

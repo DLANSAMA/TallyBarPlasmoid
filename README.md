@@ -45,6 +45,10 @@ Antigravity's trajectory databases. Tokens are priced against the
 [LiteLLM](https://github.com/BerriAI/litellm) model catalog (fetched once and
 cached on disk), which is why the heading reads *"Cost (if pay-per-use)"* — it
 is what your usage *would* have cost on the API, not what you were charged.
+Each request is priced on its own, so a model that costs more for long prompts
+(Claude Haiku 5.5 past 100K tokens, GPT-5.5 past 272K, Gemini 2.5 and 3.1 Pro past
+200K, Grok 4.x from 200K) is billed at the higher rate only for the requests whose
+prompt crosses that size.
 Grok Bot has no local cost history yet: its tab shows the weekly bar only.
 
 Clicking the cost row opens a separate chart window with a 7-day bar chart, a
@@ -246,7 +250,9 @@ pushing a `v*` tag builds the `.plasmoid`, stamps the version into
   credit reading reaches the local log when the `grok` CLI starts; between runs
   the widget shows the last reading and marks it "(cached)" past an hour.
 - **Costs are estimates.** They are list prices applied to locally logged token
-  counts. Treat them as a sense of scale, not a bill.
+  counts. Treat them as a sense of scale, not a bill. An Antigravity CLI session
+  known only from its status-line total is billed at the base rate, since no single
+  request's prompt size survives.
 
 ## Prior art
 

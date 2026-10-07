@@ -469,12 +469,12 @@ def test_update_antigravity_token_ledger_pruning(monkeypatch, tmp_path):
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
     ledger_path = tmp_path / "ide_ledger.json"
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", ledger_path)
-    
+
     # Save a ledger with some old entries and some recent entries
     current_date = dt.date.today()
     old_date = (current_date - dt.timedelta(days=36)).isoformat()
     recent_date = (current_date - dt.timedelta(days=34)).isoformat()
-    
+
     ledger_data = {
         "trackingStarted": old_date,
         "entries": {
@@ -483,14 +483,14 @@ def test_update_antigravity_token_ledger_pruning(monkeypatch, tmp_path):
         }
     }
     ledger_path.write_text(json.dumps(ledger_data))
-    
+
     # Run the ledger update (or ledger_cost_summary which triggers update)
     res = costmod.update_antigravity_token_ledger()
-    
+
     # Verify old entry is pruned, recent entry is kept
     assert "old:1" not in res["entries"]
     assert "recent:1" in res["entries"]
-    
+
     # Verify file is updated on disk
     saved_data = json.loads(ledger_path.read_text())
     assert "old:1" not in saved_data["entries"]
@@ -507,9 +507,9 @@ def test_update_antigravity_token_ledger_multi_generation_aggregation(monkeypatc
          patch("providers.cost.sqlite3.connect") as mock_connect, \
          patch("providers.cost._load_antigravity_ledger", return_value={"trackingStarted": None, "entries": {}}), \
          patch("providers.cost._save_antigravity_ledger") as mock_save:
-        
+
         mock_con = MagicMock()
-        
+
         def mock_execute(query, *args):
             cursor = MagicMock()
             if "PRAGMA" in query:
@@ -522,18 +522,18 @@ def test_update_antigravity_token_ledger_multi_generation_aggregation(monkeypatc
                 cursor.__iter__.return_value = [(1, b"mockblob")]
                 cursor.fetchall.return_value = [(1, b"mockblob")]
             return cursor
-            
+
         mock_con.execute.side_effect = mock_execute
         mock_connect.return_value = mock_con
-        
+
         # Mock ANTIGRAVITY_CONVERSATION_DIRS to have at least one directory with a DB file
         db_dir = tmp_path / "convs"
         db_dir.mkdir()
         (db_dir / "test.db").write_text("")
         monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", (db_dir,))
-        
+
         res = costmod.update_antigravity_token_ledger()
-        
+
         # Verify the sum of the elements in the entries
         entry = res["entries"]["test:1"]
         assert entry["u"] == 300 # 100 + 200
@@ -542,6 +542,7 @@ def test_update_antigravity_token_ledger_multi_generation_aggregation(monkeypatc
         assert entry["t"] == 15 # 5 + 10
         assert entry["x"] == 6 # 2 + 4
         assert entry["me"] == 1016
+        assert entry["n"] == 2  # two distinct records summed -> bills at the base rates
 
         mock_save.assert_called_once()
 
@@ -1499,12 +1500,12 @@ def test_marker26_and_marker24_steps_disjoint_keys(tmp_path, monkeypatch):
     res = cm.update_antigravity_token_ledger()
     entries = res["entries"]
     # Exactly two entries: steps:0 and gen@1 — the gen-side marker-24 is skipped
-    assert set(entries) == {"dedup:0", "dedup@1"}, (
-        f"Expected {{dedup:0, dedup@1}}, got {set(entries)}"
+    assert set(entries) == {"dedup:0", "dedup@1.0"}, (
+        f"Expected {{dedup:0, dedup@1.0}}, got {set(entries)}"
     )
     assert entries["dedup:0"]["u"] == 100
-    assert entries["dedup@1"]["u"] == 200
-    assert entries["dedup@1"]["me"] == 1026
+    assert entries["dedup@1.0"]["u"] == 200
+    assert entries["dedup@1.0"]["me"] == 1026
 
 
 def test_apply_cost_summaries_replaces_stale_and_clears_on_no_data():
@@ -1522,3 +1523,57 @@ def test_apply_cost_summaries_replaces_stale_and_clears_on_no_data():
     assert "costSummary" not in providers["codex"]
     assert providers["gemini"]["costSummary"]["cost30d"] == 3.0      # not in this scan: untouched
     assert providers["antigravity"]["costSummary"]["cost30d"] == 44.0
+
+
+# --- Prompt-length tiers on the ledger: per call, never on a cumulative session total ----
+# Gemini 3.1 Pro bills a prompt over 200K at $4 / $18 / $0.40 (base $2 / $12 / $0.20).
+_PRO_31_TIERED = {"input": 2.0, "output": 12.0, "cache_read": 0.2, "long_context_threshold": 200_000,
+                  "long_input": 4.0, "long_output": 18.0, "long_cache_read": 0.4}
+
+
+def _tiered_cost_today(monkeypatch, tmp_path, ledger_entries, cli_entries=None):
+    """costToday for one IDE-ledger + statusLine fixture, priced with _PRO_31_TIERED."""
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
+    ledger, cli = tmp_path / "ide_ledger.json", tmp_path / "cli.json"
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", ledger)
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CLI_USAGE_PATH", cli)
+    monkeypatch.setattr(costmod, "model_pricing",
+                        lambda name, *a, **k: dict(_PRO_31_TIERED) if name == "gemini-3.1-pro" else {})
+    today = dt.date.today().isoformat()
+    for path, entries in ((ledger, ledger_entries), (cli, cli_entries or {})):
+        path.write_text(json.dumps({"trackingStarted": today, "entries": {
+            k: {"d": today, **v} for k, v in entries.items()}}))
+    return costmod.antigravity_ledger_cost_summary()["costToday"]
+
+
+def test_ledger_calls_pick_their_own_prompt_tier(monkeypatch, tmp_path):
+    """Each ':' / '@' / '#' ledger entry is one API call, so its own prompt (uncached input
+    + cache reads) picks the tier: 200_001 tokens bills every rate at the tier, exactly
+    200_000 stays on the base rates."""
+    over = {"me": 1016, "u": 150_000, "c": 50_001, "o": 10_000}
+    at = {"me": 1016, "u": 150_000, "c": 50_000, "o": 10_000}
+    # 150_000*4 + 50_001*0.4 + 10_000*18 = 800_000.4 per call, in every per-call namespace.
+    assert _tiered_cost_today(monkeypatch, tmp_path, {"a:0": over, "b@0": over, "c#g0": over}) \
+        == pytest.approx(3 * 0.8000004, abs=1e-6)
+    # 150_000*2 + 50_000*0.2 + 10_000*12 = 430_000
+    assert _tiered_cost_today(monkeypatch, tmp_path, {"a:0": at}) == pytest.approx(0.43, abs=1e-6)
+
+
+def test_cumulative_cli_entry_bills_at_the_base_rates(monkeypatch, tmp_path):
+    """A statusLine "cli:" entry is a whole session's running total: its u + c adds every
+    call's prompt together, so passing 200K says nothing about any one call. It bills at
+    the base rates, where the same numbers as one ledger call take the tier."""
+    session = {"model": "Gemini 3.1 Pro (High)", "u": 150_000, "c": 50_001, "o": 10_000}
+    # 150_000*2 + 50_001*0.2 + 10_000*12 = 430_000.2
+    assert _tiered_cost_today(monkeypatch, tmp_path, {}, {"cli:s": session}) \
+        == pytest.approx(0.43, abs=1e-6)
+
+
+def test_summed_entry_bills_at_the_base_rates_unless_it_is_one_call(monkeypatch, tmp_path):
+    """An entry marked "n" > 1 sums several requests (no single prompt size is known), so it
+    bills at the base rates; the identical entry without "n" is one call and takes the tier."""
+    entry = {"me": 1016, "u": 150_000, "c": 50_001, "o": 10_000}
+    assert _tiered_cost_today(monkeypatch, tmp_path, {"a:0": {**entry, "n": 2}}) \
+        == pytest.approx(0.43, abs=1e-6)       # 150_000*2 + 50_001*0.2 + 10_000*12 (base)
+    assert _tiered_cost_today(monkeypatch, tmp_path, {"a:0": entry}) \
+        == pytest.approx(0.8000004, abs=1e-6)  # same numbers as one call: long tier

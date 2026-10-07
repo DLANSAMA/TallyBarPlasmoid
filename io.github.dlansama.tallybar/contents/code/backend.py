@@ -996,16 +996,11 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
                                 fallback={"label": "Google One", "status": "error", "creditBalance": None},
                             )
                         )
-                    # Expired or missing pricing cache: refresh concurrently in the TaskGroup
-                    from pricing_data import PRICING_CACHE_PATH, PRICING_CACHE_TTL, refresh_pricing
-                    cache_missing = not PRICING_CACHE_PATH.exists()
-                    cache_expired = False
-                    if not cache_missing:
-                        try:
-                            cache_expired = (time.time() - PRICING_CACHE_PATH.stat().st_mtime) > PRICING_CACHE_TTL
-                        except Exception:
-                            cache_expired = True
-                    if cache_missing or cache_expired:
+                    # Missing, expired or pre-upgrade pricing cache (one get_pricing refuses,
+                    # see pricing_data.PRICING_CACHE_VERSION): refresh concurrently in the
+                    # TaskGroup.
+                    from pricing_data import cache_is_current, refresh_pricing
+                    if not cache_is_current():
                         # Guard the pricing refresh: it is a background cache write
                         # whose result isn't read this run, so its failure must NEVER
                         # propagate out of the TaskGroup (which would cancel every
@@ -1081,7 +1076,7 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         providers["grok"],
         "Grok"
     )
-        
+
     antigravity_remote = None
     if "antigravity_remote" in api_tasks:
         antigravity_remote = get_task_result(
@@ -1089,7 +1084,7 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
             {**providers["antigravity"], "source": "remote-oauth"},
             "Antigravity"
         )
-        
+
     providers["antigravity"] = choose_antigravity_result(providers["antigravity"], antigravity_remote)
     providers["antigravity"] = carry_forward_partial_antigravity_lanes(
         providers["antigravity"], cached_snapshot)

@@ -33,6 +33,7 @@ from accounting import (
     model_breakdown_rows,
     model_pricing,
     monthly_token_usage,
+    prompt_tier_prices,
     trailing_week_days,
     weekly_token_usage,
 )
@@ -302,7 +303,10 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
             prefix_len = len(cascade_id) + 1
             for key in [k for k in entries
                         if (k.startswith(f"{cascade_id}:") or k.startswith(f"{cascade_id}@"))
-                        and k[prefix_len:].isdigit()]:
+                        and (k[prefix_len:].isdigit()
+                             or (k.startswith(f"{cascade_id}@")
+                                 and re.fullmatch(r"\d+\.\d+", k[prefix_len:]))
+                             )]:
                 del entries[key]
                 changed = True
             for rec in records:
@@ -494,6 +498,10 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                             "x": sum(vd.get(10, 0) for vd in found),  # tool
                             "me": _dominant_enum(found),  # model enum (for per-model pricing)
                         }
+                        if len(found) > 1:
+                            # Several distinct records summed into one entry: no single call's
+                            # size is known, so the cost summary bills it at the base rates.
+                            entries[f"{stem}:{idx}"]["n"] = len(found)
                         changed = True
 
                 # CLI DBs: STOP after the steps pass. Their gen_metadata rows hold
@@ -591,14 +599,20 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                             # at_stems backfill logic for the _pb_generations path below).
                             gen_date = today_iso if stem in at_stems else mtime_fallback_date
                             if gen_date >= cutoff:
-                                entries[f"{stem}@{idx}"] = {
-                                    "d": gen_date,
-                                    "u": sum(vd.get(2, 0) for vd in found),
-                                    "c": sum(vd.get(5, 0) for vd in found),
-                                    "o": sum(vd.get(3, 0) for vd in found),
-                                    "me": _dominant_enum(found),
-                                }
-                                changed = True
+                                # One entry per record (same key shape as the dated path) so
+                                # each is one call that can pick its own prompt-length tier.
+                                for gi, vd in enumerate(found):
+                                    key = f"{stem}@{idx}.{gi}"
+                                    if key in entries:
+                                        continue
+                                    entries[key] = {
+                                        "d": gen_date,
+                                        "u": vd.get(2, 0),
+                                        "c": vd.get(5, 0),
+                                        "o": vd.get(3, 0),
+                                        "me": vd.get(1, 0),
+                                    }
+                                    changed = True
                             continue
                         for gi, gen in enumerate(gens):
                             gen_date = _local_iso(gen["secs"])
@@ -946,8 +960,13 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
             _price_cache[key] = chosen
         return _price_cache[key]
 
-    def cost_of(e: dict[str, int]) -> float:
+    def cost_of(e: dict[str, int], per_call: bool = True) -> float:
         p = _prices_for(e)
+        if per_call:
+            # Prompt-length tier (Gemini 3.1 Pro bills prompts over 200K higher): one call's
+            # prompt is its uncached input + cache reads ("o" is output). Only a per-call
+            # entry can pick one — see the caller for the cumulative "cli:" entries.
+            p = prompt_tier_prices(p, e.get("u", 0) + e.get("c", 0))
         in_rate = p.get("input", 0.0) or 0.0
         cache_rate = p.get("cache_read", 0.0) or 0.0
         out_rate = p.get("output", 0.0) or 0.0
@@ -994,7 +1013,14 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
     for key, e in entries.items():
         d = e.get("d", "")
         cached = e.get("c", 0)
-        c = cost_of(e)
+        # A ':' / '@' / '#' entry is one API call (gen_metadata stores one entry per
+        # generation), so it picks its own prompt-length tier. A steps row holding several
+        # distinct records is marked "n" and bills at the base rates, like a "cli:" entry:
+        # a sum can't pick a tier. An entry without "n" is one call.
+        # A "cli:" entry is the statusLine's CUMULATIVE session total: its u + c adds up
+        # every call's prompt and says nothing about any one call's size, and the capture
+        # keeps no per-call record to tier from — so it bills at the base rates.
+        c = cost_of(e, per_call=not key.startswith("cli:") and e.get("n", 1) == 1)
         # Token VOLUME = total tokens processed = uncached input + cached re-read + output
         # (industry standard: volume includes cache reads; cost bills them discounted).
         tok = e.get("u", 0) + cached + e.get("o", 0)  # o = total output (see cost_of)

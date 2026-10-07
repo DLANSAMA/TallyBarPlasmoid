@@ -9,10 +9,13 @@ mtime backfill dating that keeps a first-run backlog out of "Today".
 """
 
 import datetime as dt
+import json
 import os
 import sqlite3
 import sys
 from pathlib import Path
+
+import pytest
 
 CODE_DIR = Path(__file__).parent.parent / "io.github.dlansama.tallybar" / "contents" / "code"
 sys.path.insert(0, str(CODE_DIR))
@@ -80,9 +83,9 @@ def test_genmetadata_26_records_ingested_under_at_keys(monkeypatch, tmp_path):
     _wire(monkeypatch, tmp_path, conv)
     res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
     e = res["entries"]
-    assert "cas@0" in e and "cas@1" in e
-    assert (e["cas@0"]["u"], e["cas@0"]["c"], e["cas@0"]["o"], e["cas@0"]["me"]) == (200, 30, 80, 1026)
-    assert "t" not in e["cas@0"] and "x" not in e["cas@0"]   # t/x omitted by design
+    assert "cas@0.0" in e and "cas@1.0" in e
+    assert (e["cas@0.0"]["u"], e["cas@0.0"]["c"], e["cas@0.0"]["o"], e["cas@0.0"]["me"]) == (200, 30, 80, 1026)
+    assert "t" not in e["cas@0.0"] and "x" not in e["cas@0.0"]   # t/x omitted by design
 
 
 def test_genmetadata_24_records_ignored(monkeypatch, tmp_path):
@@ -109,8 +112,8 @@ def test_mixed_upgrade_db_steps_and_genmetadata_disjoint(monkeypatch, tmp_path):
     _wire(monkeypatch, tmp_path, conv)
     res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
     e = res["entries"]
-    assert set(e) == {"span:0", "span@1"}   # steps row + the lone 26 record; gen-side 24 dropped
-    assert e["span:0"]["me"] == 1016 and e["span@1"]["me"] == 1026
+    assert set(e) == {"span:0", "span@1.0"}   # steps row + the lone 26 record; gen-side 24 dropped
+    assert e["span:0"]["me"] == 1016 and e["span@1.0"]["me"] == 1026
 
 
 def test_steps_only_db_unaffected_by_genmetadata_pass(monkeypatch, tmp_path):
@@ -133,7 +136,7 @@ def test_genmetadata_backfill_dates_to_mtime_then_today(monkeypatch, tmp_path):
     _set_mtime(db, "2026-06-02")
     _wire(monkeypatch, tmp_path, conv)
     res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
-    assert res["entries"]["cas@0"]["d"] == "2026-06-02"  # first scan -> backfill to file mtime date
+    assert res["entries"]["cas@0.0"]["d"] == "2026-06-02"  # first scan -> backfill to file mtime date
 
     # A genuinely NEW record appearing after the DB already has "@" entries gets today_iso.
     con = sqlite3.connect(str(db))
@@ -142,20 +145,20 @@ def test_genmetadata_backfill_dates_to_mtime_then_today(monkeypatch, tmp_path):
     con.commit()
     con.close()
     res2 = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
-    assert res2["entries"]["cas@0"]["d"] == "2026-06-02"  # existing entry unchanged
-    assert res2["entries"]["cas@5"]["d"] == "2026-06-09"  # new record -> today, not mtime
+    assert res2["entries"]["cas@0.0"]["d"] == "2026-06-02"  # existing entry unchanged
+    assert res2["entries"]["cas@5.0"]["d"] == "2026-06-09"  # new record -> today, not mtime
 
 
 def test_rpc_takeover_purges_at_keys(monkeypatch, tmp_path):
     # Once the live RPC reports a cascade, its on-disk-sourced entries — both legacy ":" (steps)
-    # AND new "@" (gen_metadata) — are dropped in favour of the authoritative RPC "#" entries.
+    # AND new "@" (gen_metadata, "<stem>@<idx>.<gi>") — are dropped in favour of the authoritative RPC "#" entries.
     conv = tmp_path / "convs"
     conv.mkdir()
     _make_db(conv / "cas.db", gen=[(0, _usage_blob(26))])
     _wire(monkeypatch, tmp_path, conv)
     # First run: no RPC -> the @ entry is captured from disk.
     first = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
-    assert "cas@0" in first["entries"]
+    assert "cas@0.0" in first["entries"]
 
     # Second run: RPC now owns "cas" -> the @ key is purged, replaced by the "#" entry.
     rpc = {"cas": [{"stepKey": "0", "date": "2026-06-09", "hour": 10,
@@ -163,7 +166,7 @@ def test_rpc_takeover_purges_at_keys(monkeypatch, tmp_path):
                     "api_provider": "ANTHROPIC_VERTEX"}]}
     monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: (rpc, {"cas": "t1"}))
     second = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
-    assert "cas@0" not in second["entries"]    # disk @ key purged on RPC takeover
+    assert "cas@0.0" not in second["entries"]    # disk @ key purged on RPC takeover
     assert "cas#0" in second["entries"]
 
 
@@ -179,7 +182,7 @@ def test_rpc_covered_stem_skips_genmetadata_scan(monkeypatch, tmp_path):
                     "api_provider": "ANTHROPIC_VERTEX"}]}
     monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: (rpc, {"cas": "t1"}))
     res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
-    assert "cas@0" not in res["entries"] and "cas#0" in res["entries"]
+    assert "cas@0.0" not in res["entries"] and "cas#0" in res["entries"]
 
 
 def test_genmetadata_survives_bak_round_trip(monkeypatch, tmp_path):
@@ -193,7 +196,7 @@ def test_genmetadata_survives_bak_round_trip(monkeypatch, tmp_path):
     bak = led.with_name(led.name + ".bak")
     assert led.exists() and bak.exists() and led.read_text() == bak.read_text()
     import json
-    assert "cas@0" in json.loads(bak.read_text())["entries"]
+    assert "cas@0.0" in json.loads(bak.read_text())["entries"]
 
 
 def test_genmetadata_deadline_abandons_scan(monkeypatch, tmp_path):
@@ -361,7 +364,7 @@ def test_scan_memo_skips_unchanged_db(monkeypatch, tmp_path):
     _set_mtime(conv / "cas.db", "2026-06-05")
     _wire(monkeypatch, tmp_path, conv)
     res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
-    assert "cas:0" in res["entries"] and "cas@0" in res["entries"]
+    assert "cas:0" in res["entries"] and "cas@0.0" in res["entries"]
     assert "cas" in res["dbScanned"]                      # memo persisted
 
     calls = _counting_pb(monkeypatch)
@@ -497,7 +500,7 @@ def test_undated_generation_blob_ingested_once(monkeypatch, tmp_path):
     _set_mtime(conv / "cas.db", "2026-06-01")
     _wire(monkeypatch, tmp_path, conv)
     e = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)["entries"]
-    assert (e["cas@0"]["u"], e["cas@0"]["c"], e["cas@0"]["o"]) == (200, 30, 80)
+    assert (e["cas@0.0"]["u"], e["cas@0.0"]["c"], e["cas@0.0"]["o"]) == (200, 30, 80)
 
 
 def test_unknown_layout_fallback_dedupes_exact_copies(monkeypatch, tmp_path):
@@ -511,4 +514,54 @@ def test_unknown_layout_fallback_dedupes_exact_copies(monkeypatch, tmp_path):
     _set_mtime(conv / "cas.db", "2026-06-01")
     _wire(monkeypatch, tmp_path, conv)
     e = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)["entries"]
-    assert e["cas@0"]["u"] == 200
+    assert e["cas@0.0"]["u"] == 200
+
+
+@pytest.mark.parametrize("layout", ["one-generation-each", "unknown-layout-fallback"])
+def test_undated_blob_with_several_records_gets_one_entry_each(monkeypatch, tmp_path, layout):
+    """An undated gen row holding 3 requests of ~90K prompt writes one "@<idx>.<gi>" entry per
+    record (not one summed 270K entry), so each bills at the base rates instead of the
+    long-prompt tier. Covers the structural read and the recursive fallback."""
+    recs = [_usage_blob(26, model=1016, u=60_000 + i, o=1000, c=30_000) for i in range(3)]
+    if layout == "one-generation-each":
+        blob = b"".join(_ld(1, _ld(4, r)) for r in recs)
+    else:
+        blob = b"".join(_ld(7 + i, r) for i, r in enumerate(recs))
+    conv = tmp_path / "convs"
+    conv.mkdir()
+    _make_db(conv / "cas.db", gen=[(0, blob)])
+    _set_mtime(conv / "cas.db", dt.date.today().isoformat())
+    _wire(monkeypatch, tmp_path, conv)
+    e = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)["entries"]
+    assert set(e) == {"cas@0.0", "cas@0.1", "cas@0.2"}
+    assert [e[f"cas@0.{i}"]["u"] for i in range(3)] == [60_000, 60_001, 60_002]
+    assert all("n" not in v and v["me"] == 1016 for v in e.values())
+
+    monkeypatch.setattr(costmod, "model_pricing", lambda name, *a, **k: (
+        {"input": 2.0, "output": 12.0, "cache_read": 0.2, "long_context_threshold": 200_000,
+         "long_input": 4.0, "long_output": 18.0, "long_cache_read": 0.4}
+        if name == "gemini-3.1-pro" else {}))
+    # Base rates per call: (60_000+i)*2 + 30_000*0.2 + 1000*12 = 138_000 + 2i; summed prompt (270K)
+    # would have taken the long tier.
+    cost = costmod.antigravity_ledger_cost_summary()["costToday"]
+    assert cost == pytest.approx(3 * 0.138 + 6e-6, abs=1e-6)
+
+
+def test_rpc_takeover_purges_dated_at_keys(monkeypatch, tmp_path):
+    """A pre-seeded "<id>@<idx>.<gi>" entry (the dated gen shape) is dropped when the RPC
+    owns the cascade, so it is not billed alongside the "#" entries."""
+    conv = tmp_path / "convs"
+    conv.mkdir()
+    _wire(monkeypatch, tmp_path, conv)
+    (tmp_path / "ledger.json").write_text(json.dumps({
+        "trackingStarted": "2026-06-08",
+        "entries": {"cas@0.0": {"d": "2026-06-08", "u": 5, "c": 0, "o": 5, "me": 1026},
+                    "cas@12.3": {"d": "2026-06-08", "u": 5, "c": 0, "o": 5, "me": 1026},
+                    "casx@0.0": {"d": "2026-06-08", "u": 5, "c": 0, "o": 5, "me": 1026}}}))
+    rpc = {"cas": [{"stepKey": "0", "date": "2026-06-09", "hour": 10,
+                    "u": 1, "c": 0, "o": 1, "model_placeholder": "MODEL_PLACEHOLDER_M26",
+                    "api_provider": "ANTHROPIC_VERTEX"}]}
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: (rpc, {"cas": "t1"}))
+    e = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)["entries"]
+    assert "cas@0.0" not in e and "cas@12.3" not in e
+    assert "cas#0" in e and "casx@0.0" in e   # another stem is untouched

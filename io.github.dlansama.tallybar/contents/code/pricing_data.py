@@ -40,6 +40,14 @@ from io_helpers import atomic_write_text, to_daemon_thread
 
 PRICING_CACHE_PATH = Path.home() / ".tallybar" / "pricing_cache.json"
 PRICING_CACHE_TTL = 86400.0  # 24 hours — model pricing changes rarely
+# Format of pricing_cache.json. Bump it whenever _litellm_to_tallybar's output changes:
+# the cache holds converted entries, not LiteLLM's raw fields, so an older one can't be
+# upgraded in place. Both loaders refuse any other version — even as the stale fallback —
+# and cache_is_current() makes build_snapshot refetch on that same refresh.
+# 2: prompt-length tiers (long_context_threshold + long_*) for every provider. A cache
+#    saved before (no "version" key) has none and would bill every long prompt at the
+#    base rates.
+PRICING_CACHE_VERSION = 2
 
 # Only ingest chat models from these direct-API providers (skip Bedrock/Vertex
 # duplicates which carry the same prices but with provider-prefixed keys). NOTE:
@@ -69,15 +77,21 @@ _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
     # the claude-sonnet-4 family default.
     # Haiku 5.5 and Sonnet 4.5 also carry a prompt-length tier (long_context_threshold +
     # long_* rates; see _long_context_tier): a request whose prompt passes the threshold
-    # bills every token at the long rates.
-    # Rates: Anthropic's published pricing, identical to the LiteLLM catalog (2026-10-07).
+    # bills every token at the long rates. Every row below for a model the LiteLLM catalog
+    # tiers (OpenAI, Gemini and xAI too) carries that tier, so a first run / offline bills
+    # long prompts the way the live catalog does.
+    # Sonnet 4.5's 200K tier comes from the LiteLLM catalog; Anthropic's pricing page no
+    # longer lists it. Pricing stays catalog-driven: this row mirrors the catalog, and the
+    # live entry wins whenever one is cached.
+    # Rates: Anthropic's published pricing, identical to the LiteLLM catalog (2026-10-07)
+    # apart from that Sonnet 4.5 tier.
     ("claude-fable-5-1",     {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 0.25}),
     ("claude-fable-5",       {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 1.00}),
     ("claude-mythos-5-1",    {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 0.25}),
     ("claude-mythos-5",      {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 1.00}),
     ("claude-opus-5-5",      {"input":  4.00, "output": 20.00, "cache_write":  5.00, "cache_write_1h":  8.00, "cache_read": 0.20}),
     ("claude-opus-5",        {"input":  5.00, "output": 25.00, "cache_write":  6.25, "cache_write_1h": 10.00, "cache_read": 0.50}),
-    ("claude-sonnet-5-5",    {"input":  2.00, "output": 10.00, "cache_write":  2.50, "cache_write_1h":  4.00, "cache_read": 0.20}),
+    ("claude-sonnet-5-5",    {"input":  2.00, "output": 10.00, "cache_write":  2.50, "cache_write_1h":  4.00, "cache_read": 0.10}),
     ("claude-sonnet-5",      {"input":  2.00, "output": 10.00, "cache_write":  2.50, "cache_write_1h":  4.00, "cache_read": 0.20}),
     ("claude-haiku-5-5",     {"input":  0.10, "output":  0.50, "cache_write":  0.125, "cache_write_1h": 0.20, "cache_read": 0.01,
                               "long_context_threshold": 100_000, "long_input": 0.50, "long_output": 2.50,
@@ -99,9 +113,15 @@ _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
     ("claude-sonnet-4",      {"input":  3.00, "output": 15.00, "cache_write":  3.75, "cache_write_1h":  6.00, "cache_read": 0.30}),
     ("claude-haiku-4",       {"input":  1.00, "output":  5.00, "cache_write":  1.25, "cache_write_1h":  2.00, "cache_read": 0.10}),
     # OpenAI / Codex
-    ("gpt-5.5",              {"input":  5.00, "output": 30.00, "cache_read":  0.50}),
+    # GPT-5.5 and 5.4 bill prompts over 272K tokens at their long-prompt tier (LiteLLM
+    # catalog, 2026-10-07).
+    ("gpt-5.5",              {"input":  5.00, "output": 30.00, "cache_read":  0.50,
+                              "long_context_threshold": 272_000, "long_input": 10.00,
+                              "long_output": 45.00, "long_cache_read": 1.00}),
     ("gpt-5.4-mini",         {"input":  0.75, "output":  4.50, "cache_read":  0.075}),
-    ("gpt-5.4",              {"input":  2.50, "output": 15.00, "cache_read":  0.25}),
+    ("gpt-5.4",              {"input":  2.50, "output": 15.00, "cache_read":  0.25,
+                              "long_context_threshold": 272_000, "long_input":  5.00,
+                              "long_output": 22.50, "long_cache_read": 0.50}),
     ("gpt-5-mini",           {"input":  0.75, "output":  4.50, "cache_read":  0.075}),
     ("gpt-5-nano",           {"input":  0.05, "output":  0.40, "cache_read":  0.005}),
     ("gpt-5",                {"input":  2.50, "output": 15.00, "cache_read":  0.25}),
@@ -119,14 +139,21 @@ _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
     # "gemini-3.5-flash-lite"). 3.6/3.7/3.8 Flash are on an introductory rate through
     # 2026-12-31 and list at $1.50 / $7.50 / $0.15 from 2027-01-01: update these rows then
     # (the live catalog is used whenever it has the key).
-    ("gemini-3.1-pro",       {"input":  2.00, "output": 12.00, "cache_read":  0.20}),
+    # 3.1 Pro and 2.5 Pro bill prompts over 200K tokens at their long-prompt tier (LiteLLM
+    # catalog, 2026-10-07). The catalog only has "gemini-3.1-pro-preview", so this row is
+    # what Antigravity's Gemini 3.1 Pro bills from even online.
+    ("gemini-3.1-pro",       {"input":  2.00, "output": 12.00, "cache_read":  0.20,
+                              "long_context_threshold": 200_000, "long_input": 4.00,
+                              "long_output": 18.00, "long_cache_read": 0.40}),
     ("gemini-3.8-flash",     {"input":  0.75, "output":  3.75, "cache_read":  0.075}),
     ("gemini-3.7-flash",     {"input":  0.75, "output":  3.75, "cache_read":  0.075}),
     ("gemini-3.6-flash",     {"input":  0.75, "output":  3.75, "cache_read":  0.075}),
     ("gemini-3.5-flash-lite",{"input":  0.30, "output":  2.50, "cache_read":  0.03}),
     ("gemini-3.5-flash",     {"input":  1.50, "output":  9.00, "cache_read":  0.15}),
     ("gemini-3.1-flash-lite",{"input":  0.25, "output":  1.50, "cache_read":  0.025}),
-    ("gemini-2.5-pro",       {"input":  1.25, "output": 10.00, "cache_read":  0.31}),
+    ("gemini-2.5-pro",       {"input":  1.25, "output": 10.00, "cache_read":  0.125,
+                              "long_context_threshold": 200_000, "long_input": 2.50,
+                              "long_output": 15.00, "long_cache_read": 0.25}),
     ("gemini-2.5-flash-lite",{"input":  0.10, "output":  0.40, "cache_read":  0.025}),
     ("gemini-2.5-flash",     {"input":  0.30, "output":  2.50, "cache_read":  0.075}),
     ("gemini-1.5-pro",       {"input":  1.25, "output":  5.00, "cache_read":  0.31}),
@@ -140,22 +167,48 @@ _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
     # MUST match the live catalog: a machine with no pricing cache yet (first run, CI)
     # bills straight off this table.
     # _grok_pricing_model() normalizes grok-build → grok-build-0.1 so both keys needed.
-    ("grok-build-0.1",            {"input":  1.00, "output":  2.00, "cache_read":  0.20}),
-    ("grok-build",                {"input":  1.00, "output":  2.00, "cache_read":  0.20}),
-    ("grok-composer-2.5-fast",    {"input":  1.00, "output":  2.00, "cache_read":  0.20}),
-    ("grok-composer",             {"input":  1.00, "output":  2.00, "cache_read":  0.20}),
-    ("grok-code-fast-1",          {"input":  1.00, "output":  2.00, "cache_read":  0.20}),
-    ("grok-code-fast",            {"input":  1.00, "output":  2.00, "cache_read":  0.20}),
+    # xAI bills a prompt of 200K tokens OR MORE at the long-prompt tier ("under 200K" is
+    # the base), unlike the "over N" of Anthropic, OpenAI and Google, so every xAI row
+    # stores the threshold as 199_999 (see _long_context_tier): usage_cost_usd's strict
+    # ">" then takes the tier at exactly 200,000. The proxied build/composer rows carry
+    # the tier of the coding-model rate they borrow (LiteLLM catalog, 2026-10-07).
+    ("grok-build-0.1",            {"input":  1.00, "output":  2.00, "cache_read":  0.20,
+                                   "long_context_threshold": 199_999, "long_input": 2.00,
+                                   "long_output":  4.00, "long_cache_read": 0.40}),
+    ("grok-build",                {"input":  1.00, "output":  2.00, "cache_read":  0.20,
+                                   "long_context_threshold": 199_999, "long_input": 2.00,
+                                   "long_output":  4.00, "long_cache_read": 0.40}),
+    ("grok-composer-2.5-fast",    {"input":  1.00, "output":  2.00, "cache_read":  0.20,
+                                   "long_context_threshold": 199_999, "long_input": 2.00,
+                                   "long_output":  4.00, "long_cache_read": 0.40}),
+    ("grok-composer",             {"input":  1.00, "output":  2.00, "cache_read":  0.20,
+                                   "long_context_threshold": 199_999, "long_input": 2.00,
+                                   "long_output":  4.00, "long_cache_read": 0.40}),
+    ("grok-code-fast-1",          {"input":  1.00, "output":  2.00, "cache_read":  0.20,
+                                   "long_context_threshold": 199_999, "long_input": 2.00,
+                                   "long_output":  4.00, "long_cache_read": 0.40}),
+    ("grok-code-fast",            {"input":  1.00, "output":  2.00, "cache_read":  0.20,
+                                   "long_context_threshold": 199_999, "long_input": 2.00,
+                                   "long_output":  4.00, "long_cache_read": 0.40}),
     # Named Grok API models (pay-per-use rates from xAI price sheet).
     # grok-4.6 MUST have its own exact key: get_pricing family-matches
     # ``"grok-4" in "grok-4.6"``, so a missing row inherits grok-4's $3/$15
     # instead of the published 4.6 short-context rate ($2 / $6 / $0.50 cache).
     # LiteLLM has lagged this launch; the supplement keeps the live catalog
     # authoritative once it grows a grok-4.6 key.
-    ("grok-4.6",                  {"input":  2.00, "output":  6.00, "cache_read":  0.50}),
-    ("grok-4.5",                  {"input":  3.00, "output": 15.00, "cache_read":  0.75}),
-    ("grok-4.20",                 {"input":  3.00, "output": 15.00, "cache_read":  0.75}),
-    ("grok-4.3",                  {"input":  3.00, "output": 15.00, "cache_read":  0.75}),
+    # 4.6 / 4.5 / 4.20 / 4.3 rates and long-prompt tiers: the LiteLLM catalog (2026-10-07).
+    ("grok-4.6",                  {"input":  2.00, "output":  6.00, "cache_read":  0.50,
+                                   "long_context_threshold": 199_999, "long_input": 4.00,
+                                   "long_output": 12.00, "long_cache_read": 1.00}),
+    ("grok-4.5",                  {"input":  2.00, "output":  6.00, "cache_read":  0.30,
+                                   "long_context_threshold": 199_999, "long_input": 4.00,
+                                   "long_output": 12.00, "long_cache_read": 0.60}),
+    ("grok-4.20",                 {"input":  1.25, "output":  2.50, "cache_read":  0.20,
+                                   "long_context_threshold": 199_999, "long_input": 2.50,
+                                   "long_output":  5.00, "long_cache_read": 0.40}),
+    ("grok-4.3",                  {"input":  1.25, "output":  2.50, "cache_read":  0.20,
+                                   "long_context_threshold": 199_999, "long_input": 2.50,
+                                   "long_output":  5.00, "long_cache_read": 0.40}),
     ("grok-4",                    {"input":  3.00, "output": 15.00, "cache_read":  0.75}),
     ("grok-3",                    {"input":  3.00, "output": 15.00, "cache_read":  0.75}),
 )
@@ -196,17 +249,28 @@ _pricing_lock = threading.Lock()
 _LONG_INPUT_FIELD = re.compile(r"^input_cost_per_token_above_(\d+)k_tokens$")
 
 
-def _long_context_tier(info: dict[str, Any], prices: dict[str, float]) -> dict[str, float]:
+def _long_context_tier(info: dict[str, Any], prices: dict[str, float],
+                       provider: str) -> dict[str, float]:
     """The prompt-length price tier of one LiteLLM entry, as TallyBar per-MTok keys.
 
-    Anthropic prices some models by prompt length: Claude Haiku 5.5 costs 5x once a
-    prompt passes 100K tokens, Claude Sonnet 4.5 more past 200K. LiteLLM carries the
-    tier as ``*_above_<N>k_tokens`` fields (the ``_batches``/``_priority`` variants
-    don't match). Returns ``long_context_threshold`` (in tokens) plus ``long_input``,
-    ``long_output``, ``long_cache_read``, ``long_cache_write`` and
-    ``long_cache_write_1h`` for usage_cost_usd, or {} when the entry has no tier with
-    both an input and an output rate. A cache rate LiteLLM leaves out is the base rate
-    scaled by the tier's input ratio."""
+    Every provider TallyBar prices has models billed by prompt length: Claude Haiku 5.5
+    costs 5x once a prompt passes 100K tokens (Sonnet 4.5 more past 200K), GPT-5.5 and
+    5.4 more past 272K, Gemini 2.5 / 3.1 Pro past 200K, xAI's Grok 4.x and coding models
+    from 200K. LiteLLM carries the tier as ``*_above_<N>k_tokens`` fields. The anchored
+    patterns skip the ``_batches``, ``_flex``, ``_priority`` and ``_ultrafast`` variants
+    (service tiers a local log never bills at) and keep the combined 1-hour write field
+    ``cache_creation_input_token_cost_above_1hr_above_<N>k_tokens``. Only the lowest N is
+    read. Returns ``long_context_threshold`` plus ``long_input``, ``long_output``,
+    ``long_cache_read``, ``long_cache_write`` and ``long_cache_write_1h`` for
+    usage_cost_usd, or {} when the entry has no tier with both a positive input and a
+    positive output rate (Gemini's free experimental models list all-zero tiers). A cache
+    rate LiteLLM leaves out is the base rate scaled by the tier's input ratio.
+
+    ``long_context_threshold`` is the LARGEST prompt still billed at the base rates:
+    accounting.prompt_tier_prices switches when ``prompt > threshold``. Anthropic, OpenAI
+    and Google bill prompts OVER N thousand tokens at the tier ("over 100,000", "more
+    than 272K", "> 200k"), so their threshold is N * 1000. xAI bills prompts AT OR ABOVE
+    200K at the tier ("under 200K" is the base), so an xAI threshold is N * 1000 - 1."""
     thresholds = sorted(int(m.group(1)) for field in info
                         if (m := _LONG_INPUT_FIELD.match(field)))
     if not thresholds:
@@ -217,8 +281,9 @@ def _long_context_tier(info: dict[str, Any], prices: dict[str, float]) -> dict[s
     if not (isinstance(long_input, (int, float)) and long_input > 0
             and isinstance(long_output, (int, float)) and long_output > 0):
         return {}
+    last_base_prompt = thresholds[0] * 1000 - (1 if provider == "xai" else 0)
     tier = {
-        "long_context_threshold": float(thresholds[0] * 1000),
+        "long_context_threshold": float(last_base_prompt),
         "long_input": float(long_input) * 1_000_000,
         "long_output": float(long_output) * 1_000_000,
     }
@@ -284,8 +349,8 @@ def _litellm_to_tallybar(raw: dict[str, Any]) -> list[tuple[str, dict[str, float
             # Anthropic's published 5-minute cache-write rate is 1.25x input for every
             # Claude model; synthesize it when the live catalog omits the field.
             prices["cache_write"] = prices["input"] * 1.25
-        if provider == "anthropic":
-            prices.update(_long_context_tier(info, prices))
+        # Prompt-length tier, for every provider (see _long_context_tier).
+        prices.update(_long_context_tier(info, prices, provider))
 
         results.append((model_id, prices))
         # LiteLLM keys some direct-API providers (gemini, xai) with a "provider/"
@@ -329,10 +394,11 @@ def _fetch_litellm_pricing(timeout: float = 10.0) -> dict[str, Any] | None:
 
 
 def _load_cache() -> list[tuple[str, dict[str, float]]] | None:
-    """Load the cached pricing from disk. Returns None if missing/corrupt/expired."""
+    """Load the cached pricing from disk. Returns None if missing/corrupt/expired, or
+    written by another converter version (PRICING_CACHE_VERSION)."""
     try:
         data = json.loads(PRICING_CACHE_PATH.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
+        if not isinstance(data, dict) or data.get("version") != PRICING_CACHE_VERSION:
             return None
         fetched_at = float(data.get("fetchedAt", 0))
         if time.time() - fetched_at > PRICING_CACHE_TTL:
@@ -350,10 +416,12 @@ def _load_cache() -> list[tuple[str, dict[str, float]]] | None:
 
 
 def _load_cache_stale() -> list[tuple[str, dict[str, float]]] | None:
-    """Load cached pricing regardless of TTL — better stale than nothing."""
+    """Load cached pricing regardless of TTL — better stale than nothing. A cache from
+    another converter version is not: it is refused like a corrupt one, and get_pricing
+    falls through to the embedded table (see PRICING_CACHE_VERSION)."""
     try:
         data = json.loads(PRICING_CACHE_PATH.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
+        if not isinstance(data, dict) or data.get("version") != PRICING_CACHE_VERSION:
             return None
         entries = data.get("pricing")
         if not isinstance(entries, list):
@@ -369,7 +437,8 @@ def _save_cache(pricing: list[tuple[str, dict[str, float]]]) -> None:
     (unique mkstemp, fsync, replace, dir-fsync). Best-effort: the cache is
     regenerable, so any write failure is swallowed."""
     try:
-        payload = json.dumps({"fetchedAt": time.time(), "pricing": pricing})
+        payload = json.dumps({"version": PRICING_CACHE_VERSION, "fetchedAt": time.time(),
+                              "pricing": pricing})
         atomic_write_text(PRICING_CACHE_PATH, payload)
     except OSError:
         pass
@@ -500,3 +569,12 @@ def invalidate_cache() -> None:
         _last_fetch_time = 0.0
         _resolve_memo.clear()
         _catalog_generation += 1
+
+
+def cache_is_current() -> bool:
+    """True when the disk cache is within its TTL and was written by this converter
+    version (PRICING_CACHE_VERSION). build_snapshot refetches the catalog whenever it is
+    not, so the first online refresh after an upgrade replaces a cache the loaders now
+    refuse, instead of billing from the embedded table until the old file ages past the
+    TTL."""
+    return _load_cache() is not None

@@ -373,7 +373,12 @@ def _parse_codex_file(path: Path) -> list[dict[str, Any]] | None:
     rate-limit refresh) — same cumulative total, same ``last_token_usage`` — so an event
     whose total hasn't moved since the previous one is a REPEAT and is skipped (observed:
     100 of 13,809 real events). An event with only the cumulative total contributes its
-    increase over the previous total, never the whole running sum."""
+    increase over the previous total, never the whole running sum.
+
+    Each record is ONE model request (Codex emits a token_count after every response),
+    which is what lets usage_cost_usd pick its prompt-length tier. A cumulative-only delta
+    spans several requests only when Codex skipped events in between; the log then holds
+    nothing to split it by, so it is priced as one request."""
     try:
         handle = path.open("r", encoding="utf-8")
     except OSError:
@@ -879,6 +884,10 @@ def local_grok_token_summary(
             week_tokens_billing += tokens
             week_cost_billing += cost
 
+    # Archived days hold cost already priced per request, at the rates in force when
+    # they were archived, while their lines were in unified.jsonl. A day that has
+    # rotated out keeps that figure: only its per-day total survives, and a total can't
+    # pick a tier.
     fixture_driven = logs_dir is not None or cache_dir is not _UNSET
     if not fixture_driven:
         try:

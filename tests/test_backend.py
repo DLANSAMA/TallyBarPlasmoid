@@ -18,7 +18,7 @@ import cookies
 async def test_run_threaded_provider_success():
     def dummy_func(x):
         return {"status": "ok", "value": x}
-    
+
     res = await http_helpers.run_threaded_provider(
         dummy_func,
         42,
@@ -31,7 +31,7 @@ async def test_run_threaded_provider_success():
 async def test_run_threaded_provider_exception():
     def dummy_func():
         raise ValueError("Oops")
-    
+
     res = await http_helpers.run_threaded_provider(
         dummy_func,
         timeout=1.0,
@@ -207,19 +207,19 @@ async def test_build_snapshot_resilience_on_timeout():
 def test_read_firefox_cookies_quoting(tmp_path):
     import urllib.parse
     special_path = tmp_path / "path with spaces and # hashes" / "cookies.sqlite"
-    
+
     with patch("cookies.sqlite_copy") as mock_sqlite_copy, \
          patch("sqlite3.connect") as mock_connect:
-        
+
         mock_sqlite_copy.return_value.__enter__.return_value = special_path
         mock_sqlite_copy.return_value.__exit__.return_value = None
-        
+
         mock_con = MagicMock()
         mock_con.execute.return_value = []
         mock_connect.return_value = mock_con
-        
+
         cookies.read_firefox_cookies(Path("/dummy/firefox/profile/cookies.sqlite"), ())
-        
+
         expected_uri = f"file:{urllib.parse.quote(str(special_path))}?mode=ro"
         mock_connect.assert_any_call(expected_uri, uri=True, timeout=1.0)
 
@@ -239,7 +239,7 @@ def test_post_local_json_ssl_relaxed():
         )
         assert status == 200
         assert data == {"status": "ok"}
-        
+
         args, kwargs = mock_urlopen.call_args
         context = kwargs["context"]
         assert context.check_hostname is False
@@ -1539,3 +1539,50 @@ def test_update_config_values_settles_the_old_list_before_stamping_the_catalog(t
     out = backend.update_config_values({"providers": ["codex", "claude", "gemini", "antigravity"]})
     assert backend.public_config(out)["providers"] == ["codex", "claude", "gemini", "antigravity"]
     assert backend.public_config(backend.load_config())["providers"] == ["codex", "claude", "gemini", "antigravity"]
+
+
+@pytest.mark.asyncio
+async def test_pre_upgrade_price_cache_is_refetched_at_once():
+    """A pricing cache saved before prompt tiers (no "version") is refused by get_pricing,
+    so build_snapshot refetches the catalog on this refresh instead of waiting for the
+    file to age past the 24h TTL. A fresh current-version cache is left alone."""
+    import time as _time
+    import pricing_data
+    args = MagicMock()
+    args.no_network = False
+    args.timeout = 1.0
+    refreshed = []
+
+    async def fast_ok(func, *a, **k):
+        return {"status": "ok", "limits": []}
+
+    async def fake_codex_rpc(timeout):
+        return {"status": "ok", "limits": []}
+
+    async def fake_codex_cookie(cookies, timeout):
+        return {"status": "ok", "limits": []}
+
+    async def fake_claude(cookies, timeout, prev=None):
+        return {"status": "ok", "limits": []}
+
+    async def record_refresh(*a, **k):
+        refreshed.append(True)
+
+    cache = pricing_data.PRICING_CACHE_PATH
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    for version, expect_refresh in ((None, True), (pricing_data.PRICING_CACHE_VERSION, False)):
+        payload = {"fetchedAt": _time.time(), "pricing": [["m", {"input": 1.0}]]}
+        if version is not None:
+            payload["version"] = version
+        cache.write_text(json.dumps(payload), encoding="utf-8")
+        refreshed.clear()
+        with patch("backend.load_config", return_value={}), \
+             patch("backend.collect_browser_sessions", return_value=([], {})), \
+             patch("backend.run_threaded_provider", side_effect=fast_ok), \
+             patch("backend.run_codex_rpc", side_effect=fake_codex_rpc), \
+             patch("backend.run_openai_cookie_api", side_effect=fake_codex_cookie), \
+             patch("backend.run_claude_api", side_effect=fake_claude), \
+             patch("backend.compute_local_cost_summaries", side_effect=lambda deadline=None: {}), \
+             patch("pricing_data.refresh_pricing", record_refresh):
+            await backend.build_snapshot(args)
+        assert bool(refreshed) is expect_refresh, version

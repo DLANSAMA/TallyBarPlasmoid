@@ -393,14 +393,14 @@ def test_enrich_ui_formatting():
         }
     }
     accounting.enrich_ui_formatting(providers)
-    
+
     claude = providers["claude"]
     assert claude["formattedExtraUsageDetail"] == "Credits: $ 25.00 available"
-    
+
     limits = claude["limits"]
     assert limits[0]["isExtraUsage"] is False
     assert limits[0]["formattedUsedText"] == "46% used"
-    
+
     assert limits[1]["isExtraUsage"] is True
     assert limits[1]["formattedUsedText"] == "10% used"
 
@@ -1369,21 +1369,23 @@ def test_grok_cli_cost_uses_the_build_row_not_the_api_row(monkeypatch):
     import pricing_data
     monkeypatch.setattr(pricing_data, "_active_pricing", list(pricing_data._FALLBACK_PRICING))
     monkeypatch.setattr(pricing_data, "_resolve_memo", {})
+    # ONE request, so its prompt stays under xAI's 200K long-prompt tier: a multi-million
+    # token record (a session summed into one usage dict) would bill at the tier rates.
     usage = {
-        "input_tokens": 12_815_698,      # includes the cached subset
-        "cached_input_tokens": 12_086_656,
-        "output_tokens": 81_977,
+        "input_tokens": 128_000,      # includes the cached subset
+        "cached_input_tokens": 121_000,
+        "output_tokens": 800,
     }
     api_row = accounting.usage_cost_usd(usage, "grok-4.6")
     cli_row = accounting.usage_cost_usd(usage, accounting._grok_cli_pricing_model("grok-4.6"))
 
     # Sanity-check the API row against hand arithmetic so a pricing-table change
     # is caught here rather than silently shifting the ratio.
-    uncached = (12_815_698 - 12_086_656) / 1e6
-    assert api_row == pytest.approx(uncached * 2.0 + 12.086656 * 0.5 + 0.081977 * 6.0, rel=1e-6)
+    uncached = (128_000 - 121_000) / 1e6
+    assert api_row == pytest.approx(uncached * 2.0 + 0.121 * 0.5 + 0.0008 * 6.0, rel=1e-6)
 
     assert cli_row < api_row
-    assert cli_row == pytest.approx(uncached * 1.0 + 12.086656 * 0.2 + 0.081977 * 2.0, rel=1e-6)
+    assert cli_row == pytest.approx(uncached * 1.0 + 0.121 * 0.2 + 0.0008 * 2.0, rel=1e-6)
     # ~2.4x on this cache-dominated shape; pin the magnitude, not the exact float.
     assert 2.3 < api_row / cli_row < 2.5
 
@@ -1917,3 +1919,120 @@ def test_compute_local_cost_summaries_never_archives_a_cut_scan(monkeypatch):
     with pytest.raises(TimeoutError):
         costmod.compute_local_cost_summaries(deadline=time.time() + 60)
     assert archived == []
+
+
+# --- Prompt-length tiers: the boundary, each provider's prompt size, per-request paths ----
+# conftest gives every test an empty home, so the cases below that don't patch
+# model_pricing bill from the embedded _FALLBACK_PRICING rows.
+
+def test_prompt_tier_prices_switches_only_over_the_threshold():
+    prices = dict(_HAIKU_5_5_PRICES)
+    assert accounting.prompt_tier_prices(prices, 100_000) is prices
+    assert accounting.prompt_tier_prices(prices, 100_001) == {
+        "input": 0.50, "output": 2.50, "cache_write": 0.625, "cache_write_1h": 1.00, "cache_read": 0.05}
+    assert prices == _HAIKU_5_5_PRICES                    # the catalog entry is untouched
+    untiered = {"input": 1.0, "output": 2.0}
+    assert accounting.prompt_tier_prices(untiered, 10**9) is untiered
+
+
+def test_usage_cost_usd_prompt_one_token_over_the_threshold_takes_the_tier():
+    # 100_001 tokens is "over 100,000": every rate moves to the tier.
+    with patch("accounting.model_pricing") as mock_pricing:
+        mock_pricing.return_value = dict(_HAIKU_5_5_PRICES)
+        usage = {"input_tokens": 1_001, "output_tokens": 2_000,
+                 "cache_read_input_tokens": 69_000,
+                 "cache_creation_input_tokens": 30_000}
+        cost = accounting.usage_cost_usd(usage, "claude-haiku-5-5")
+        # 1001*0.50 + 2000*2.50 + 30000*0.625 + 69000*0.05
+        #  = 500.5 + 5000 + 18750 + 3450 = 27700.5 -> $0.0277005
+        assert cost == pytest.approx(0.0277005)
+
+
+def test_prompt_size_anthropic_counts_cache_writes_and_reads():
+    # Claude: fresh input + cache writes + cache reads. 1_000 + 29_000 + 70_000 = 100_000
+    # is the base tier; one more cache-read token passes Haiku 5.5's 100K.
+    at = accounting.usage_cost_usd({"input_tokens": 1_000, "cache_creation_input_tokens": 29_000,
+                                    "cache_read_input_tokens": 70_000}, "claude-haiku-5-5")
+    over = accounting.usage_cost_usd({"input_tokens": 1_000, "cache_creation_input_tokens": 29_000,
+                                      "cache_read_input_tokens": 70_001}, "claude-haiku-5-5")
+    # 1_000*0.10 + 29_000*0.125 + 70_000*0.01 = 4_425
+    assert at == pytest.approx(0.004425)
+    # 1_000*0.50 + 29_000*0.625 + 70_001*0.05 = 22_125.05
+    assert over == pytest.approx(0.02212505)
+
+
+def test_prompt_size_openai_counts_cached_tokens_once():
+    # Codex/OpenAI: cached_input_tokens is INSIDE input_tokens, so the prompt is input_tokens
+    # alone. 272_000 with 200_000 cached is the base tier (adding cached again would read
+    # 472_000 and wrongly take the tier); 272_001 is over GPT-5.5's 272K.
+    at = accounting.usage_cost_usd({"input_tokens": 272_000, "cached_input_tokens": 200_000,
+                                    "output_tokens": 1_000}, "gpt-5.5")
+    over = accounting.usage_cost_usd({"input_tokens": 272_001, "cached_input_tokens": 200_000,
+                                      "output_tokens": 1_000}, "gpt-5.5")
+    # 72_000*5 + 1_000*30 + 200_000*0.5 = 490_000
+    assert at == pytest.approx(0.49)
+    # 72_001*10 + 1_000*45 + 200_000*1.0 = 965_010
+    assert over == pytest.approx(0.96501)
+
+
+def test_prompt_size_gemini_adds_the_tool_use_prompt():
+    # Gemini CLI: `cached` is inside `input`; the tool-use prompt adds on top.
+    # 199_000 + 1_000 = 200_000 stays on 2.5 Pro's base rates; one more tool token is over.
+    at = accounting.usage_cost_usd({"input": 199_000, "cached": 100_000, "tool": 1_000,
+                                    "output": 1_000}, "gemini-2.5-pro")
+    over = accounting.usage_cost_usd({"input": 199_000, "cached": 100_000, "tool": 1_001,
+                                      "output": 1_000}, "gemini-2.5-pro")
+    # 99_000*1.25 + 1_000*1.25 + 100_000*0.125 + 1_000*10 = 147_500
+    assert at == pytest.approx(0.1475)
+    # 99_000*2.5 + 1_001*2.5 + 100_000*0.25 + 1_000*15 = 290_002.5
+    assert over == pytest.approx(0.2900025)
+
+
+def test_prompt_size_xai_takes_the_tier_at_exactly_200k():
+    # xAI bills "200K or more" at the tier (stored threshold 199_999). The Grok CLI's
+    # prompt_tokens include its cached tokens, and the CLI prices at grok-build-0.1.
+    under = accounting.usage_cost_usd({"input_tokens": 199_999, "cached_input_tokens": 100_000,
+                                       "output_tokens": 1_000}, "grok-build-0.1")
+    at = accounting.usage_cost_usd({"input_tokens": 200_000, "cached_input_tokens": 100_000,
+                                    "output_tokens": 1_000}, "grok-build-0.1")
+    # 99_999*1 + 1_000*2 + 100_000*0.2 = 121_999
+    assert under == pytest.approx(0.121999)
+    # 100_000*2 + 1_000*4 + 100_000*0.4 = 244_000
+    assert at == pytest.approx(0.244)
+
+
+def test_claude_summary_tiers_each_request_not_the_day(tmp_path):
+    """Two 60K-token Haiku 5.5 requests on one day are 120K together, but each is under
+    100K: both bill at the base rate. A single 120K request bills at the tier."""
+    def summary_for(*inputs):
+        proj = tmp_path / f"proj{len(inputs)}"
+        proj.mkdir()
+        lines = [json.dumps({"type": "assistant", "timestamp": _NOW.isoformat(), "requestId": f"r{i}",
+                             "message": {"id": f"msg_{i}", "model": "claude-haiku-5-5",
+                                         "usage": {"input_tokens": n, "output_tokens": 100}}})
+                 for i, n in enumerate(inputs)]
+        (proj / "session.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return accounting.local_claude_token_summary(projects_dir=proj, now=_NOW, cache_dir=None)
+
+    # 2 x (60_000*0.10 + 100*0.50) = 12_100 -> $0.0121
+    assert summary_for(60_000, 60_000)["costToday"] == pytest.approx(0.0121)
+    # 120_000*0.50 + 100*2.50 = 60_250 -> $0.06025
+    assert summary_for(120_000)["costToday"] == pytest.approx(0.06025)
+
+
+def test_codex_summary_tiers_each_request_not_the_day(tmp_path):
+    """Two 150K-token GPT-5.5 requests are 300K together, past the 272K tier, but each
+    request is priced alone at the base rate. A single 300K request bills at the tier."""
+    def summary_for(*inputs):
+        sess = tmp_path / f"sessions{len(inputs)}"
+        sess.mkdir()
+        lines = [json.dumps({"timestamp": _NOW.isoformat(), "payload": {"model": "gpt-5.5"}})]
+        lines += [_codex_tc(last={"input_tokens": n, "output_tokens": 1_000, "total_tokens": n + 1_000})
+                  for n in inputs]
+        (sess / "rollout.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return accounting.local_codex_token_summary(sessions_dir=sess, now=_NOW, cache_dir=None)
+
+    # 2 x (150_000*5 + 1_000*30) = 1_560_000 -> $1.56
+    assert summary_for(150_000, 150_000)["costToday"] == pytest.approx(1.56)
+    # 300_000*10 + 1_000*45 = 3_045_000 -> $3.045
+    assert summary_for(300_000)["costToday"] == pytest.approx(3.045)

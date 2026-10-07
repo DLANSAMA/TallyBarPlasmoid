@@ -38,6 +38,17 @@ Notable changes to TallyBar. Format follows
   before, every Haiku 5.5 request used the lower one. Without a pricing cache (first
   run, offline) Haiku 5.5 was billed at Claude Sonnet 4 rates, about 30 times too high.
   Claude Sonnet 4.5 requests over 200,000 tokens now use its long-context rate too.
+- Long prompts are now priced at their long-prompt rate for every provider, not only
+  Claude: GPT-5.5 and GPT-5.4 past 272,000 tokens, Gemini 2.5 Pro and 3.1 Pro past
+  200,000 (Antigravity's Gemini 3.1 Pro included), and Grok 4.x and Grok Build from
+  200,000. Each request is priced by its own prompt size. Antigravity CLI sessions known
+  only from their status-line total stay at the base rate, since no single request's
+  size is recorded. An Antigravity entry that sums several requests is billed at the
+  base rate, since no single request's size is known. A price list saved by an earlier version is fetched again on the
+  next refresh rather than used for up to another day without these rates.
+- Without a pricing cache (first run, offline), Gemini 2.5 Pro cache reads are billed at
+  $0.125 per million tokens instead of $0.31, and Grok 4.5, 4.3 and 4.20 at the rates
+  in LiteLLM's catalog.
 - Claude cost on a first run or offline (no pricing cache yet) now uses the right
   rates for Claude Opus 5.5, Opus 5, Sonnet 5.5, Sonnet 5, Fable 5.1 and Mythos 5 / 5.1.
   The built-in price table predated these models, so they were billed at older Sonnet
