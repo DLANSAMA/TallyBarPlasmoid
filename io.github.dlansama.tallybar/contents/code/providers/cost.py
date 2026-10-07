@@ -486,7 +486,9 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                     for idx, blob in chunk_rows:
                         if not isinstance(blob, (bytes, bytearray)):
                             continue
-                        found = _pb_find_usage(bytes(blob))
+                        # A steps row can repeat one request's usage record (field 9 plus an
+                        # exact copy at 28.2); dedupe first so it counts once and stays one call.
+                        found = _dedupe_usage_records(_pb_find_usage(bytes(blob)))
                         if not found:
                             continue
                         entries[f"{stem}:{idx}"] = {

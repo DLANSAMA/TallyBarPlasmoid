@@ -44,7 +44,9 @@ Notable changes to TallyBar. Format follows
   200,000. Each request is priced by its own prompt size. Antigravity CLI sessions known
   only from their status-line total stay at the base rate, since no single request's
   size is recorded. An Antigravity entry that sums several requests is billed at the
-  base rate, since no single request's size is known. A price list saved by an earlier version is fetched again on the
+  base rate, since no single request's size is known. Antigravity steps rows that
+  repeated one request's usage twice are no longer counted twice (entries already
+  recorded age out within 35 days). A price list saved by an earlier version is fetched again on the
   next refresh rather than used for up to another day without these rates.
 - Without a pricing cache (first run, offline), Gemini 2.5 Pro cache reads are billed at
   $0.125 per million tokens instead of $0.31, and Grok 4.5, 4.3 and 4.20 at the rates

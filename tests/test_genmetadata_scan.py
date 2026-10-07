@@ -503,6 +503,24 @@ def test_undated_generation_blob_ingested_once(monkeypatch, tmp_path):
     assert (e["cas@0.0"]["u"], e["cas@0.0"]["c"], e["cas@0.0"]["o"]) == (200, 30, 80)
 
 
+def test_steps_row_repeating_one_record_counts_once(monkeypatch, tmp_path):
+    """A steps row holding one request's usage at field 9 AND an exact copy at field 28.2 is ONE
+    call: single values, no `n`. A row with two DISTINCT records still sums and carries n == 2."""
+    rec = _usage_blob(24, model=1016, u=100, o=50, c=10)
+    other = _usage_blob(24, model=1016, u=7, o=3, c=1)
+    conv = tmp_path / "convs"
+    conv.mkdir()
+    _make_db(conv / "cas.db", steps=[(0, _ld(9, rec) + _ld(28, _ld(2, rec))),
+                                     (1, _ld(9, rec) + _ld(28, _ld(2, other)))])
+    _set_mtime(conv / "cas.db", "2026-06-01")
+    _wire(monkeypatch, tmp_path, conv)
+    e = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)["entries"]
+    assert (e["cas:0"]["u"], e["cas:0"]["c"], e["cas:0"]["o"]) == (100, 10, 50)
+    assert "n" not in e["cas:0"]
+    assert (e["cas:1"]["u"], e["cas:1"]["c"], e["cas:1"]["o"]) == (107, 11, 53)
+    assert e["cas:1"]["n"] == 2
+
+
 def test_unknown_layout_fallback_dedupes_exact_copies(monkeypatch, tmp_path):
     """A layout neither structural read recognizes still falls to the recursive scan —
     with exact duplicate records dropped."""
