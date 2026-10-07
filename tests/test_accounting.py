@@ -128,6 +128,53 @@ def test_usage_cost_usd_1h_breakdown_without_flat_field_is_derived():
         # Without the fallback this would be $0 (cache_create == 0).
         assert pytest.approx(cost, 1e-6) == 0.255
 
+_HAIKU_5_5_PRICES = {"input": 0.10, "output": 0.50, "cache_write": 0.125, "cache_write_1h": 0.20,
+                     "cache_read": 0.01, "long_context_threshold": 100_000.0, "long_input": 0.50,
+                     "long_output": 2.50, "long_cache_write": 0.625, "long_cache_write_1h": 1.00,
+                     "long_cache_read": 0.05}
+
+def test_usage_cost_usd_long_prompt_bills_the_whole_request_at_the_tier_rates():
+    # Claude Haiku 5.5 bills 5x once the prompt passes 100K tokens; the prompt is fresh
+    # input + cache writes + cache reads: 1_000 + 30_000 + 70_000 = 101_000 here, so
+    # every component, output included, bills at its long-context rate.
+    with patch("accounting.model_pricing") as mock_pricing:
+        mock_pricing.return_value = dict(_HAIKU_5_5_PRICES)
+        usage = {"input_tokens": 1_000, "output_tokens": 2_000,
+                 "cache_read_input_tokens": 70_000,
+                 "cache_creation_input_tokens": 30_000,
+                 "cache_creation": {"ephemeral_1h_input_tokens": 10_000,
+                                    "ephemeral_5m_input_tokens": 20_000}}
+        cost = accounting.usage_cost_usd(usage, "claude-haiku-5-5")
+        # 1000*0.50 + 2000*2.50 + 10000*1.00 + 20000*0.625 + 70000*0.05
+        #  = 500 + 5000 + 10000 + 12500 + 3500 = 31500 -> $0.0315
+        assert pytest.approx(cost, 1e-6) == 0.0315
+        # The memoized catalog entry must not be rewritten in place.
+        assert mock_pricing.return_value == _HAIKU_5_5_PRICES
+
+def test_usage_cost_usd_prompt_at_the_threshold_stays_on_the_base_rates():
+    # "Over 100,000 tokens": a prompt of exactly 100_000 still bills the base tier.
+    with patch("accounting.model_pricing") as mock_pricing:
+        mock_pricing.return_value = dict(_HAIKU_5_5_PRICES)
+        usage = {"input_tokens": 1_000, "output_tokens": 2_000,
+                 "cache_read_input_tokens": 69_000,
+                 "cache_creation_input_tokens": 30_000}
+        cost = accounting.usage_cost_usd(usage, "claude-haiku-5-5")
+        # 1000*0.10 + 2000*0.50 + 30000*0.125 + 69000*0.01
+        #  = 100 + 1000 + 3750 + 690 = 5540 -> $0.00554
+        assert pytest.approx(cost, 1e-6) == 0.00554
+
+def test_usage_cost_usd_long_prompt_counts_breakdown_only_cache_writes():
+    # A record with only the nested cache_creation breakdown still counts those writes
+    # toward the prompt size: 1_000 + 40_000 + 60_000 = 101_000 -> long tier.
+    with patch("accounting.model_pricing") as mock_pricing:
+        mock_pricing.return_value = dict(_HAIKU_5_5_PRICES)
+        usage = {"input_tokens": 1_000, "output_tokens": 0,
+                 "cache_creation": {"ephemeral_1h_input_tokens": 40_000,
+                                    "ephemeral_5m_input_tokens": 60_000}}
+        cost = accounting.usage_cost_usd(usage, "claude-haiku-5-5")
+        # 1000*0.50 + 40000*1.00 + 60000*0.625 = 500 + 40000 + 37500 = 78000 -> $0.078
+        assert pytest.approx(cost, 1e-6) == 0.078
+
 def test_usage_cost_usd_openai():
     with patch("accounting.model_pricing") as mock_pricing:
         mock_pricing.return_value = {"input": 2.50, "output": 15.00, "cache_read": 0.25}

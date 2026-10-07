@@ -103,10 +103,7 @@ def usage_cost_usd(usage: Any, model: str | None) -> float:
 
     uncached_input  = max(0, input_tokens - cached_within_input)
     billable_output = output_tokens + thoughts_separate
-    cache_read_rate = prices.get("cache_read", prices.get("input", 0.0))
-    cache_write_rate = prices.get("cache_write", prices.get("input", 0.0))
 
-    cache_write_1h_rate = prices.get("cache_write_1h", cache_write_rate)
     cache_create_1h = 0
     cc_detail = usage.get("cache_creation")
     if isinstance(cc_detail, dict):
@@ -117,6 +114,19 @@ def usage_cost_usd(usage: Any, model: str | None) -> float:
             eph_5m = int(eph_5m) if isinstance(eph_5m, (int, float)) and eph_5m > 0 else 0
             cache_create = eph_1h + eph_5m
         cache_create_1h = min(eph_1h, cache_create)
+
+    # Prompt-length pricing (pricing_data._long_context_tier): once the prompt — fresh
+    # input + cache writes + cache reads — is OVER the threshold, every token of the
+    # request bills at the long-context rate, output included (Claude Haiku 5.5: 5x past
+    # 100K). Build a new dict: `prices` is the memoized catalog entry, never mutate it.
+    threshold = prices.get("long_context_threshold")
+    if threshold and input_tokens + tool + cache_create + cache_read_separate > threshold:
+        prices = {key: prices.get("long_" + key, rate) for key, rate in prices.items()
+                  if not key.startswith("long_")}
+
+    cache_read_rate = prices.get("cache_read", prices.get("input", 0.0))
+    cache_write_rate = prices.get("cache_write", prices.get("input", 0.0))
+    cache_write_1h_rate = prices.get("cache_write_1h", cache_write_rate)
 
     cost = 0.0
     cost += uncached_input            * prices.get("input", 0.0)

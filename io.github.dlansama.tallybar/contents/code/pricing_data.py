@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -66,7 +67,10 @@ _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
     # needs its own exact key — family matching would price "claude-opus-5-5" off a
     # "claude-opus-5" row, and with no matching row at all usage_cost_usd falls back to
     # the claude-sonnet-4 family default.
-    # Rates: Anthropic's published pricing, identical to the LiteLLM catalog (2026-10-01).
+    # Haiku 5.5 and Sonnet 4.5 also carry a prompt-length tier (long_context_threshold +
+    # long_* rates; see _long_context_tier): a request whose prompt passes the threshold
+    # bills every token at the long rates.
+    # Rates: Anthropic's published pricing, identical to the LiteLLM catalog (2026-10-07).
     ("claude-fable-5-1",     {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 0.25}),
     ("claude-fable-5",       {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 1.00}),
     ("claude-mythos-5-1",    {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 0.25}),
@@ -75,13 +79,18 @@ _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
     ("claude-opus-5",        {"input":  5.00, "output": 25.00, "cache_write":  6.25, "cache_write_1h": 10.00, "cache_read": 0.50}),
     ("claude-sonnet-5-5",    {"input":  2.00, "output": 10.00, "cache_write":  2.50, "cache_write_1h":  4.00, "cache_read": 0.20}),
     ("claude-sonnet-5",      {"input":  2.00, "output": 10.00, "cache_write":  2.50, "cache_write_1h":  4.00, "cache_read": 0.20}),
+    ("claude-haiku-5-5",     {"input":  0.10, "output":  0.50, "cache_write":  0.125, "cache_write_1h": 0.20, "cache_read": 0.01,
+                              "long_context_threshold": 100_000, "long_input": 0.50, "long_output": 2.50,
+                              "long_cache_write": 0.625, "long_cache_write_1h": 1.00, "long_cache_read": 0.05}),
     ("claude-opus-4-8",      {"input":  5.00, "output": 25.00, "cache_write":  6.25, "cache_write_1h": 10.00, "cache_read": 0.50}),
     ("claude-opus-4-7",      {"input":  5.00, "output": 25.00, "cache_write":  6.25, "cache_write_1h": 10.00, "cache_read": 0.50}),
     ("claude-opus-4-6",      {"input":  5.00, "output": 25.00, "cache_write":  6.25, "cache_write_1h": 10.00, "cache_read": 0.50}),
     ("claude-opus-4-5",      {"input":  5.00, "output": 25.00, "cache_write":  6.25, "cache_write_1h": 10.00, "cache_read": 0.50}),
     ("claude-opus-4-1",      {"input": 15.00, "output": 75.00, "cache_write": 18.75, "cache_write_1h": 30.00, "cache_read": 1.50}),
     ("claude-sonnet-4-6",    {"input":  3.00, "output": 15.00, "cache_write":  3.75, "cache_write_1h":  6.00, "cache_read": 0.30}),
-    ("claude-sonnet-4-5",    {"input":  3.00, "output": 15.00, "cache_write":  3.75, "cache_write_1h":  6.00, "cache_read": 0.30}),
+    ("claude-sonnet-4-5",    {"input":  3.00, "output": 15.00, "cache_write":  3.75, "cache_write_1h":  6.00, "cache_read": 0.30,
+                              "long_context_threshold": 200_000, "long_input": 6.00, "long_output": 22.50,
+                              "long_cache_write": 7.50, "long_cache_write_1h": 12.00, "long_cache_read": 0.60}),
     ("claude-haiku-4-5",     {"input":  1.00, "output":  5.00, "cache_write":  1.25, "cache_write_1h":  2.00, "cache_read": 0.10}),
     ("claude-3-5-sonnet",    {"input":  3.00, "output": 15.00, "cache_write":  3.75, "cache_write_1h":  6.00, "cache_read": 0.30}),
     ("claude-3-5-haiku",     {"input":  0.80, "output":  4.00, "cache_write":  1.00, "cache_write_1h":  1.60, "cache_read": 0.08}),
@@ -184,6 +193,47 @@ _pricing_lock = threading.Lock()
 # LiteLLM → TallyBar price format converter
 # ---------------------------------------------------------------------------
 
+_LONG_INPUT_FIELD = re.compile(r"^input_cost_per_token_above_(\d+)k_tokens$")
+
+
+def _long_context_tier(info: dict[str, Any], prices: dict[str, float]) -> dict[str, float]:
+    """The prompt-length price tier of one LiteLLM entry, as TallyBar per-MTok keys.
+
+    Anthropic prices some models by prompt length: Claude Haiku 5.5 costs 5x once a
+    prompt passes 100K tokens, Claude Sonnet 4.5 more past 200K. LiteLLM carries the
+    tier as ``*_above_<N>k_tokens`` fields (the ``_batches``/``_priority`` variants
+    don't match). Returns ``long_context_threshold`` (in tokens) plus ``long_input``,
+    ``long_output``, ``long_cache_read``, ``long_cache_write`` and
+    ``long_cache_write_1h`` for usage_cost_usd, or {} when the entry has no tier with
+    both an input and an output rate. A cache rate LiteLLM leaves out is the base rate
+    scaled by the tier's input ratio."""
+    thresholds = sorted(int(m.group(1)) for field in info
+                        if (m := _LONG_INPUT_FIELD.match(field)))
+    if not thresholds:
+        return {}
+    suffix = f"_above_{thresholds[0]}k_tokens"
+    long_input = info.get("input_cost_per_token" + suffix)
+    long_output = info.get("output_cost_per_token" + suffix)
+    if not (isinstance(long_input, (int, float)) and long_input > 0
+            and isinstance(long_output, (int, float)) and long_output > 0):
+        return {}
+    tier = {
+        "long_context_threshold": float(thresholds[0] * 1000),
+        "long_input": float(long_input) * 1_000_000,
+        "long_output": float(long_output) * 1_000_000,
+    }
+    scale = tier["long_input"] / prices["input"] if prices["input"] > 0 else 1.0
+    for key, field in (("cache_read", "cache_read_input_token_cost"),
+                       ("cache_write", "cache_creation_input_token_cost"),
+                       ("cache_write_1h", "cache_creation_input_token_cost_above_1hr")):
+        value = info.get(field + suffix)
+        if isinstance(value, (int, float)) and value > 0:
+            tier["long_" + key] = float(value) * 1_000_000
+        elif key in prices:
+            tier["long_" + key] = prices[key] * scale
+    return tier
+
+
 def _litellm_to_tallybar(raw: dict[str, Any]) -> list[tuple[str, dict[str, float]]]:
     """Convert LiteLLM's per-token pricing dict into the TallyBar per-MTok
     tuple format, filtering to only the direct-API providers we care about."""
@@ -234,6 +284,8 @@ def _litellm_to_tallybar(raw: dict[str, Any]) -> list[tuple[str, dict[str, float
             # Anthropic's published 5-minute cache-write rate is 1.25x input for every
             # Claude model; synthesize it when the live catalog omits the field.
             prices["cache_write"] = prices["input"] * 1.25
+        if provider == "anthropic":
+            prices.update(_long_context_tier(info, prices))
 
         results.append((model_id, prices))
         # LiteLLM keys some direct-API providers (gemini, xai) with a "provider/"

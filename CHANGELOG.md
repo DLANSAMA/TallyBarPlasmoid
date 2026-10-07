@@ -33,6 +33,11 @@ Notable changes to TallyBar. Format follows
   recorded figures. Without a pricing cache (first run, offline), Gemini 3.5 Flash
   was billed at 3.5 Flash-Lite's rate and 3.6-3.8 Flash at Gemini 3.1 Pro's; the
   built-in table now carries Google's published rates for them.
+- Claude Haiku 5.5 is priced correctly. Haiku 5.5 costs five times as much once a
+  prompt passes 100,000 tokens, and TallyBar now bills those requests at that rate;
+  before, every Haiku 5.5 request used the lower one. Without a pricing cache (first
+  run, offline) Haiku 5.5 was billed at Claude Sonnet 4 rates, about 30 times too high.
+  Claude Sonnet 4.5 requests over 200,000 tokens now use its long-context rate too.
 - Claude cost on a first run or offline (no pricing cache yet) now uses the right
   rates for Claude Opus 5.5, Opus 5, Sonnet 5.5, Sonnet 5, Fable 5.1 and Mythos 5 / 5.1.
   The built-in price table predated these models, so they were billed at older Sonnet

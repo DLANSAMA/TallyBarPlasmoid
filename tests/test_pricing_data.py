@@ -65,9 +65,10 @@ def test_embedded_exact_match_claude_sonnet_5_not_sonnet_4():
         assert prices["output"] == 10.0
 
 
-# Anthropic's published per-MTok rates (identical to the LiteLLM catalog on 2026-10-01).
+# Anthropic's published per-MTok rates (identical to the LiteLLM catalog on 2026-10-07).
 # Note the cache reads: Opus 5.5 reads at 0.05x input and Fable/Mythos 5.1 at 0.025x, so a
 # table that derived reads as 0.1x input would fail here.
+# Haiku 5.5 is priced by prompt length, so its row carries the over-100K tier too.
 _CLAUDE_5_PRICES = {
     "claude-opus-5-5":   {"input": 4.00, "output": 20.00, "cache_write": 5.00, "cache_write_1h": 8.00, "cache_read": 0.20},
     "claude-opus-5":     {"input": 5.00, "output": 25.00, "cache_write": 6.25, "cache_write_1h": 10.00, "cache_read": 0.50},
@@ -77,6 +78,9 @@ _CLAUDE_5_PRICES = {
     "claude-fable-5":    {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 1.00},
     "claude-mythos-5-1": {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 0.25},
     "claude-mythos-5":   {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 1.00},
+    "claude-haiku-5-5":  {"input": 0.10, "output": 0.50, "cache_write": 0.125, "cache_write_1h": 0.20, "cache_read": 0.01,
+                          "long_context_threshold": 100_000, "long_input": 0.50, "long_output": 2.50,
+                          "long_cache_write": 0.625, "long_cache_write_1h": 1.00, "long_cache_read": 0.05},
 }
 
 
@@ -239,6 +243,65 @@ def test_litellm_synthesizes_5m_cache_write_when_absent():
     assert prices["input"] == pytest.approx(4.0)
     assert prices["cache_write"] == pytest.approx(5.0)       # 1.25x input
     assert prices["cache_write_1h"] == pytest.approx(8.0)    # 2x input
+
+
+def test_litellm_converts_anthropic_long_context_tier():
+    """Claude Haiku 5.5 bills 5x once a prompt passes 100K tokens. LiteLLM carries that
+    tier as *_above_100k_tokens fields; the converter keeps it (and ignores the _batches
+    variants) so usage_cost_usd can bill a long prompt at the tier rates."""
+    raw = {
+        "claude-haiku-5-5": {
+            "litellm_provider": "anthropic", "mode": "chat",
+            "input_cost_per_token": 1e-07, "output_cost_per_token": 5e-07,
+            "cache_read_input_token_cost": 1e-08,
+            "cache_creation_input_token_cost": 1.25e-07,
+            "cache_creation_input_token_cost_above_1hr": 2e-07,
+            "input_cost_per_token_above_100k_tokens": 5e-07,
+            "output_cost_per_token_above_100k_tokens": 2.5e-06,
+            "cache_creation_input_token_cost_above_100k_tokens": 6.25e-07,
+            "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1e-06,
+            "cache_read_input_token_cost_above_100k_tokens": 5e-08,
+            "input_cost_per_token_above_100k_tokens_batches": 2.5e-07,
+        }
+    }
+    prices = dict(pricing_data._litellm_to_tallybar(raw))["claude-haiku-5-5"]
+    assert prices["input"] == pytest.approx(0.10)
+    assert prices["long_context_threshold"] == 100_000
+    assert prices["long_input"] == pytest.approx(0.50)
+    assert prices["long_output"] == pytest.approx(2.50)
+    assert prices["long_cache_write"] == pytest.approx(0.625)
+    assert prices["long_cache_write_1h"] == pytest.approx(1.00)
+    assert prices["long_cache_read"] == pytest.approx(0.05)
+
+
+def test_litellm_long_context_tier_scales_missing_cache_rates_and_skips_other_providers():
+    raw = {
+        "claude-new-long": {
+            "litellm_provider": "anthropic", "mode": "chat",
+            "input_cost_per_token": 1e-06, "output_cost_per_token": 5e-06,
+            "cache_read_input_token_cost": 1e-07,
+            "input_cost_per_token_above_200k_tokens": 2e-06,
+            "output_cost_per_token_above_200k_tokens": 7.5e-06,
+        },
+        "gemini/gemini-2.5-pro": {
+            "litellm_provider": "gemini", "mode": "chat",
+            "input_cost_per_token": 1.25e-06, "output_cost_per_token": 1e-05,
+            "input_cost_per_token_above_200k_tokens": 2.5e-06,
+            "output_cost_per_token_above_200k_tokens": 1.5e-05,
+        },
+    }
+    out = dict(pricing_data._litellm_to_tallybar(raw))
+    claude = out["claude-new-long"]
+    assert claude["long_context_threshold"] == 200_000
+    assert claude["long_input"] == pytest.approx(2.0)
+    assert claude["long_output"] == pytest.approx(7.5)
+    # No cache fields above the threshold: each base cache rate scales with input (2x),
+    # including the synthesized 1.25x / 2x write rates.
+    assert claude["long_cache_read"] == pytest.approx(0.2)
+    assert claude["long_cache_write"] == pytest.approx(2.5)
+    assert claude["long_cache_write_1h"] == pytest.approx(4.0)
+    # Only Anthropic tiers are read for now.
+    assert not any(key.startswith("long_") for key in out["gemini-2.5-pro"])
 
 
 def test_embedded_fallback_anthropic_has_1h_write_at_2x_input():
