@@ -1509,6 +1509,50 @@ async def test_grok_bot_transient_failure_carries_the_last_good_bar():
     assert gb["limits"][0]["percent"] == 30.0
 
 
+async def _grok_snapshot(no_network):
+    """build_snapshot with every provider mocked; run_threaded_provider really calls the
+    Grok adapter (so the network flag's wiring is exercised) and stubs everything else."""
+    args = MagicMock()
+    args.no_network = no_network
+    args.background = True
+    args.timeout = 1.0
+
+    async def threaded(func, *a, **k):
+        if func.__name__ == "_run_grok":
+            return func(*a)
+        return {"status": "ok", "limits": []}
+
+    async def benign_rpc(*a, **k):
+        return {"label": "Codex", "status": "not-running", "limits": []}
+
+    grok_local = MagicMock(return_value={"label": "Grok", "status": "ok", "source": "grok-billing-api",
+                                         "limits": [{"label": "Weekly", "percent": 8.0}]})
+    with patch("backend.load_config", return_value={}), \
+         patch("backend.load_snapshot", return_value={}), \
+         patch("backend.collect_browser_sessions", return_value=([], {})), \
+         patch("backend.run_threaded_provider", side_effect=threaded), \
+         patch("backend.run_codex_rpc", side_effect=benign_rpc), \
+         patch("backend.run_grok_local", grok_local), \
+         patch("providers.grok._default_http_text", side_effect=AssertionError("network used")), \
+         patch("backend.compute_local_cost_summaries", side_effect=lambda deadline=None: {}):
+        res = await backend.build_snapshot(args)
+    return res, grok_local
+
+
+@pytest.mark.asyncio
+async def test_grok_asks_the_live_endpoint_when_the_network_is_allowed():
+    res, grok_local = await _grok_snapshot(no_network=False)
+    grok_local.assert_called_once_with(1.0, network=True)
+    assert res["providers"]["grok"]["limits"][0]["percent"] == 8.0
+
+
+@pytest.mark.asyncio
+async def test_grok_reads_only_its_log_with_no_network():
+    res, grok_local = await _grok_snapshot(no_network=True)
+    grok_local.assert_called_once_with(1.0, network=False)
+    assert res["providers"]["grok"]["limits"][0]["percent"] == 8.0
+
+
 # --- Enabled-tab migration: a provider added in a release is new, not "turned off" ----
 
 def test_public_config_without_a_saved_list_enables_every_provider():

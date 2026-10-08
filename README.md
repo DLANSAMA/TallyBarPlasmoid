@@ -36,7 +36,7 @@ as a month heat grid. Clicking any bar or day expands it into a per-model breakd
 | **Claude**      | session window, weekly window, per-model windows  | claude.ai, using your browser's existing session; plan read from disk   |
 | **Gemini**      | daily usage, Google One AI credit pool            | gemini.google.com, using your browser's existing session                |
 | **Antigravity** | Gemini window, Claude/GPT window, plan            | the local Antigravity language server, plus Google's Cloud Code API     |
-| **Grok**        | weekly window                                     | the `grok` CLI's local session and log files                            |
+| **Grok**        | weekly window                                     | xAI's billing service via the `grok` CLI's sign-in; else the CLI's log  |
 | **Grok Bot**    | weekly window; on-demand spend when capped        | the Grok Bot desktop app's sign-in, against Cursor's dashboard service  |
 
 Cost is computed separately, from **local log files only** — the transcripts
@@ -106,8 +106,11 @@ immediately on cold start, so it is never blank while a fetch is in flight.
 
 Each provider connects itself:
 
-- **Codex** and **Grok** work as soon as their CLI has been used once — they are
-  read straight off disk and the local app-server.
+- **Codex** works as soon as its CLI has been used once — it is read from the
+  local app-server.
+- **Grok** works as soon as the `grok` CLI has been signed in and used once. The
+  bar is read live with the CLI's sign-in; when that has expired, or the network
+  is off, it comes from the CLI's own log files instead.
 - **Antigravity** is read from its language server, which runs while Antigravity
   (or `agy`) is open. Plan and quota keep working from a cached token afterwards.
 - **Claude** and **Gemini** use the session cookies already in your browser
@@ -192,7 +195,7 @@ with them:
   parent — temp file, `fsync`, `os.replace` — and the files that matter carry a
   `.bak` mirror with corruption quarantine on load.
 - **Credentialed requests refuse redirects.** CPython's redirect handler copies
-  the `Authorization` header cross-origin; the Google endpoints that receive a
+  the `Authorization` header cross-origin; the Google and xAI endpoints that receive a
   bearer token never legitimately redirect, so a `3xx` from one is treated as an
   attack and raised instead of followed.
 - **Refreshes stop while the screen is locked**, and do not overwrite the cached
@@ -246,9 +249,11 @@ pushing a `v*` tag builds the `.plasmoid`, stamps the version into
   same ones their own apps call, with your own session. They are not public APIs and
   can change without notice. When one does, that provider degrades to a status
   message and the others keep working.
-- **Grok's weekly bar is only as fresh as the CLI's last run.** xAI's own
-  credit reading reaches the local log when the `grok` CLI starts; between runs
-  the widget shows the last reading and marks it "(cached)" past an hour.
+- **Grok's live bar lasts as long as the CLI's sign-in.** TallyBar uses the access
+  token the `grok` CLI keeps in `~/.grok/auth.json` and never renews it; it lapses
+  about six hours after the CLI last did. After that the bar shows xAI's last reading
+  from the CLI's log, which only updates when the CLI starts, and marks it "(cached)"
+  past an hour. Running `grok` renews its sign-in.
 - **Costs are estimates.** They are list prices applied to locally logged token
   counts. Treat them as a sense of scale, not a bill. An Antigravity CLI session
   known only from its status-line total is billed at the base rate, since no single

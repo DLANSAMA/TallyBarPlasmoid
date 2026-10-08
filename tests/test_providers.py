@@ -9,6 +9,7 @@ import datetime as dt
 import json
 import sys
 import time
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
@@ -1491,6 +1492,246 @@ def test_grok_billing_period_rolls_forward_after_period_ends(tmp_path):
     assert end == dt.datetime(2026, 7, 25, 13, 20, 44, tzinfo=dt.timezone.utc)
 
 
+_LIVE_START = "2030-07-04T00:00:00+00:00"
+_LIVE_END = "2030-07-11T00:00:00+00:00"
+_LIVE_BODY = json.dumps({"config": {
+    "creditUsagePercent": 8.0,
+    "currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "start": _LIVE_START, "end": _LIVE_END},
+    "productUsage": [{"product": "GrokBuild", "usagePercent": 8.0}],
+}})
+
+
+def _grok_live_home(tmp_path, *, auth=None, expires_at="2099-01-01T00:00:00.123456789Z", log_percent=42.5):
+    """~/.grok with a sign-in and (unless log_percent is None) one old billing log line."""
+    home = tmp_path / ".grok"
+    (home / "logs").mkdir(parents=True)
+    if auth is None:
+        auth = {"https://auth.x.ai::acct": {"key": "tok-secret", "auth_mode": "oidc",
+                                            "expires_at": expires_at, "refresh_token": "refresh-secret"}}
+    (home / "auth.json").write_text(auth if isinstance(auth, str) else json.dumps(auth))
+    if log_percent is not None:
+        line = _billing_line(ts="2026-07-10T12:00:00Z", percent=log_percent,
+                             start=_LIVE_START, end=_LIVE_END, tier="SuperGrok Plus")
+        (home / "logs" / "unified.jsonl").write_text(line if line.endswith("\n") else line + "\n")
+    return home
+
+
+def _fake_http(result):
+    """Records each call; returns `result`, or raises it when it is an exception."""
+    calls = []
+
+    def http(url, jar, timeout, method="GET", body=None, headers=None):
+        calls.append({"url": url, "method": method, "headers": headers, "timeout": timeout})
+        if isinstance(result, BaseException):
+            raise result
+        return result
+    return http, calls
+
+
+def test_grok_live_reading_replaces_the_log_reading(tmp_path):
+    from providers import grok as grok_mod
+    home = _grok_live_home(tmp_path)
+    http, calls = _fake_http((200, _LIVE_BODY))
+    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, network=True, http=http)
+    assert res["status"] == "ok"
+    assert res["limits"][0]["percent"] == 8.0
+    assert res["source"] == "grok-billing-api"
+    assert res["tier"] == "SuperGrok Plus"
+    assert "stale" not in res
+    assert len(calls) == 1
+    assert calls[0]["url"] == grok_mod._BILLING_URL
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["headers"]["Authorization"] == "Bearer tok-secret"
+    assert calls[0]["headers"]["Accept"] == "application/json"
+
+
+def test_grok_live_reading_is_off_without_network(tmp_path):
+    from providers import grok as grok_mod
+    home = _grok_live_home(tmp_path)
+    http, calls = _fake_http((200, _LIVE_BODY))
+    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, http=http)
+    assert calls == []
+    assert res["limits"][0]["percent"] == 42.5
+    assert res["source"] == "local-grok-build"
+
+
+def test_grok_live_reading_skips_an_expired_token(tmp_path):
+    from providers import grok as grok_mod
+    home = _grok_live_home(tmp_path, expires_at="2000-01-01T00:00:00Z")
+    http, calls = _fake_http((200, _LIVE_BODY))
+    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, network=True, http=http)
+    assert calls == []
+    assert res["limits"][0]["percent"] == 42.5
+    assert res["source"] == "local-grok-build"
+
+
+def test_grok_live_reading_skips_a_token_about_to_expire(tmp_path):
+    from providers import grok as grok_mod
+    expires_at = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=30)).isoformat()
+    home = _grok_live_home(tmp_path, expires_at=expires_at)
+    http, calls = _fake_http((200, _LIVE_BODY))
+    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, network=True, http=http)
+    assert calls == []
+    assert res["limits"][0]["percent"] == 42.5
+
+
+def test_grok_live_reading_falls_back_on_a_rejected_token(tmp_path):
+    from providers import grok as grok_mod
+    home = _grok_live_home(tmp_path)
+    http, calls = _fake_http((401, '{"error":"Invalid or expired credentials"}'))
+    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, network=True, http=http)
+    assert len(calls) == 1
+    assert res["limits"][0]["percent"] == 42.5
+    assert res["source"] == "local-grok-build"
+    assert "tok-secret" not in json.dumps(res)
+    assert "refresh-secret" not in json.dumps(res)
+
+
+def test_grok_live_reading_ignores_a_well_formed_error_reply(tmp_path):
+    from providers import grok as grok_mod
+    home = _grok_live_home(tmp_path)
+    http, calls = _fake_http((500, _LIVE_BODY))
+    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, network=True, http=http)
+    assert len(calls) == 1
+    assert res["limits"][0]["percent"] == 42.5
+    assert res["source"] == "local-grok-build"
+
+
+@pytest.mark.parametrize("exc", [urllib.error.URLError("down"), TimeoutError("slow")])
+def test_grok_live_reading_falls_back_on_a_network_error(tmp_path, exc):
+    from providers import grok as grok_mod
+    home = _grok_live_home(tmp_path)
+    http, _calls = _fake_http(exc)
+    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, network=True, http=http)
+    assert res["limits"][0]["percent"] == 42.5
+    assert res["source"] == "local-grok-build"
+    assert "tok-secret" not in json.dumps(res)
+
+
+@pytest.mark.parametrize("body", ["not json", '{"config": {}}', "[]", '{"config": "x"}', '{"other": 1}'])
+def test_grok_live_reading_falls_back_on_an_unreadable_body(tmp_path, body):
+    from providers import grok as grok_mod
+    home = _grok_live_home(tmp_path)
+    http, _calls = _fake_http((200, body))
+    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, network=True, http=http)
+    assert res["limits"][0]["percent"] == 42.5
+    assert res["source"] == "local-grok-build"
+
+
+def test_grok_live_reading_works_without_a_log_event(tmp_path):
+    from providers import grok as grok_mod
+    home = _grok_live_home(tmp_path, log_percent=None)
+    http, _calls = _fake_http((200, _LIVE_BODY))
+    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, network=True, http=http)
+    assert res["status"] == "ok"
+    assert res["limits"][0]["percent"] == 8.0
+    assert res["source"] == "grok-billing-api"
+    assert "tier" not in res
+
+
+def test_grok_live_reading_uses_the_latest_unexpired_sign_in(tmp_path):
+    from providers import grok as grok_mod
+    auth = {
+        "a": {"key": "tok-a", "expires_at": "2000-01-01T00:00:00Z"},
+        "b": {"key": "tok-b", "expires_at": "2098-01-01T00:00:00Z"},
+        "c": {"key": "tok-c", "expires_at": "2099-01-01T00:00:00Z"},
+        "d": {"key": "", "expires_at": "2100-01-01T00:00:00Z"},
+        "e": {"key": "tok-e"},
+        "f": "not a record",
+    }
+    home = _grok_live_home(tmp_path, auth=auth)
+    http, calls = _fake_http((200, _LIVE_BODY))
+    grok_mod.run_grok_local(timeout=1.0, grok_home=home, network=True, http=http)
+    assert calls[0]["headers"]["Authorization"] == "Bearer tok-c"
+
+
+@pytest.mark.parametrize("auth", ["{not json", "[]"])
+def test_grok_live_reading_ignores_an_unreadable_sign_in_file(tmp_path, auth):
+    from providers import grok as grok_mod
+    home = _grok_live_home(tmp_path, auth=auth)
+    http, calls = _fake_http((200, _LIVE_BODY))
+    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, network=True, http=http)
+    assert calls == []
+    assert res["limits"][0]["percent"] == 42.5
+
+
+@pytest.mark.parametrize("timeout, expected", [(1.0, 1.0), (1.5, 1.0), (12.0, 6.0), (30.0, 8.0)])
+def test_grok_live_request_gets_half_the_budget_capped_at_8s(tmp_path, timeout, expected):
+    from providers import grok as grok_mod
+    home = _grok_live_home(tmp_path)
+    http, calls = _fake_http((200, _LIVE_BODY))
+    grok_mod.run_grok_local(timeout=timeout, grok_home=home, network=True, http=http)
+    assert calls[0]["timeout"] == expected
+
+
+_WEEKLY = "USAGE_PERIOD_TYPE_WEEKLY"
+
+
+def _live_config_body(*, start, end, percent=None):
+    config = {"currentPeriod": {"type": _WEEKLY, "start": start, "end": end}}
+    if percent is not None:
+        config["creditUsagePercent"] = percent
+    return json.dumps({"config": config})
+
+
+def test_grok_live_reading_gives_up_on_a_stalled_request(tmp_path):
+    from providers import grok as grok_mod
+    home = _grok_live_home(tmp_path)
+
+    def slow(url, jar, timeout, method="GET", body=None, headers=None):
+        time.sleep(3.0)
+        return (200, _LIVE_BODY)
+
+    started = time.monotonic()
+    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, network=True, http=slow)
+    elapsed = time.monotonic() - started
+    assert elapsed < 2.5
+    assert res["limits"][0]["percent"] == 42.5
+    assert res["source"] == "local-grok-build"
+
+
+def test_grok_live_reading_without_a_percent_keeps_the_same_periods_reading(tmp_path):
+    from providers import grok as grok_mod
+    home = _grok_live_home(tmp_path)
+    http, calls = _fake_http((200, _live_config_body(start=_LIVE_START, end=_LIVE_END)))
+    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, network=True, http=http)
+    assert len(calls) == 1
+    assert res["limits"][0]["percent"] == 42.5
+    assert res["source"] == "local-grok-build"
+
+
+def test_grok_live_reading_without_a_percent_opens_a_new_period_at_zero(tmp_path):
+    from providers import grok as grok_mod
+    home = _grok_live_home(tmp_path)
+    http, _calls = _fake_http((200, _live_config_body(start="2030-07-11T00:00:00+00:00",
+                                                      end="2030-07-18T00:00:00+00:00")))
+    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, network=True, http=http)
+    assert res["limits"][0]["percent"] == 0.0
+    assert res["source"] == "grok-billing-api"
+    assert res["status"] == "ok"
+
+
+def test_grok_live_reading_without_a_percent_and_no_log_is_zero(tmp_path):
+    from providers import grok as grok_mod
+    home = _grok_live_home(tmp_path, log_percent=None)
+    http, _calls = _fake_http((200, _live_config_body(start=_LIVE_START, end=_LIVE_END)))
+    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, network=True, http=http)
+    assert res["status"] == "ok"
+    assert res["limits"][0]["percent"] == 0.0
+    assert res["source"] == "grok-billing-api"
+
+
+@pytest.mark.parametrize("end", ["2000-01-08T00:00:00+00:00", "garbage"])
+def test_grok_live_reading_falls_back_when_its_period_is_over_or_unreadable(tmp_path, end):
+    from providers import grok as grok_mod
+    home = _grok_live_home(tmp_path)
+    http, calls = _fake_http((200, _live_config_body(start="2000-01-01T00:00:00+00:00", end=end, percent=8.0)))
+    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, network=True, http=http)
+    assert len(calls) == 1
+    assert res["limits"][0]["percent"] == 42.5
+    assert res["source"] == "local-grok-build"
+
+
 def test_roll_period_forward_non_weekly_ended_is_unknown():
     from providers.grok import roll_period_forward
     s0 = dt.datetime(2026, 6, 1, tzinfo=dt.timezone.utc)
@@ -1568,7 +1809,6 @@ import base64  # noqa: E402
 import hashlib  # noqa: E402
 import shutil  # noqa: E402
 import subprocess  # noqa: E402
-import urllib.error  # noqa: E402
 
 from providers import grok_bot  # noqa: E402
 

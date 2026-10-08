@@ -15,6 +15,13 @@ Notable changes to TallyBar. Format follows
 - Existing setups get the new tab without touching Settings. A provider tab you had
   turned off stays off.
 
+### Changed
+- The Grok tab's weekly bar is now read live from xAI's billing service, signed in
+  with the `grok` CLI's own sign-in, so it is current between CLI sessions instead
+  of only as fresh as the CLI's last start. When that sign-in has expired (the CLI
+  renews it, TallyBar does not) or the network is off, the bar falls back to the
+  reading in the CLI's log, as before.
+
 ### Fixed
 - "Cost scan timed out" no longer sticks after an update that changes how logs are
   read. With a large Claude history the first full re-read could take longer than one

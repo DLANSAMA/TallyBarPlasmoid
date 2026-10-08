@@ -846,8 +846,9 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         "gemini": {**default_provider("Gemini", "gemini-web"), "accentColor": "#2f74f5"},
         "codex": {**default_provider("Codex", "json-rpc"), "accentColor": "#218df4"},
         "claude": {**default_provider("Claude", "browser-api"), "accentColor": "#c07f63"},
-        # Grok: local-only (context gauge from ~/.grok session signals + token/cost history
-        # from ~/.grok logs). run_grok_local fills limits; apply_cost_summaries adds the card.
+        # Grok: the weekly credit bar (live from the billing endpoint, else the grok CLI's
+        # log) + token/cost history from ~/.grok logs. run_grok_local fills limits;
+        # apply_cost_summaries adds the card.
         "grok": {**default_provider("Grok", "local-grok-logs"), "accentColor": "#1d9bf0"},
         # Grok Bot: a separate product and meter from Grok Build — network-only (Cursor's
         # dashboard service, signed in through the Grok Bot desktop app). No cost card.
@@ -933,11 +934,15 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
                 local_tasks["codex"] = group.create_task(
                     bounded_provider(run_codex_rpc(args.timeout), args.timeout, providers["codex"])
                 )
-                # Grok is local-only (reads ~/.grok session signals for the context gauge);
-                # runs regardless of --no-network, like the other local_tasks.
+                # Grok always runs: with the network allowed it asks the billing endpoint
+                # live and falls back to the grok CLI's log, which is all it reads under
+                # --no-network.
+                def _run_grok(timeout: float) -> dict[str, Any]:
+                    return run_grok_local(timeout, network=not args.no_network)
+
                 local_tasks["grok"] = group.create_task(
                     run_threaded_provider(
-                        run_grok_local,
+                        _run_grok,
                         args.timeout,
                         timeout=args.timeout,
                         fallback=providers["grok"],
