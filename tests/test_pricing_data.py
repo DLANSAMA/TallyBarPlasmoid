@@ -148,12 +148,12 @@ def test_embedded_fallback_when_no_cache_at_all():
 # ---------------------------------------------------------------------------
 
 def test_embedded_exact_match_gpt5_not_gpt55():
-    """gpt-5 must resolve to the gpt-5 row (2.5/15.0), NOT gpt-5.5 (5.0/30.0) — the 2x-overbill bug."""
+    """gpt-5 must resolve to the gpt-5 row (1.25/10.0), NOT gpt-5.5 (5.0/30.0) — the 2x-overbill bug."""
     with patch.object(pricing_data, "_load_cache", return_value=None), \
          patch.object(pricing_data, "_load_cache_stale", return_value=None):
         prices = pricing_data.get_pricing("gpt-5")
-        assert prices["input"] == 2.5
-        assert prices["output"] == 15.0
+        assert prices["input"] == 1.25
+        assert prices["output"] == 10.0
 
 
 def test_embedded_exact_match_o3_not_o3_mini():
@@ -176,12 +176,12 @@ def test_embedded_exact_match_gemini_flash_not_lite():
 
 def test_embedded_family_match_gpt5_codex():
     """gpt-5-codex has no exact row, so it must fall to the longest 'pattern in name'
-    family key (gpt-5 → 2.5/15.0), not a shorter unrelated key."""
+    family key (gpt-5 → 1.25/10.0), not a shorter unrelated key."""
     with patch.object(pricing_data, "_load_cache", return_value=None), \
          patch.object(pricing_data, "_load_cache_stale", return_value=None):
         prices = pricing_data.get_pricing("gpt-5-codex")
-        assert prices["input"] == 2.5
-        assert prices["output"] == 15.0
+        assert prices["input"] == 1.25
+        assert prices["output"] == 10.0
 
 
 def test_empty_and_none_model_return_empty_dict():
