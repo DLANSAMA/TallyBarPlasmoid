@@ -275,7 +275,7 @@ PlasmaCore.PopupPlasmaWindow {
                                 id: dayColumn
 
                                 required property var modelData
-                                property int tokens: Number(modelData.tokens || 0)
+                                property real tokens: Number(modelData.tokens || 0)
                                 property real usageRatio: tokens > 0 ? Math.max(0, Math.min(1, tokens / root.maxWeekTokens())) : 0
                                 property real barRatio: Math.max(0.025, usageRatio)
 
@@ -418,7 +418,7 @@ epsilon: 0.01
                                 id: hourColumn
 
                                 required property var modelData
-                                property int tokens: Number(modelData.tokens || 0)
+                                property real tokens: Number(modelData.tokens || 0)
                                 property int hour: Number(modelData.hour || 0)
                                 property real usageRatio: tokens > 0 ? Math.max(0, Math.min(1, tokens / root.maxHourTokens())) : 0
                                 property real barRatio: Math.max(0.02, usageRatio)
