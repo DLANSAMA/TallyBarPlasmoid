@@ -702,7 +702,7 @@ def carry_forward_provider_last_good(provider: dict[str, Any], cached: Any,
 
 _COST_EXPORT_KEYS = (
     "costToday", "cost7d", "cost30d", "tokensToday", "tokens7d", "tokens30d",
-    "burnRatePerDay", "projectedMonthlyCost", "modelBreakdown",
+    "burnRatePerDay", "projectedMonthlyCost", "modelBreakdown", "modelBreakdown7d", "modelBreakdown1d",
 )
 
 

@@ -15,6 +15,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(CLI_DIR))
 
 from providers import cost as costmod  # noqa: E402
+import pricing_data  # noqa: E402
 from providers import antigravity as agmod  # noqa: E402
 import cli_statusline_capture as cap  # noqa: E402
 
@@ -85,9 +86,11 @@ def test_cli_priced_per_model_not_pro_default(cli_paths, monkeypatch, tmp_path):
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ide_ledger.json")
     # A pinned catalog: the resolution order is under test, not today's LiteLLM rates
-    # (this used to read whatever the developer's own pricing cache held). No 3.6 Flash
-    # and no gpt-oss key, so those two must come from _EXTRA_MODEL_PRICES.
+    # (this used to read whatever the developer's own pricing cache held). No gpt-oss key,
+    # so that one must come from _EXTRA_MODEL_PRICES. 3.6 Flash is here because the real
+    # active pricing always carries its embedded _FALLBACK_PRICING row.
     catalog = {"gemini-3.5-flash": {"input": 1.5, "output": 9.0, "cache_read": 0.15},
+               "gemini-3.6-flash": {"input": 0.75, "output": 3.75, "cache_read": 0.075},
                "gemini-3.1-pro": {"input": 2.0, "output": 12.0, "cache_read": 0.2},
                "claude-opus-4-6": {"input": 5.0, "output": 25.0, "cache_read": 0.5}}
     monkeypatch.setattr(costmod, "model_pricing", lambda name, *a, **k: dict(catalog.get(name, {})))
@@ -106,8 +109,7 @@ def test_cli_priced_per_model_not_pro_default(cli_paths, monkeypatch, tmp_path):
     opus_cost = cost_with({"model": "Claude Opus 4.6 (Thinking)", **toks})
     # GPT-OSS has no catalog price -> our embedded estimate (cheap), must NOT fall back to Pro.
     oss_cost = cost_with({"model": "GPT-OSS 120B", **toks})
-    # Gemini 3.6 Flash: no catalog key here -> the _EXTRA_MODEL_PRICES estimate
-    # ($1.50/$7.50, output cheaper than 3.5 Flash's $9), must NOT fall back to Pro.
+    # Gemini 3.6 Flash ($0.75/$3.75, below 3.5 Flash's $1.50/$9) must NOT fall back to Pro.
     flash36_cost = cost_with({"model": "Gemini 3.6 Flash (High)", **toks})
     assert 0 < oss_cost < flash36_cost < flash_cost < pro_cost < opus_cost
 
@@ -119,7 +121,15 @@ def test_gemini_36_enums_resolve(monkeypatch, tmp_path):
         name = costmod._MODEL_ENUM_NAMES[enum]
         assert name.startswith("Gemini 3.6 Flash")
         assert costmod._normalize_model_name(name) == "gemini-3.6-flash"
-    assert "gemini-3.6-flash" in costmod._EXTRA_MODEL_PRICES
+    assert "gemini-3.6-flash" in dict(pricing_data._FALLBACK_PRICING)
+
+
+def test_extra_model_prices_never_shadow_an_embedded_fallback_row():
+    """_FALLBACK_PRICING rows are always merged into the active pricing, so _prices_for
+    finds them first and an _EXTRA_MODEL_PRICES entry with the same key is never read.
+    Two such tables once billed Gemini 3.6 Flash at two different rates."""
+    fallback_keys = {key for key, _ in pricing_data._FALLBACK_PRICING}
+    assert not set(costmod._EXTRA_MODEL_PRICES) & fallback_keys
 
 
 def test_capture_is_idempotent_overwrite(cli_paths, monkeypatch):
@@ -276,14 +286,16 @@ _FLASH_38 = {"input": 0.75, "output": 3.75, "cache_read": 0.075}
 _PRO_31 = {"input": 2.0, "output": 12.0, "cache_read": 0.2}
 
 
-def _summary_for_disk_entry(monkeypatch, tmp_path, me, learned=None):
-    """Summarize a ledger holding ONE disk-scan entry (enum only, no model string)."""
+def _summary_for_disk_entry(monkeypatch, tmp_path, me, learned=None, pinned_catalog=True):
+    """Summarize a ledger holding ONE disk-scan entry (enum only, no model string).
+    pinned_catalog=False prices it through the real pricing chain instead."""
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
     ledger = tmp_path / "ide_ledger.json"
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", ledger)
-    catalog = {"gemini-3.8-flash": _FLASH_38, "gemini-3.1-pro": _PRO_31}
-    monkeypatch.setattr(costmod, "model_pricing", lambda name, *a, **k: dict(catalog.get(name, {})))
+    if pinned_catalog:
+        catalog = {"gemini-3.8-flash": _FLASH_38, "gemini-3.1-pro": _PRO_31}
+        monkeypatch.setattr(costmod, "model_pricing", lambda name, *a, **k: dict(catalog.get(name, {})))
     today = dt.date.today().isoformat()
     body = {"trackingStarted": today,
             "entries": {"disk-stem:0": {"d": today, "me": me, "u": 1000, "c": 200, "o": 500}}}
@@ -311,9 +323,47 @@ def test_learned_enum_bills_at_its_learned_model_not_the_pro_default(monkeypatch
 def test_static_enum_table_prices_gemini_3_8_flash_without_learned_names(monkeypatch, tmp_path):
     """Cold start / a machine that never ran the live RPC: no learnedModelNames, so the
     static table alone must name and price the current Flash enums."""
-    for me in (1318, 1319, 1320):
+    for me in (1318, 1319, 1320, 1322):
         summary = _summary_for_disk_entry(monkeypatch, tmp_path, me)
         assert summary["cost30d"] == pytest.approx(_FLASH_38_COST), me
+        assert {row["model"] for row in summary["modelBreakdown"]} == {"Gemini 3.8 Flash"}
+
+
+def test_static_enum_table_names_and_prices_gemini_4_argon(monkeypatch, tmp_path):
+    """Offline (no catalog on disk), the embedded row prices Argon at $2 in / $0.10 cache
+    read / $10 out. The row was first added as a copy of Gemini 3.1 Pro's ($0.20 / $12)."""
+    monkeypatch.setattr(pricing_data, "PRICING_CACHE_PATH", tmp_path / "missing" / "pricing_cache.json")
+    for me in (1417, 1418, 1419):
+        summary = _summary_for_disk_entry(monkeypatch, tmp_path, me, pinned_catalog=False)
+        assert {row["model"] for row in summary["modelBreakdown"]} == {"Gemini 4 Argon"}
+        assert summary["cost30d"] == pytest.approx((1000 * 2.0 + 200 * 0.10 + 500 * 10.0) / 1e6), me
+
+
+def test_antigravity_model_breakdown_per_window(monkeypatch, tmp_path):
+    """modelBreakdown1d / modelBreakdown7d / modelBreakdown each cover only their own
+    window: one model used today, one three days ago, one 20 days ago."""
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
+    ledger = tmp_path / "ide_ledger.json"
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", ledger)
+    monkeypatch.setattr(costmod, "model_pricing", lambda name, *a, **k: dict(_PRO_31))
+    today = dt.date.today()
+
+    def day(n):
+        return (today - dt.timedelta(days=n)).isoformat()
+
+    used = ((0, 1318), (3, 1418), (20, 1036))  # 3.8 Flash, 4 Argon, 3.1 Pro
+    entries = {f"stem{i}:0": {"d": day(n), "me": me, "u": 1000, "c": 0, "o": 100}
+               for i, (n, me) in enumerate(used)}
+    ledger.write_text(json.dumps({"trackingStarted": day(30), "entries": entries}))
+    summary = costmod.antigravity_ledger_cost_summary()
+    names = {k: {row["model"] for row in summary[k]}
+             for k in ("modelBreakdown1d", "modelBreakdown7d", "modelBreakdown")}
+    assert names["modelBreakdown1d"] == {"Gemini 3.8 Flash"}
+    assert names["modelBreakdown7d"] == {"Gemini 3.8 Flash", "Gemini 4 Argon"}
+    assert names["modelBreakdown"] == {"Gemini 3.8 Flash", "Gemini 4 Argon", "Gemini 3.1 Pro"}
+    assert sum(r["cost"] for r in summary["modelBreakdown1d"]) == pytest.approx(summary["costToday"], abs=1e-6)
+    assert sum(r["cost"] for r in summary["modelBreakdown7d"]) == pytest.approx(summary["cost7d"], abs=1e-6)
 
 
 def test_no_summary_without_tokens(cli_paths, monkeypatch, tmp_path):

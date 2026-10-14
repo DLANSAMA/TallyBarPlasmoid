@@ -24,6 +24,7 @@ from .pricing import (
 )
 from .buckets import (
     bucket_add,
+    buckets_model_costs,
     empty_hourly_token_buckets,
     empty_monthly_token_buckets,
     empty_weekly_token_buckets,
@@ -683,6 +684,8 @@ def local_claude_token_summary(
                             monthly=monthly_token_usage(monthly_buckets),
                             hourly=hourly_token_usage(hourly),
                             model_costs=model_costs,
+                            model_costs_7d=buckets_model_costs(daily),
+                            model_costs_1d=daily.get(today.isoformat(), {}).get("models"),
                             estimated_output_tokens=estimated_output)
     # A model with no price of its own (one newer than both the live catalog and the
     # embedded fallback) is billed at the claude-sonnet-4 family default. Name it, so
@@ -756,7 +759,9 @@ def local_codex_token_summary(
                          daily=weekly_token_usage(daily),
                          monthly=monthly_token_usage(monthly_buckets),
                          hourly=hourly_token_usage(hourly),
-                         model_costs=model_costs)
+                         model_costs=model_costs,
+                         model_costs_7d=buckets_model_costs(daily),
+                         model_costs_1d=daily.get(today.isoformat(), {}).get("models"))
 
 
 def _load_grok_session_models(sessions_dir: Path | None = None) -> dict[str, str]:
@@ -930,7 +935,9 @@ def local_grok_token_summary(
                             daily=weekly_token_usage(daily),
                             monthly=monthly_token_usage(monthly_buckets),
                             hourly=hourly_token_usage(hourly),
-                            model_costs=model_costs)
+                            model_costs=model_costs,
+                            model_costs_7d=buckets_model_costs(daily),
+                            model_costs_1d=daily.get(today.isoformat(), {}).get("models"))
     if summary is not None and week_start is not None:
         summary["billingWeekTokens"] = int(week_tokens_billing)
         summary["billingWeekCost"] = round(float(week_cost_billing), 6)
@@ -1105,4 +1112,6 @@ def local_gemini_token_summary(
                          daily=weekly_token_usage(daily),
                          monthly=monthly_token_usage(monthly_buckets),
                          hourly=hourly_token_usage(hourly),
-                         model_costs=model_costs)
+                         model_costs=model_costs,
+                         model_costs_7d=buckets_model_costs(daily),
+                         model_costs_1d=daily.get(today.isoformat(), {}).get("models"))

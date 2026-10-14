@@ -139,10 +139,13 @@ _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
     # "gemini-3.5-flash-lite"). 3.6/3.7/3.8 Flash are on an introductory rate through
     # 2026-12-31 and list at $1.50 / $7.50 / $0.15 from 2027-01-01: update these rows then
     # (the live catalog is used whenever it has the key).
+    # Gemini 4 Argon (same page, 2026-10-14): $2 / $10 / $0.10 through 2026-11-30, then
+    # $4 / $20 / $0.20 from 2026-12-01 — update this row then. No prompt-length tier.
+    ("gemini-4-argon",       {"input":  2.00, "output": 10.00, "cache_read":  0.10}),
     # 3.1 Pro and 2.5 Pro bill prompts over 200K tokens at their long-prompt tier (LiteLLM
     # catalog, 2026-10-07). The catalog only has "gemini-3.1-pro-preview", so this row is
     # what Antigravity's Gemini 3.1 Pro bills from even online.
-    ("gemini-3.1-pro",       {"input":  2.00, "output": 12.00, "cache_read":  0.20,
+    ("gemini-3.1-pro",      {"input":  2.00, "output": 12.00, "cache_read":  0.20,
                               "long_context_threshold": 200_000, "long_input": 4.00,
                               "long_output": 18.00, "long_cache_read": 0.40}),
     ("gemini-3.8-flash",     {"input":  0.75, "output":  3.75, "cache_read":  0.075}),

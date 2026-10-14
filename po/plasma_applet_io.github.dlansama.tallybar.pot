@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: plasma_applet_io.github.dlansama.tallybar\n"
 "Report-Msgid-Bugs-To: https://github.com/DLANSAMA/TallyBarPlasmoid/issues\n"
-"POT-Creation-Date: 2026-10-02 00:12-0400\n"
+"POT-Creation-Date: 2026-10-14 19:20-0400\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -105,11 +105,19 @@ msgstr ""
 msgid "%1/day · ~%2/mo"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/CostPopout.qml:835
+#: io.github.dlansama.tallybar/contents/ui/CostPopout.qml:837
+msgid "TOP MODELS · TODAY"
+msgstr ""
+
+#: io.github.dlansama.tallybar/contents/ui/CostPopout.qml:839
+msgid "TOP MODELS · 7 DAYS"
+msgstr ""
+
+#: io.github.dlansama.tallybar/contents/ui/CostPopout.qml:840
 msgid "TOP MODELS · 30 DAYS"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/CostPopout.qml:866
+#: io.github.dlansama.tallybar/contents/ui/CostPopout.qml:871
 #: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:737
 #: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:757
 #: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:771
@@ -305,7 +313,7 @@ msgstr ""
 msgid "Waiting for update"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1163
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1178
 msgid "Other"
 msgstr ""
 

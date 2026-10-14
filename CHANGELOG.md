@@ -16,6 +16,9 @@ Notable changes to TallyBar. Format follows
   turned off stays off.
 
 ### Changed
+- The cost popout's "Top models" list now follows the Day / Week / Month switch: Day
+  lists today's models, Week the last 7 days, Month the last 30. It always showed 30
+  days before.
 - The Grok tab's weekly bar is now read live from xAI's billing service, signed in
   with the `grok` CLI's own sign-in, so it is current between CLI sessions instead
   of only as fresh as the CLI's last start. When that sign-in has expired (the CLI
@@ -23,6 +26,11 @@ Notable changes to TallyBar. Format follows
   reading in the CLI's log, as before.
 
 ### Fixed
+- Antigravity's newer models (Gemini 4 Argon, Gemini 3.5 Flash Lite, Claude Opus 5.5
+  and Sonnet 5.5, and the Gemini 3.8 Flash it runs subagents on) are named and priced
+  on a fresh install. They used to show as "Model M…" and bill at Gemini 3.1 Pro rates
+  until Antigravity had been open once while TallyBar refreshed. Gemini 4 Argon bills
+  at Google's current rate, $2 / $10 per million tokens ($0.10 cached).
 - "Cost scan timed out" no longer sticks after an update that changes how logs are
   read. With a large Claude history the first full re-read could take longer than one
   refresh allows, and because none of that work was kept, every refresh started over.

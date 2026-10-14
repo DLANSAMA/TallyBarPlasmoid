@@ -36,6 +36,8 @@ def test_token_summary_emits_raw_fields_and_burn_rate():
         today_tokens=1000, month_tokens=30000, source="t",
         today_cost=7.0, month_cost=210.0, daily=daily,
         model_costs={"opus": {"cost": 200.0, "tokens": 28000}, "haiku": {"cost": 10.0, "tokens": 2000}},
+        model_costs_7d={"opus": {"cost": 42.0, "tokens": 6000}, "haiku": {"cost": 7.0, "tokens": 1000}},
+        model_costs_1d={"haiku": {"cost": 7.0, "tokens": 1000}},
     )
     assert s["costToday"] == 7.0
     assert s["cost7d"] == 49.0          # 7 × $7
@@ -47,6 +49,8 @@ def test_token_summary_emits_raw_fields_and_burn_rate():
     assert s["burnRatePerDay"] == pytest.approx(_expected_rate, rel=1e-3)
     assert s["projectedMonthlyCost"] == pytest.approx(_expected_rate * 30.0, rel=1e-3)
     assert [m["model"] for m in s["modelBreakdown"]] == ["opus", "haiku"]
+    assert [(m["model"], m["cost"]) for m in s["modelBreakdown7d"]] == [("opus", 42.0), ("haiku", 7.0)]
+    assert [(m["model"], m["cost"]) for m in s["modelBreakdown1d"]] == [("haiku", 7.0)]
 
 
 # --- F4: cost export projection ---------------------------------------------
@@ -60,7 +64,10 @@ def test_cost_export_projects_and_totals():
             # fallback that read one was dead code and was removed.)
             "claude": {"costSummary": {
                 "cost30d": 100.0, "cost7d": 21.0, "costToday": 3.0,
-                "burnRatePerDay": 3.0, "today": "Today: $3", "modelBreakdown": [{"model": "opus", "cost": 90.0, "tokens": 1}],
+                "burnRatePerDay": 3.0, "today": "Today: $3",
+                "modelBreakdown": [{"model": "opus", "cost": 90.0, "tokens": 1}],
+                "modelBreakdown7d": [{"model": "opus", "cost": 21.0, "tokens": 1}],
+                "modelBreakdown1d": [{"model": "haiku", "cost": 3.0, "tokens": 1}],
             }},
             "codex": {"costSummary": {"cost30d": 50.0, "burnRatePerDay": 2.0}},
             "gemini": {"status": "ok"},  # no cost -> skipped
@@ -71,6 +78,8 @@ def test_cost_export_projects_and_totals():
     assert set(out["providers"].keys()) == {"claude", "codex"}
     assert "today" not in out["providers"]["claude"]  # display strings excluded
     assert out["providers"]["claude"]["modelBreakdown"][0]["model"] == "opus"
+    assert out["providers"]["claude"]["modelBreakdown7d"][0]["model"] == "opus"
+    assert out["providers"]["claude"]["modelBreakdown1d"][0]["model"] == "haiku"
     assert out["totals"]["cost30d"] == 150.0
     assert out["totals"]["burnRatePerDay"] == 5.0
     assert out["totals"]["projectedMonthlyCost"] == 150.0  # 5 × 30

@@ -1146,12 +1146,27 @@ Item {
         return UIHelpers.compactUsd(value);
     }
 
-    // Top per-model cost rows (from the backend's modelBreakdown, already top-6 by $),
-    // capped to a handful for the popout. Each row: {model, cost, tokens}.
+    // The window the Top-models rows cover: the graph mode's own window when the backend
+    // sent its breakdown, else the 30-day list. The header reads this too, so a snapshot
+    // cached before modelBreakdown1d/7d existed never labels 30-day rows "Today".
+    function costModelBreakdownPeriod() {
+        const cost = root.costSummary() || ({});
+        if (root.costGraphMode === "day" && Array.isArray(cost.modelBreakdown1d))
+            return "day";
+        if (root.costGraphMode === "week" && Array.isArray(cost.modelBreakdown7d))
+            return "week";
+        return "month";
+    }
+
+    // Top per-model cost rows for costModelBreakdownPeriod() (from the backend's
+    // modelBreakdown1d / modelBreakdown7d / modelBreakdown, already top-6 by $), capped to
+    // a handful for the popout.
     function costModelBreakdown(limit) {
         const cost = root.costSummary() || ({});
-        const rows = Array.isArray(cost.modelBreakdown) ? cost.modelBreakdown : [];
-        return rows.slice(0, limit || 4);
+        const period = root.costModelBreakdownPeriod();
+        const rows = period === "day" ? cost.modelBreakdown1d
+            : (period === "week" ? cost.modelBreakdown7d : cost.modelBreakdown);
+        return (Array.isArray(rows) ? rows : []).slice(0, limit || 4);
     }
 
     // Prettify a pricing-catalog key for display: "claude-opus-4-7" -> "Claude Opus 4.7",

@@ -34,6 +34,7 @@ from .pricing import (
 )
 from .buckets import (
     bucket_add,
+    buckets_model_costs,
     empty_hourly_token_buckets,
     empty_monthly_token_buckets,
     empty_weekly_token_buckets,
@@ -133,6 +134,7 @@ __all__ = [
     "empty_hourly_token_buckets",
     "empty_monthly_token_buckets",
     "bucket_add",
+    "buckets_model_costs",
     "weekly_token_usage",
     "monthly_token_usage",
     "hourly_token_usage",

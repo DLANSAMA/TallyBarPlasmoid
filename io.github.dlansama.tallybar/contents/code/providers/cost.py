@@ -25,6 +25,7 @@ from accounting import (
     cost_breakdown_line,
     default_provider,
     bucket_add,
+    buckets_model_costs,
     empty_hourly_token_buckets,
     empty_monthly_token_buckets,
     empty_weekly_token_buckets,
@@ -701,19 +702,16 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
         os.close(lock_fd)
 
 
-# Per-MTok prices for models the LiteLLM catalog doesn't carry. ESTIMATES — tune as needed.
-# gpt-oss is an open-weights model whose hosted rates are far below the Pro fallback, so without
-# this it would be badly overstated. Keys are normalised (lowercase, hyphenated) pricing keys.
+# Per-MTok prices for models neither the LiteLLM catalog nor pricing_data's embedded
+# _FALLBACK_PRICING carries. ESTIMATES — tune as needed. gpt-oss is an open-weights model
+# whose hosted rates are far below the Pro fallback, so without this it would be badly
+# overstated. Keys are normalised (lowercase, hyphenated) pricing keys. A published rate
+# belongs in _FALLBACK_PRICING instead: its rows are always merged into the active
+# pricing, so the same key here would never be read.
 _EXTRA_MODEL_PRICES: dict[str, dict[str, float]] = {
     "gpt-oss-120b": {"input": 0.15, "cache_read": 0.075, "output": 0.60},
     "gpt-oss-20b": {"input": 0.05, "cache_read": 0.025, "output": 0.20},
     "gpt-oss": {"input": 0.15, "cache_read": 0.075, "output": 0.60},
-    # Google's published rate (2026-07): $1.50 in / $7.50 out per MTok; cache read at
-    # the standard Gemini 10%-of-input discount. LiteLLM has no gemini-3.6 key yet —
-    # _prices_for tries the live catalog first, so this estimate self-heals to the
-    # catalog rate the moment LiteLLM adds one. Without it, 3.6 Flash usage billed
-    # at the Gemini 3.1 Pro default ($2/$12) — ~60% high on output.
-    "gemini-3.6-flash": {"input": 1.50, "cache_read": 0.15, "output": 7.50},
 }
 
 # Desktop/IDE ledger entries identify the model only by an integer enum (protobuf field 1).
@@ -769,9 +767,13 @@ _MODEL_ENUM_NAMES: dict[int, str] = {
     1036: "Gemini 3.1 Pro (Low)",
     1037: "Gemini 3.1 Pro (High)",
     1050: "Gemini 3.1 Flash Lite",
+    1071: "Gemini 3.6 Flash (High)",
+    1072: "Gemini 3.6 Flash (Medium)",
+    1073: "Gemini 3.6 Flash (Low)",
     1132: "Gemini 3.5 Flash (High)",
     1133: "Gemini 3.5 Flash",  # retired pre-effort-split 3.5 Flash id; effort unknowable
     1187: "Gemini 3.5 Flash (Low)",
+    1198: "Gemini 3.5 Flash Lite",
     # Gemini 3.6 Flash effort trio (M264/M265/M266), confirmed live via
     # GetAvailableModels 2026-07 (matches the ledger's learnedModelNames). Static
     # entries make _prices_for/_rpc_model_pricing_key resolve them even for the
@@ -779,6 +781,7 @@ _MODEL_ENUM_NAMES: dict[int, str] = {
     1264: "Gemini 3.6 Flash (High)",
     1265: "Gemini 3.6 Flash (Medium)",
     1266: "Gemini 3.6 Flash (Low)",
+    1277: "Gemini 3.5 Flash Lite",
     # Gemini 3.7 Flash (M298-M300) and 3.8 Flash (M318-M320) effort trios, confirmed live
     # via GetAvailableModels (the ledger's learnedModelNames, 2026-10-01).
     1298: "Gemini 3.7 Flash (High)",
@@ -787,6 +790,16 @@ _MODEL_ENUM_NAMES: dict[int, str] = {
     1318: "Gemini 3.8 Flash (High)",
     1319: "Gemini 3.8 Flash (Medium)",
     1320: "Gemini 3.8 Flash (Low)",
+    1322: "Gemini 3.8 Flash",  # TieredModelConfig MODEL_TIER_FLASH subagent model (M322 -> gemini-3.8-flash-tiered)
+    1400: "Claude Opus 5.5 (Low)",
+    1401: "Claude Opus 5.5 (Medium)",
+    1402: "Claude Opus 5.5 (High)",
+    1403: "Claude Sonnet 5.5 (Low)",
+    1404: "Claude Sonnet 5.5 (Medium)",
+    1405: "Claude Sonnet 5.5 (High)",
+    1417: "Gemini 4 Argon (High)",
+    1418: "Gemini 4 Argon (Medium)",
+    1419: "Gemini 4 Argon (Low)",
 }
 
 
@@ -1093,6 +1106,8 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
         "burnRatePerDay": round(burn_rate, 6),
         "projectedMonthlyCost": round(burn_rate * 30.0, 6),
         "modelBreakdown": model_breakdown_rows(model_costs),
+        "modelBreakdown7d": model_breakdown_rows(buckets_model_costs(daily)),
+        "modelBreakdown1d": model_breakdown_rows(daily.get(today_iso, {}).get("models")),
     }
     line = cost_breakdown_line(month_in, month_out, month_cached)
     if line:

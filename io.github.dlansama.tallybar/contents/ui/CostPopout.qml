@@ -817,7 +817,7 @@ epsilon: 0.01
 
                 }
 
-                // Per-model cost attribution (top models by 30-day spend).
+                // Per-model cost attribution (top models by Today / 7-day / 30-day spend).
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.topMargin: 3
@@ -832,7 +832,12 @@ epsilon: 0.01
                     font.family: root.uiFont
                     font.pixelSize: 10
                     font.weight: Font.DemiBold
-                    text: i18n("TOP MODELS · 30 DAYS")
+                    textFormat: Text.PlainText
+                    text: root.costModelBreakdownPeriod() === "day"
+                        ? i18n("TOP MODELS · TODAY")
+                        : (root.costModelBreakdownPeriod() === "week"
+                            ? i18n("TOP MODELS · 7 DAYS")
+                            : i18n("TOP MODELS · 30 DAYS"))
                     visible: root.costModelBreakdown().length > 0
                 }
 

@@ -131,6 +131,22 @@ def model_breakdown_rows(model_costs: dict[str, dict[str, Any]] | None, limit: i
     return rows[:limit]
 
 
+def buckets_model_costs(buckets: dict[Any, dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+    """Aggregate un-capped per-model {cost, tokens} maps across raw bucket dicts."""
+    out: dict[str, dict[str, Any]] = {}
+    if not buckets:
+        return out
+    for b in buckets.values():
+        models = b.get("models")
+        if not isinstance(models, dict):
+            continue
+        for name, v in models.items():
+            slot = out.setdefault(str(name), {"cost": 0.0, "tokens": 0})
+            slot["cost"] += float(v.get("cost", 0.0))
+            slot["tokens"] += int(v.get("tokens", 0))
+    return out
+
+
 def token_summary(
     today_tokens: int,
     month_tokens: int,
@@ -143,6 +159,8 @@ def token_summary(
     monthly: list[dict[str, Any]] | None = None,
     hourly: list[dict[str, Any]] | None = None,
     model_costs: dict[str, dict[str, Any]] | None = None,
+    model_costs_7d: dict[str, dict[str, Any]] | None = None,
+    model_costs_1d: dict[str, dict[str, Any]] | None = None,
     estimated_output_tokens: int = 0,
 ) -> dict[str, Any] | None:
     if month_tokens <= 0 and today_tokens <= 0:
@@ -155,6 +173,8 @@ def token_summary(
     week_cost = sum(float(d.get("cost", 0.0)) for d in history)
     burn_rate = week_cost / trailing_week_days()
     model_rows = model_breakdown_rows(model_costs)
+    model_rows_7d = model_breakdown_rows(model_costs_7d)
+    model_rows_1d = model_breakdown_rows(model_costs_1d)
 
     raw: dict[str, Any] = {
         "costToday": round(float(today_cost), 6),
@@ -166,6 +186,8 @@ def token_summary(
         "burnRatePerDay": round(burn_rate, 6),
         "projectedMonthlyCost": round(burn_rate * 30.0, 6),
         "modelBreakdown": model_rows,
+        "modelBreakdown7d": model_rows_7d,
+        "modelBreakdown1d": model_rows_1d,
     }
     if estimated_output_tokens > 0:
         # Output tokens in the 30-day totals that were estimated rather than read from a

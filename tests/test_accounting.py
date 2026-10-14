@@ -741,6 +741,72 @@ def test_local_grok_summary_defaults_unmapped_sid_to_grok_build(tmp_path):
     assert "Grok Build" in [r["model"] for r in summary["modelBreakdown"]]
 
 
+# One model used today, one three days ago (inside the trailing week), one 20 days ago
+# (only in the 30-day window) — oldest first, as a log is written.
+_WINDOW_DAYS = (20, 3, 0)
+
+
+def _claude_window_fixture(root):
+    proj = root / "proj"
+    proj.mkdir()
+    models = ("claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-5")
+    recs = [_claude_rec(f"r{i}", 1000, ts=_NOW - dt.timedelta(days=d), model=m)
+            for i, (d, m) in enumerate(zip(_WINDOW_DAYS, models))]
+    (proj / "s.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs), encoding="utf-8")
+    return accounting.local_claude_token_summary(projects_dir=root, now=_NOW)
+
+
+def _codex_window_fixture(root):
+    for i, (d, m) in enumerate(zip(_WINDOW_DAYS, ("gpt-5-codex", "gpt-5.1-codex", "gpt-5.2-codex"))):
+        ts = _NOW - dt.timedelta(days=d)
+        day_dir = root / ts.strftime("%Y/%m/%d")
+        day_dir.mkdir(parents=True)
+        lines = [json.dumps({"timestamp": ts.isoformat(), "payload": {"model": m}}),
+                 json.dumps({"timestamp": ts.isoformat(), "payload": {"info": {"last_token_usage": {
+                     "input_tokens": 1000, "cached_input_tokens": 0, "output_tokens": 100,
+                     "reasoning_output_tokens": 0, "total_tokens": 1100}}}})]
+        (day_dir / f"rollout-{i}.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return accounting.local_codex_token_summary(sessions_dir=root, now=_NOW)
+
+
+def _gemini_window_fixture(root):
+    msgs = [{"type": "gemini", "timestamp": (_NOW - dt.timedelta(days=d)).isoformat(), "model": m,
+             "tokens": {"input": 1000, "output": 100, "cached": 0, "thoughts": 0, "tool": 0, "total": 1100}}
+            for d, m in zip(_WINDOW_DAYS, ("gemini-2.5-pro", "gemini-3.5-flash", "gemini-3.8-flash"))]
+    (root / "session-test.json").write_text(json.dumps({"messages": msgs}), encoding="utf-8")
+    return accounting.local_gemini_token_summary(gemini_dir=root, now=_NOW)
+
+
+def _grok_window_fixture(root):
+    logs = root / "logs"
+    logs.mkdir()
+    lines = []
+    for i, (d, m) in enumerate(zip(_WINDOW_DAYS, ("grok-composer-2.5-fast", "grok-4.5", "grok-4.6"))):
+        ts = _NOW - dt.timedelta(days=d)
+        lines.append(json.dumps({"ts": ts.isoformat(), "sid": f"s{i}", "msg": "model changed",
+                                 "ctx": {"model": m}}))
+        lines.append(_grok_done(ts, f"s{i}", 1000, 0, 100))
+    (logs / "unified.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return accounting.local_grok_token_summary(logs_dir=logs, sessions_dir=root / "sessions", now=_NOW)
+
+
+@pytest.mark.parametrize("build", [_claude_window_fixture, _codex_window_fixture,
+                                   _gemini_window_fixture, _grok_window_fixture],
+                         ids=["claude", "codex", "gemini", "grok"])
+def test_model_breakdown_per_window_covers_only_that_window(tmp_path, build):
+    """modelBreakdown1d / modelBreakdown7d / modelBreakdown each list only the models used
+    in their own window, and each list's cost adds up to that window's total."""
+    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+        summary = build(tmp_path)
+    assert summary is not None
+    names = [{row["model"] for row in summary[k]}
+             for k in ("modelBreakdown1d", "modelBreakdown7d", "modelBreakdown")]
+    assert [len(n) for n in names] == [1, 2, 3]
+    assert names[0] < names[1] < names[2]
+    assert sum(r["cost"] for r in summary["modelBreakdown1d"]) == pytest.approx(summary["costToday"], abs=1e-6)
+    assert sum(r["cost"] for r in summary["modelBreakdown7d"]) == pytest.approx(summary["cost7d"], abs=1e-6)
+
+
 def test_parse_cache_grok_transparent(tmp_path):
     # The single-file unified.jsonl source must be cache-transparent: cold, warm, and
     # uncached parses all agree (model resolved out-of-band each time).

@@ -100,6 +100,22 @@ def test_offline_fallback_prices_every_current_claude_model_exactly(monkeypatch,
             assert {"input", "output", "cache_write", "cache_write_1h", "cache_read"} <= prices.keys(), key
 
 
+def test_offline_fallback_prices_gemini_at_the_published_rates(monkeypatch, tmp_path):
+    """ai.google.dev/gemini-api/docs/pricing, 2026-10-14 (standard tier). Gemini 4 Argon
+    has no prompt-length tier; its row was first a copy of 3.1 Pro's ($12 out, $0.20 cache
+    read, a 200K tier)."""
+    monkeypatch.setattr(pricing_data, "PRICING_CACHE_PATH", tmp_path / "missing" / "pricing_cache.json")
+    flash = {"input": 0.75, "output": 3.75, "cache_read": 0.075}
+    expected = {
+        "gemini-4-argon": {"input": 2.00, "output": 10.00, "cache_read": 0.10},
+        "gemini-3.6-flash": flash,
+        "gemini-3.8-flash": flash,
+        "gemini-3.5-flash-lite": {"input": 0.30, "output": 2.50, "cache_read": 0.03},
+    }
+    for model, prices in expected.items():
+        assert pricing_data.get_pricing(model) == pytest.approx(prices), model
+
+
 def test_embedded_exact_match_grok_46_not_grok_4():
     """grok-4.6 must not inherit grok-4 via ``"grok-4" in "grok-4.6"``."""
     with patch.object(pricing_data, "_load_cache", return_value=None), \
