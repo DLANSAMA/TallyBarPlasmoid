@@ -103,7 +103,11 @@ With `demo=`, every tick (about 50 ms) writes a frame named `f-<n>-<ms>.png`,
 where `<ms>` is when it was grabbed. `demo_gif.py assemble` shows each frame until
 the next one's time, so the GIF plays at real speed even though frames land
 unevenly, and pads every frame to the tallest (the flyout changes height between
-tabs). Frames are opaque on purpose: demo mode paints a solid canvas behind the
+tabs). A tick that lands just after a tab switch, while the card already holds
+the new tab but its window still has the old tab's size, grabs nothing: that
+frame would show the new tab squeezed or stretched into the old height, a state a
+compositor never puts on screen, so the previous frame stays up until the resize
+lands. Frames are opaque on purpose: demo mode paints a solid canvas behind the
 card, because ffmpeg's GIF encoder stores only the changed pixels of opaque
 frames but every frame whole once there is transparency (19 MB instead of about
 0.7 MB).

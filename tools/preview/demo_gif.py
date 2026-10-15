@@ -29,8 +29,12 @@ CURSOR_THEME = Path("/usr/share/icons/breeze_cursors/cursors")
 CURSORS = {"arrow": "default", "hand": "pointing_hand"}
 XCURSOR_IMAGE = 0xFFFD0002
 FRAME_NAME = re.compile(r"^f-(\d+)-(\d+)\.png$")
-LAST_FRAME_SECONDS = 0.4
+END_HOLD_SECONDS = 0.8  # the last frame's rest before the GIF loops
 CANVAS = "0x141416"  # screenshot.qml demoCanvas
+# Read each frame in a millisecond time base. The image demuxer's default 25 fps time base
+# rounds every duration to 40 ms steps, so ~50 ms frames played as 40, 40, 40, 40, 80: a
+# stutter in every move. In 1 ms steps the GIF's 10 ms delays keep the real cadence.
+MS_TIME_BASE = "option framerate 1000"
 
 
 def _xcursor_image(path: Path, nominal: int):
@@ -105,9 +109,11 @@ def assemble(frames_dir: str, out_gif: str, width: str) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         listing = ["ffconcat version 1.0"]
         for i, (_, ms, path) in enumerate(frames):
-            seconds = (frames[i + 1][1] - ms) / 1000 if i + 1 < len(frames) else LAST_FRAME_SECONDS
-            listing += [f"file '{path.resolve()}'", f"duration {max(seconds, 0.02):.3f}"]
-        listing.append(f"file '{frames[-1][2].resolve()}'")  # the concat demuxer drops the last duration otherwise
+            seconds = (frames[i + 1][1] - ms) / 1000 if i + 1 < len(frames) else END_HOLD_SECONDS / 2
+            listing += [f"file '{path.resolve()}'", MS_TIME_BASE, f"duration {max(seconds, 0.02):.3f}"]
+        # The concat demuxer drops the last frame's duration unless the file is listed once
+        # more, and the GIF writer gives that repeat the same delay: the hold is split in two.
+        listing += [f"file '{frames[-1][2].resolve()}'", MS_TIME_BASE]
         concat = Path(tmp) / "frames.ffconcat"
         concat.write_text("\n".join(listing) + "\n")
         padded = Path(tmp) / "padded.mkv"

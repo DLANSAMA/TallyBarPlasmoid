@@ -507,7 +507,8 @@ Window {
         // QtTest is only needed here, so a plain render never depends on it.
         const events = Qt.createQmlObject("import QtTest; TestEvent {}", shot, "demoEvents");
         shot.demo = { card: card, overlay: overlay, events: events, steps: demoSteps(card),
-                      i: 0, stepAt: 0, pos: Qt.point(0, 0), clickAt: -1e9, start: Date.now(), frame: 0 };
+                      i: 0, stepAt: 0, pos: Qt.point(0, 0), clickAt: -1e9, start: Date.now(), frame: 0,
+                      resizingSince: -1 };
         demoTick();
     }
 
@@ -563,6 +564,24 @@ Window {
         d.overlay.hand = pointerShape(d.card) === Qt.PointingHandCursor;
         d.overlay.ring = (t - d.clickAt) < 380 ? (t - d.clickAt) / 380 : -1;
         const frames = shot.demoDir.length > 0;
+        // Right after a tab switch the card already holds the new tab while its window, and
+        // so the card, still has the old tab's size: the offscreen window resizes a beat
+        // later, and a grab then catches the new tab squeezed or stretched into the old
+        // height. A compositor never shows that state (it keeps the last frame until the
+        // resized one is drawn), so wait for the size to land and let the last frame stand.
+        const resizing = Math.abs(d.card.width - d.card.implicitWidth) >= 1
+                      || Math.abs(d.card.height - d.card.implicitHeight) >= 1;
+        if (resizing && !finished) {
+            if (d.resizingSince < 0)
+                d.resizingSince = t;
+            if (t - d.resizingSince < 1000) {
+                demoTimer.interval = 5;
+                demoTimer.restart();
+                return;
+            }
+            console.warn("walk: the flyout's size did not settle; grabbing anyway");
+        }
+        d.resizingSince = -1;
         if (!frames && !finished) {
             // A single-PNG walk only grabs its last state.
             demoTimer.interval = shot.demoFrameMs;
