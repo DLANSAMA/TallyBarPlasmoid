@@ -127,6 +127,10 @@ def _usage_counts(usage: dict[str, Any]) -> dict[str, int]:
                                      "cachedContentTokenCount", "cached")
     thoughts_separate = _usage_int(usage, "thoughtsTokenCount", "thoughts")
 
+    # Token counts take cache writes from the top-level field only; the nested fallback
+    # below is billed but never counted. That is how the token and cost readers have always
+    # split it, and the parse caches' keep/drop filter (usage_token_total > 0) depends on it.
+    cache_create_tokens = cache_create
     cache_create_1h = 0
     cc_detail = usage.get("cache_creation")
     if isinstance(cc_detail, dict):
@@ -142,6 +146,7 @@ def _usage_counts(usage: dict[str, Any]) -> dict[str, int]:
         "output": output_tokens + thoughts_separate,
         "tool": tool,
         "cache_create": cache_create,
+        "cache_create_tokens": cache_create_tokens,
         "cache_create_1h": cache_create_1h,
         "cache_read_separate": cache_read_separate,
         "cached_within_input": cached_within_input,
@@ -189,9 +194,19 @@ def _cost_terms(n: dict[str, int], model: str | None) -> list[tuple[int, float]]
     ]
 
 
+def _terms_cost(terms: list[tuple[int, float]]) -> float:
+    """The terms' total (x 1e6), added one by one in their order. Not sum(): from Python
+    3.12 it compensates float rounding, which moves some totals by an ulp off what
+    usage_cost_usd has always returned."""
+    total = 0.0
+    for _, c in terms:
+        total += c
+    return total
+
+
 def _type_tokens(n: dict[str, int]) -> tuple[int, int, int, int]:
     return (n["uncached_input"] + n["tool"], n["output"],
-            n["cache_read_separate"] + n["cached_within_input"], n["cache_create"])
+            n["cache_read_separate"] + n["cached_within_input"], n["cache_create_tokens"])
 
 
 def usage_cost_usd(usage: Any, model: str | None) -> float:
@@ -204,7 +219,7 @@ def usage_cost_usd(usage: Any, model: str | None) -> float:
     """
     if not isinstance(usage, dict):
         return 0.0
-    return sum(c for _, c in _cost_terms(_usage_counts(usage), model)) / 1_000_000.0
+    return _terms_cost(_cost_terms(_usage_counts(usage), model)) / 1_000_000.0
 
 
 def usage_split(usage: Any, model: str | None) -> UsageSplit:
@@ -228,7 +243,7 @@ def usage_split(usage: Any, model: str | None) -> UsageSplit:
         total = sum(type_tokens)
     return UsageSplit(
         total,
-        sum(c for _, c in terms) / 1_000_000.0,
+        _terms_cost(terms) / 1_000_000.0,
         type_tokens,
         (type_costs[0] / 1_000_000.0, type_costs[1] / 1_000_000.0,
          type_costs[2] / 1_000_000.0, type_costs[3] / 1_000_000.0),

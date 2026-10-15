@@ -83,6 +83,53 @@ def test_usage_split_gemini_adds_thoughts_and_tool():
         assert s.cost == accounting.usage_cost_usd(usage, "gemini-3.5-flash")
     assert s.type_tokens == (7500, 1000, 3000, 0)
     assert sum(s.type_tokens) == s.tokens == 11500
+    # The tool-use prompt bills at the input rate, thoughts at the output rate.
+    assert s.type_costs == pytest.approx((7500 * 3.0 / 1e6, 1000 * 15.0 / 1e6, 3000 * 0.3 / 1e6, 0.0))
+
+
+def test_usage_split_prices_every_type_at_the_request_prompt_tier():
+    # Past the threshold every rate moves to its long_ value, cache reads included, and the
+    # prompt that picks the tier counts the cache reads.
+    tiered = {"input": 1.0, "output": 5.0, "cache_read": 0.1, "cache_write": 1.25,
+              "long_context_threshold": 100_000, "long_input": 5.0, "long_output": 25.0,
+              "long_cache_read": 0.5, "long_cache_write": 6.25}
+    long_prompt = {"input_tokens": 1000, "output_tokens": 100, "cache_read_input_tokens": 150_000,
+                   "cache_creation_input_tokens": 2000}
+    short_prompt = {"input_tokens": 1000, "output_tokens": 100, "cache_read_input_tokens": 50_000,
+                    "cache_creation_input_tokens": 2000}
+    with patch("accounting.model_pricing", return_value=tiered):
+        long_split = accounting.usage_split(long_prompt, "claude-haiku-5-5")
+        short_split = accounting.usage_split(short_prompt, "claude-haiku-5-5")
+        assert long_split.cost == accounting.usage_cost_usd(long_prompt, "claude-haiku-5-5")
+    assert long_split.type_costs == pytest.approx((0.005, 0.0025, 0.075, 0.0125))
+    assert short_split.type_costs == pytest.approx((0.001, 0.0005, 0.005, 0.0025))
+
+
+def test_nested_cache_writes_bill_but_do_not_count_as_tokens():
+    # A record with only the nested 5m/1h breakdown and no top-level cache-write count bills
+    # those writes, but the token readers count the top-level field alone, as they always
+    # have: the parse caches keep or drop a record by usage_token_total, so counting them
+    # would change what a cache holds without a parse-version bump.
+    usage = {"input_tokens": 10, "output_tokens": 5, "cache_creation_input_tokens": 0,
+             "cache_creation": {"ephemeral_1h_input_tokens": 400}}
+    with patch("accounting.model_pricing", return_value=_PRICES):
+        s = accounting.usage_split(usage, "claude-sonnet-4-5")
+        assert s.cost == accounting.usage_cost_usd(usage, "claude-sonnet-4-5")
+    assert s.tokens == accounting.usage_token_total(usage) == 15
+    assert s.type_tokens == (10, 5, 0, 0)
+    assert s.type_costs[3] == pytest.approx(400 * 6.0 / 1e6)
+    assert accounting.usage_token_total({"cache_creation": {"ephemeral_5m_input_tokens": 1000}}) == 0
+
+
+def test_request_cost_adds_its_lanes_in_order():
+    # Python 3.12's sum() compensates float rounding; the cost has always been added lane by
+    # lane, and this record is one where the two differ in the last bit.
+    prices = {"input": 0.1, "output": 0.5, "cache_read": 0.01}
+    usage = {"input_tokens": 12000, "cached_input_tokens": 7, "output_tokens": 150000}
+    with patch("accounting.model_pricing", return_value=prices):
+        cost = accounting.usage_cost_usd(usage, "claude-haiku-5-5")
+        split = accounting.usage_split(usage, "claude-haiku-5-5")
+    assert cost == split.cost == (11993 * 0.1 + 150000 * 0.5 + 7 * 0.01) / 1e6
 
 
 def test_usage_split_keeps_a_bare_total_unsplit():
