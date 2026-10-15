@@ -196,6 +196,16 @@ Runtime: stdlib-only (no third-party deps). `.venv` is for pytest only. Release:
 
 **Deploy:** `make upgrade` + `systemctl --user restart plasma-plasmashell.service`. Re-open the popup to see changes. Window placement can only be verified live (offscreen renders can't show it).
 
+## Comments
+
+A comment explains why the code can't be simpler: an outside constraint (Qt/Plasma/KWin, the OS, a
+third-party API or file format, security, a measured cost). Never write what the next line does,
+history ("used to", "the old bug", "fixed in", dates, audit or ticket IDs: that goes in the commit),
+line numbers, or another file's internals. A rule ("never X", "keep in sync") ships with the test that
+enforces it, and the comment is one line ending `→ tests/<file>::<test>`. A comment that explains a
+workaround for our own code means the code should change instead. Changing code means fixing or
+deleting the comments that describe it.
+
 ## Misc
 
 - `--background` skips GUI-prompt credential actions (e.g. KWallet unlock); widget always passes it. `--no-network` skips all remote API calls.
