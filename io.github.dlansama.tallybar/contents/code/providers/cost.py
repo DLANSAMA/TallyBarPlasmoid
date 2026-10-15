@@ -246,14 +246,12 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
         marks = ledger.get("rpcWatermarks")
         if not isinstance(marks, dict):
             marks = {}
-        learned_placeholders: dict[str, str] = {}
         try:
             from .antigravity import collect_antigravity_rpc_usage
-            rpc_usage, live_marks = collect_antigravity_rpc_usage(
-                4.0, known=marks, deadline=deadline, learned_names=learned_placeholders,
-            )
+            harvest = collect_antigravity_rpc_usage(4.0, known=marks, deadline=deadline)
+            rpc_usage, live_marks, learned_placeholders = harvest.usage, harvest.marks, harvest.learned_names
         except Exception:
-            rpc_usage, live_marks = {}, {}
+            rpc_usage, live_marks, learned_placeholders = {}, {}, {}
         rpc_covered: set[str] = set()
         for cascade_id, records in rpc_usage.items():
             rpc_covered.add(cascade_id)

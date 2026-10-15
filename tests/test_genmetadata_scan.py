@@ -66,7 +66,7 @@ def _wire(monkeypatch, tmp_path, conv_dir):
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", (conv_dir,))
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
 
 def _set_mtime(path, isodate):
@@ -164,7 +164,7 @@ def test_rpc_takeover_purges_at_keys(monkeypatch, tmp_path):
     rpc = {"cas": [{"stepKey": "0", "date": "2026-06-09", "hour": 10,
                     "u": 1, "c": 0, "o": 1, "model_placeholder": "MODEL_PLACEHOLDER_M26",
                     "api_provider": "ANTHROPIC_VERTEX"}]}
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: (rpc, {"cas": "t1"}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest(rpc, {"cas": "t1"}))
     second = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
     assert "cas@0.0" not in second["entries"]    # disk @ key purged on RPC takeover
     assert "cas#0" in second["entries"]
@@ -180,7 +180,7 @@ def test_rpc_covered_stem_skips_genmetadata_scan(monkeypatch, tmp_path):
     rpc = {"cas": [{"stepKey": "0", "date": "2026-06-09", "hour": 10,
                     "u": 1, "c": 0, "o": 1, "model_placeholder": "MODEL_PLACEHOLDER_M26",
                     "api_provider": "ANTHROPIC_VERTEX"}]}
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: (rpc, {"cas": "t1"}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest(rpc, {"cas": "t1"}))
     res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
     assert "cas@0.0" not in res["entries"] and "cas#0" in res["entries"]
 
@@ -328,7 +328,7 @@ def test_cli_stem_stays_rpc_owned_while_listed_live(monkeypatch, tmp_path):
     }))
     # agy alive: cascade listed (watermark re-confirmed), no new usage harvested.
     monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage",
-                        lambda *a, **k: ({}, {"sess": "2026-06-08T10:00:00Z"}))
+                        lambda *a, **k: agmod.RpcHarvest({}, {"sess": "2026-06-08T10:00:00Z"}))
     res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
     assert "sess#0" in res["entries"]
     assert not any(":" in k for k in res["entries"])
@@ -577,7 +577,7 @@ def test_rpc_takeover_purges_dated_at_keys(monkeypatch, tmp_path):
     rpc = {"cas": [{"stepKey": "0", "date": "2026-06-09", "hour": 10,
                     "u": 1, "c": 0, "o": 1, "model_placeholder": "MODEL_PLACEHOLDER_M26",
                     "api_provider": "ANTHROPIC_VERTEX"}]}
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: (rpc, {"cas": "t1"}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest(rpc, {"cas": "t1"}))
     e = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)["entries"]
     assert "cas@0.0" not in e and "cas@12.3" not in e
     assert "cas#0" in e and "casx@0.0" in e   # another stem is untouched

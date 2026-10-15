@@ -298,7 +298,7 @@ def test_antigravity_split_adds_up_in_every_window(tmp_path, monkeypatch):
     (tmp_path / "ledger.json").write_text(json.dumps({
         "trackingStarted": today.isoformat(), "entries": entries}))
     # Never reach a live Antigravity language server from a unit test.
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")

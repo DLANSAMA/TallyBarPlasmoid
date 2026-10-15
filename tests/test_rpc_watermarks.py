@@ -86,6 +86,11 @@ def _gen(step_index: int, tokens: int = 100) -> dict:
     }
 
 
+def _harvest(*args, **kwargs):
+    h = agmod.collect_antigravity_rpc_usage(*args, **kwargs)
+    return h.usage, h.marks
+
+
 def _fake_processes(pid=9999, token="tok", scheme="http"):
     return [(pid, token, scheme)]
 
@@ -105,7 +110,7 @@ def test_unchanged_cascade_skipped():
     with patch.object(agmod, "find_antigravity_processes", return_value=_fake_processes()), \
          patch.object(agmod, "antigravity_ports", side_effect=_fake_ports), \
          patch.object(agmod, "_post_local_rpc", side_effect=fake_post):
-        usage, marks = agmod.collect_antigravity_rpc_usage(3.0, known={cid: _LMT_A})
+        usage, marks = _harvest(3.0, known={cid: _LMT_A})
 
     assert cid not in calls
     assert cid not in usage
@@ -126,7 +131,7 @@ def test_new_cascade_queried():
     with patch.object(agmod, "find_antigravity_processes", return_value=_fake_processes()), \
          patch.object(agmod, "antigravity_ports", side_effect=_fake_ports), \
          patch.object(agmod, "_post_local_rpc", side_effect=fake_post):
-        usage, marks = agmod.collect_antigravity_rpc_usage(3.0, known=known)
+        usage, marks = _harvest(3.0, known=known)
 
     assert cid_new in calls
     assert cid_changed in calls
@@ -149,7 +154,7 @@ def test_failed_metadata_does_not_advance_mark():
     with patch.object(agmod, "find_antigravity_processes", return_value=_fake_processes()), \
          patch.object(agmod, "antigravity_ports", side_effect=_fake_ports), \
          patch.object(agmod, "_post_local_rpc", side_effect=_fail_metadata):
-        usage, marks = agmod.collect_antigravity_rpc_usage(3.0, known={})
+        usage, marks = _harvest(3.0, known={})
 
     assert cid in calls          # call was attempted
     assert cid not in usage      # no usage — server returned 500
@@ -167,7 +172,7 @@ def test_exception_during_metadata_does_not_advance_mark():
     with patch.object(agmod, "find_antigravity_processes", return_value=_fake_processes()), \
          patch.object(agmod, "antigravity_ports", side_effect=_fake_ports), \
          patch.object(agmod, "_post_local_rpc", side_effect=_exc_metadata):
-        usage, marks = agmod.collect_antigravity_rpc_usage(3.0, known={})
+        usage, marks = _harvest(3.0, known={})
 
     assert cid not in usage
     assert cid not in marks
@@ -177,7 +182,7 @@ def test_deadline_pre_list_returns_empty():
     """Deadline already expired before the list call → returns ({}. {})."""
     with patch.object(agmod, "find_antigravity_processes", return_value=_fake_processes()), \
          patch.object(agmod, "antigravity_ports", side_effect=_fake_ports):
-        usage, marks = agmod.collect_antigravity_rpc_usage(
+        usage, marks = _harvest(
             3.0, known={}, deadline=time.time() - 1.0
         )
 
@@ -222,7 +227,7 @@ def test_deadline_partial_harvest():
          patch.object(agmod, "_post_local_rpc", side_effect=_timed_post), \
          patch.object(agmod.time, "time", side_effect=_mock_time):
 
-        usage, marks = agmod.collect_antigravity_rpc_usage(
+        usage, marks = _harvest(
             3.0, known={}, deadline=deadline
         )
 
@@ -248,7 +253,7 @@ def test_missing_lmt_always_queried():
     with patch.object(agmod, "find_antigravity_processes", return_value=_fake_processes()), \
          patch.object(agmod, "antigravity_ports", side_effect=_fake_ports), \
          patch.object(agmod, "_post_local_rpc", side_effect=_post):
-        usage, marks = agmod.collect_antigravity_rpc_usage(3.0, known=known)
+        usage, marks = _harvest(3.0, known=known)
 
     assert cid in calls
     assert cid in usage
@@ -270,7 +275,7 @@ def test_ledger_marks_round_trip(monkeypatch, tmp_path):
 
     def _fake_rpc(timeout, known=None, deadline=None, **_kwargs):
         received_known.update(known or {})
-        return (
+        return agmod.RpcHarvest(
             {cid: [{"stepKey": "0", "u": 10, "c": 0, "o": 5,
                     "model_placeholder": "MODEL_PLACEHOLDER_M133",
                     "api_provider": "API_PROVIDER_GOOGLE_GEMINI",
@@ -330,7 +335,7 @@ def test_stale_mark_without_entries_is_pruned(monkeypatch, tmp_path):
     }), encoding="utf-8")
 
     # RPC returns empty (LS not running or cascade unloaded).
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     costmod.update_antigravity_token_ledger()
 
@@ -353,7 +358,7 @@ def test_entry_bearing_mark_survives_ls_down(monkeypatch, tmp_path):
     }), encoding="utf-8")
 
     # LS down — RPC returns nothing.
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     costmod.update_antigravity_token_ledger()
 
@@ -380,7 +385,7 @@ def test_no_write_churn_when_marks_identical(monkeypatch, tmp_path):
 
     # RPC re-confirms the same watermark (unchanged cascade).
     monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage",
-                        lambda *a, **k: ({}, {cid: _LMT_A}))
+                        lambda *a, **k: agmod.RpcHarvest({}, {cid: _LMT_A}))
 
     costmod.update_antigravity_token_ledger()
 
@@ -405,7 +410,7 @@ def test_old_ledger_without_watermarks(monkeypatch, tmp_path):
 
     def _fake_rpc(timeout, known=None, deadline=None, **_kwargs):
         received_known.update(known or {})
-        return {}, {}
+        return agmod.RpcHarvest()
 
     monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", _fake_rpc)
     costmod.update_antigravity_token_ledger()
@@ -431,7 +436,7 @@ def test_wrong_typed_watermarks_treated_as_empty(monkeypatch, tmp_path, bad_valu
 
     def _fake_rpc(timeout, known=None, deadline=None, **_kwargs):
         received_known.update(known or {})
-        return {}, {}
+        return agmod.RpcHarvest()
 
     monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", _fake_rpc)
     costmod.update_antigravity_token_ledger()  # must not raise

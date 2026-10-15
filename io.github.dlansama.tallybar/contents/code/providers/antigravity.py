@@ -1,6 +1,7 @@
 """Antigravity provider: local language server, Cloud Code API and token-ledger capture."""
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import glob
 import json
@@ -532,12 +533,27 @@ def _post_local_rpc(url: str, token: str, body: dict[str, Any], timeout: float) 
         return int(response.status), json.loads(text)
 
 
+@dataclasses.dataclass
+class RpcHarvest:
+    """What ``collect_antigravity_rpc_usage`` found.
+
+    ``usage``: ``{cascadeId: [{stepKey, u, c, o, model_placeholder, api_provider, date}, ...]}``,
+    merged across every running language server (Desktop + IDE each own a disjoint set).
+    ``marks``: ``{cascadeId: lastModifiedTime}`` for every cascade successfully queried this run.
+    ``learned_names``: every ``MODEL_PLACEHOLDER_M<N>`` -> displayName pair the
+    ``GetAvailableModels`` call(s) returned, i.e. the exact picker names for every model
+    CURRENTLY on offer, not just ones with usage this run.
+    """
+    usage: dict[str, list[dict[str, Any]]] = dataclasses.field(default_factory=dict)
+    marks: dict[str, str] = dataclasses.field(default_factory=dict)
+    learned_names: dict[str, str] = dataclasses.field(default_factory=dict)
+
+
 def collect_antigravity_rpc_usage(
     timeout: float,
     known: "dict[str, str] | None" = None,
     deadline: "float | None" = None,
-    learned_names: "dict[str, str] | None" = None,
-) -> "tuple[dict[str, list[dict[str, Any]]], dict[str, str]]":
+) -> RpcHarvest:
     """Harvest per-generation token usage from the local Antigravity language server.
 
     This is the authoritative, format-stable source for Antigravity token telemetry: it reads
@@ -549,11 +565,8 @@ def collect_antigravity_rpc_usage(
     (``inputTokens`` / ``cacheReadTokens`` / ``outputTokens``) plus ``apiProvider`` and a
     ``MODEL_PLACEHOLDER_M<N>`` model id, so every generation is attributed to its real model.
 
-    Returns ``(usage, marks)`` where ``usage`` is ``{cascadeId: [{stepKey, u, c, o,
-    model_placeholder, api_provider, date}, ...]}`` (merged across every running language server —
-    Desktop + IDE each own a disjoint set) and ``marks`` is ``{cascadeId: lastModifiedTime}`` for
-    every cascade that was successfully queried this run (the caller persists these as watermarks so
-    unchanged cascades are skipped on the next refresh — see ``rpcWatermarks`` in the ledger).
+    Returns an ``RpcHarvest``. Its ``marks`` are persisted by the caller as watermarks so
+    unchanged cascades are skipped on the next refresh (see ``rpcWatermarks`` in the ledger).
 
     **Incremental harvest contract:**
     - ``known``: cascadeId → previously persisted ``lastModifiedTime``.  When the listed
@@ -576,18 +589,14 @@ def collect_antigravity_rpc_usage(
     LS memory are returned (not the full on-disk history) — the persistent ledger keeps them after
     they unload.
 
-    ``learned_names``: optional output param (an existing dict this call MERGES into, not
-    returned — this keeps the function's return shape 2-tuple-compatible with the many existing
-    callers/mocks that unpack it as ``usage, marks``). When provided, populated with every
-    ``MODEL_PLACEHOLDER_M<N>`` -> displayName pair this run's ``GetAvailableModels`` call(s)
-    returned, across every language server queried — i.e. the exact picker names for every model
-    CURRENTLY on offer, not just ones with usage this run. The caller persists these so a model's
-    real name, once seen from a live language server, is remembered even after Antigravity closes
-    and heals any disk-scan entry whose enum isn't in the static ``_MODEL_ENUM_NAMES`` table yet.
+    The caller persists ``learned_names`` so a model's real name, once seen from a live language
+    server, is remembered even after Antigravity closes and heals any disk-scan entry whose enum
+    isn't in the static ``_MODEL_ENUM_NAMES`` table yet.
     """
     known = known or {}
     out: dict[str, list[dict[str, Any]]] = {}
     marks: dict[str, str] = {}
+    learned: dict[str, str] = {}
     for pid, token, scheme in find_antigravity_processes():
         if deadline_passed(deadline, inclusive=True):
             break
@@ -636,8 +645,7 @@ def collect_antigravity_rpc_usage(
                         display_names[mid] = dn
         except Exception:
             display_names = {}
-        if learned_names is not None:
-            learned_names.update(display_names)
+        learned.update(display_names)
         for cascade_id, summary in summaries.items():
             if cascade_id in out:
                 continue
@@ -697,7 +705,7 @@ def collect_antigravity_rpc_usage(
             # Watermark only on success (including zero-usage conversations: marks them so they
             # stop being re-queried each refresh until they actually change).
             marks[cascade_id] = lmt
-    return out, marks
+    return RpcHarvest(out, marks, learned)
 
 
 def normalized_antigravity_lanes(limits: list[dict[str, Any]], include_missing: bool = False) -> list[dict[str, Any]]:

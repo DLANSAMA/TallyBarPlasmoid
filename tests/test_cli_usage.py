@@ -24,7 +24,7 @@ import cli_statusline_capture as cap  # noqa: E402
 def _no_live_rpc(monkeypatch):
     # Unit tests must never reach a live Antigravity language server. Default the RPC source to
     # empty; tests exercising the RPC fold override this with their own fake payload.
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
 # A real statusLine payload (captured live from agy) — the confirmed schema.
 REAL_PAYLOAD = {
@@ -238,10 +238,9 @@ def test_learned_model_name_heals_unmapped_enum_to_real_name(monkeypatch, tmp_pa
         "entries": {"disk-stem:0": {"d": today, "u": 100000, "c": 0, "o": 50000, "me": 1084}},
     }))
 
-    def _fake_rpc_with_learned(timeout, known=None, deadline=None, learned_names=None, **_kw):
-        if learned_names is not None:
-            learned_names["MODEL_PLACEHOLDER_M84"] = "Gemini 4.0 Ultra"
-        return {}, {}  # zero NEW usage this run -- the model was only seen via GetAvailableModels
+    def _fake_rpc_with_learned(timeout, known=None, deadline=None, **_kw):
+        # zero NEW usage this run -- the model was only seen via GetAvailableModels
+        return agmod.RpcHarvest(learned_names={"MODEL_PLACEHOLDER_M84": "Gemini 4.0 Ultra"})
 
     monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", _fake_rpc_with_learned)
 
@@ -255,7 +254,7 @@ def test_learned_model_name_heals_unmapped_enum_to_real_name(monkeypatch, tmp_pa
 
     # Antigravity has since closed -- the RPC returns nothing at all -- but the persisted
     # learned name must still heal the entry, not just during the run it was captured.
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
     summary2 = costmod.antigravity_ledger_cost_summary()
     labels2 = {row["model"] for row in summary2["modelBreakdown"]}
     assert "Gemini 4.0 Ultra" in labels2
@@ -456,7 +455,7 @@ def test_output_not_double_counted(monkeypatch, tmp_path):
 
 
 def _fake_rpc(payload):
-    return lambda *a, **k: (payload, {})
+    return lambda *a, **k: agmod.RpcHarvest(payload, {})
 
 
 def test_rpc_usage_folds_with_per_model_pricing(monkeypatch, tmp_path):
@@ -618,7 +617,7 @@ def test_real_temp_db_two_phase_scan_short_circuits(monkeypatch, tmp_path):
     monkeypatch.setattr(cm, "ANTIGRAVITY_CONVERSATION_DIRS", (conv_dir,))
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", ledger)
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     real_pb = cm._pb_find_usage
     calls = {"n": 0}
@@ -653,7 +652,7 @@ def test_deadline_break_abandons_scan_early(monkeypatch, tmp_path):
     monkeypatch.setattr(cm, "ANTIGRAVITY_CONVERSATION_DIRS", (conv_dir,))
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", ledger)
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     res = costmod.update_antigravity_token_ledger(deadline=time.time() - 100)
     # The scan never ran (deadline spent at the top of the dir loop) -> nothing captured.
@@ -679,7 +678,7 @@ def test_deadline_break_skips_remaining_db_connects(monkeypatch, tmp_path):
     monkeypatch.setattr(cm, "ANTIGRAVITY_CONVERSATION_DIRS", (conv_dir,))
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     base = 1_000_000.0
     clock = {"t": base}
@@ -710,7 +709,7 @@ def test_hourly_residual_fold(monkeypatch, tmp_path):
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
     ledger = tmp_path / "ledger.json"
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", ledger)
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
     monkeypatch.setattr(costmod, "model_pricing",
                         lambda *a, **k: {"input": 10.0, "output": 10.0, "cache_read": 10.0})
 
@@ -748,7 +747,7 @@ def test_enum_map_heals_fallback_model_retroactively(monkeypatch, tmp_path):
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
     ledger = tmp_path / "ledger.json"
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", ledger)
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     today = dt.date.today().isoformat()
     ledger.write_text(json.dumps({"trackingStarted": today, "entries": {
@@ -802,7 +801,7 @@ def test_legacy_model_strings_migrated_on_update(monkeypatch, tmp_path):
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
     ledger = tmp_path / "ledger.json"
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", ledger)
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     today = dt.date.today().isoformat()
     ledger.write_text(json.dumps({"trackingStarted": today, "entries": {
@@ -1042,7 +1041,7 @@ def test_heal_never_downgrades_stored_name_when_lookup_fails(monkeypatch, tmp_pa
                 "date": today, "hour": None}
 
     monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage",
-                        lambda *a, **k: ({cid: [rec("0"), rec("1")]}, {cid: "lmt"}))
+                        lambda *a, **k: agmod.RpcHarvest({cid: [rec("0"), rec("1")]}, {cid: "lmt"}))
     res = costmod.update_antigravity_token_ledger()
     assert res["entries"][f"{cid}#0"]["model"] == "Gemini 4 Ultra (High)"  # preserved
     assert res["entries"][f"{cid}#1"]["model"] == "gemini-3.1-pro"         # filled
@@ -1163,7 +1162,7 @@ def test_disk_scan_dates_by_embedded_timestamp_not_today(monkeypatch, tmp_path):
     monkeypatch.setattr(cm, "ANTIGRAVITY_CONVERSATION_DIRS", (conv_dir,))
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     res = costmod.update_antigravity_token_ledger()
     key = "mydb@0.0"
@@ -1185,7 +1184,7 @@ def test_disk_scan_counts_generation_once_not_doubled(monkeypatch, tmp_path):
     monkeypatch.setattr(cm, "ANTIGRAVITY_CONVERSATION_DIRS", (conv_dir,))
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     res = costmod.update_antigravity_token_ledger()
     conv_keys = [k for k in res["entries"] if k.startswith("c@")]
@@ -1214,7 +1213,7 @@ def test_disk_scan_rescans_changed_db_skips_unchanged(monkeypatch, tmp_path):
     ledger = tmp_path / "ledger.json"
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", ledger)
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     real_pb = cm._pb_generations
     calls = {"n": 0}
@@ -1268,7 +1267,7 @@ def test_disk_dating_migration_resets_db_scanned(monkeypatch, tmp_path):
     monkeypatch.setattr(cm, "ANTIGRAVITY_CONVERSATION_DIRS", (conv_dir,))
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", ledger)
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     res = costmod.update_antigravity_token_ledger()
     assert res["diskDatingVersion"] == cm.ANTIGRAVITY_DISK_DATING_VERSION
@@ -1294,7 +1293,7 @@ def test_pb_generations_captures_2_0_marker_26(tmp_path, monkeypatch):
     monkeypatch.setattr(cm, "ANTIGRAVITY_CONVERSATION_DIRS", (conv_dir,))
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
     res = costmod.update_antigravity_token_ledger()
     folded = {k: v for k, v in res["entries"].items() if k.startswith("conv26@")}
     assert len(folded) == 2
@@ -1504,7 +1503,7 @@ def test_marker26_and_marker24_steps_disjoint_keys(tmp_path, monkeypatch):
     monkeypatch.setattr(cm, "ANTIGRAVITY_CONVERSATION_DIRS", (conv,))
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     res = cm.update_antigravity_token_ledger()
     entries = res["entries"]
