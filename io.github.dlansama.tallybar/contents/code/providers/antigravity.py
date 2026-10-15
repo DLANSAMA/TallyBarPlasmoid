@@ -30,29 +30,17 @@ from parsers import (
 )
 
 
-# Hosts that receive an Authorization: Bearer header or the OAuth refresh-token body. A 3xx
-# from any of these is treated as an attack/misconfig, never followed.
-# _is_credentialed_google_host also matches channel-prefixed Cloud Code hosts (see below).
+# Host suffixes that receive an Authorization: Bearer header or the OAuth refresh-token body.
+# A 3xx from any matching host is treated as an attack/misconfig, never followed. The match is
+# a plain endswith, so the channel-prefixed Cloud Code hosts (daily-cloudcode-pa, ...) are
+# covered; over-blocking only turns a redirect into an HTTPError.
 _CREDENTIALED_GOOGLE_HOSTS = ("oauth2.googleapis.com", "cloudcode-pa.googleapis.com")
 
 
 def _is_credentialed_google_host(host: str) -> bool:
-    """True for any host that receives Google OAuth/Cloud-Code credentials and must never
-    have a 3xx followed (the redirect would copy the Bearer header / refresh-token body
-    cross-origin). Matches ``oauth2.googleapis.com`` (exact or dot-suffix) and ANY host
-    ending ``cloudcode-pa.googleapis.com`` — a plain endswith (no dot boundary) so the
-    channel-prefixed live hosts ``daily-cloudcode-pa`` / ``autopush-cloudcode-pa`` /
-    ``staging-cloudcode-pa`` are covered (antigravity_cloudcode_host() returns e.g.
-    ``daily-cloudcode-pa.googleapis.com``; the char before ``cloudcode`` is ``-``, not ``.``). Over-blocking is fail-safe:
-    a wrongly refused redirect just raises HTTPError into the existing scrubbed handling.
-    Any hosts monkeypatched into _CREDENTIALED_GOOGLE_HOSTS (tests) are also honoured."""
-    if not host:
-        return False
-    if host == "oauth2.googleapis.com" or host.endswith(".oauth2.googleapis.com"):
-        return True
-    if host.endswith("cloudcode-pa.googleapis.com"):
-        return True
-    return any(host == h or host.endswith("." + h) for h in _CREDENTIALED_GOOGLE_HOSTS)
+    """True for a host that receives Google OAuth/Cloud-Code credentials, so a 3xx from it
+    must not be followed (the redirect would copy the credential cross-origin)."""
+    return bool(host) and host.endswith(_CREDENTIALED_GOOGLE_HOSTS)
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
