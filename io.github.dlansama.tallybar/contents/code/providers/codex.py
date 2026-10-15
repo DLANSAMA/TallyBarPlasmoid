@@ -1,8 +1,4 @@
-"""Provider-specific API callers and data acquisition logic.
-
-Each provider (Gemini, Claude, Codex/OpenAI, Antigravity) has its own fetch
-path that returns a normalised provider dict suitable for the QML UI.
-"""
+"""Codex / OpenAI provider: cookie API and `codex` CLI JSON-RPC."""
 from __future__ import annotations
 
 import asyncio
@@ -30,9 +26,6 @@ OPENAI_ACCOUNT_CHECK_URL = "https://chatgpt.com/backend-api/accounts/check/v4-20
 
 
 
-# ---------------------------------------------------------------------------
-# OpenAI / Codex cookie API
-# ---------------------------------------------------------------------------
 
 async def run_openai_cookie_api(cookies: list[BrowserCookie], timeout: float) -> dict[str, Any]:
     domains = OPENAI_COOKIE_DOMAINS
@@ -85,9 +78,6 @@ async def run_openai_cookie_api(cookies: list[BrowserCookie], timeout: float) ->
 
 
 
-# ---------------------------------------------------------------------------
-# Codex JSON-RPC subprocess
-# ---------------------------------------------------------------------------
 
 class JsonRpcChild:
     def __init__(self, process: asyncio.subprocess.Process) -> None:
@@ -165,7 +155,7 @@ class JsonRpcChild:
                 if not chunk:
                     break
                 buffer += chunk.decode("utf-8", errors="replace")
-                if len(buffer) > 65536:  # bound the buffer if no newline ever arrives
+                if len(buffer) > 65536:
                     buffer = buffer[-65536:]
                 while "\n" in buffer:
                     line, buffer = buffer.split("\n", 1)
@@ -239,7 +229,6 @@ class JsonRpcChild:
 
 
 def _codex_rpc_error_message(error: Any) -> str:
-    """Extract a human-readable message from a JSON-RPC error value."""
     if isinstance(error, dict):
         msg = error.get("message")
         if isinstance(msg, str) and msg.strip():
@@ -305,9 +294,8 @@ async def run_codex_rpc(timeout: float) -> dict[str, Any]:
         rate_limits = as_dict(account_result.get("rateLimits"))
         limits = codex_rate_limit_rows(rate_limits, account_result.get("rateLimitsByLimitId"))
         tier = ""
-        # planType is nested INSIDE rateLimits on the live app-server payload
-        # (verified 2026-09-11), not at the top level of the result — reading only
-        # account_result left tier empty for every account. Check both.
+        # planType is nested INSIDE rateLimits on the live app-server payload,
+        # not at the top level of the result. Check both.
         plan_type = (
             account_result.get("planType")
             or account_result.get("plan_type")

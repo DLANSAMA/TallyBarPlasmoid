@@ -1,7 +1,4 @@
-"""Public provider API. The names re-exported here (and listed in ``__all__``)
-are the package's surface — ``backend.py`` pulls them in via ``from providers
-import *``. ``__all__`` both pins that surface and marks these imports as the
-intended re-exports (so static analysis doesn't flag them as unused)."""
+"""Public provider API: the names backend.py imports, pinned by ``__all__``."""
 from .gemini import GEMINI_DOMAINS, run_gemini_web, run_google_one_credits, google_one_credit_fresh
 from .claude import apply_claude_statusline_fallback, load_claude_statusline, run_claude_api
 from .codex import run_openai_cookie_api, run_codex_rpc
