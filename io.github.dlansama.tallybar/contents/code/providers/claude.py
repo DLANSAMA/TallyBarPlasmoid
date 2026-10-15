@@ -14,6 +14,7 @@ from accounting import (
 from cookies import BrowserCookie, cookiejar_for_domains, has_session_cookies
 from http_helpers import http_json_async, scrub_credentials
 from parsers import (
+    fresh_credit_balance,
     add_pace_detail,
     claude_org_ids,
     normalize_tier,
@@ -56,26 +57,7 @@ CREDIT_REFRESH_SECONDS = 300
 def _credit_balance_fresh(prev: Any) -> dict[str, Any] | None:
     """Return the previous snapshot's Claude ``creditBalance`` iff it was fetched within
     ``CREDIT_REFRESH_SECONDS`` — else None (stale/absent → re-fetch). None-safe."""
-    if not isinstance(prev, dict):
-        return None
-    cb = prev.get("creditBalance")
-    if not isinstance(cb, dict):
-        return None
-    fetched = cb.get("fetchedAt")
-    if not isinstance(fetched, str) or not fetched:
-        return None
-    try:
-        # now_iso() emits local time with a UTC offset (accounting.now_iso uses
-        # astimezone().isoformat()); the Z-replace is a belt for foreign/legacy stamps.
-        ts = dt.datetime.fromisoformat(fetched.replace("Z", "+00:00"))
-    except Exception:
-        return None
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=dt.timezone.utc)
-    age = (dt.datetime.now(dt.timezone.utc) - ts).total_seconds()
-    if age < 0 or age >= CREDIT_REFRESH_SECONDS:
-        return None
-    return cb
+    return fresh_credit_balance(prev, CREDIT_REFRESH_SECONDS)
 
 
 # usage_summary is tried first, but when it answers "not here" (404/410, or 200 with no

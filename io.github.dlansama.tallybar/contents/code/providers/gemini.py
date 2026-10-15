@@ -1,7 +1,6 @@
 """Gemini provider: gemini.google.com usage scrape and Google One AI credits."""
 from __future__ import annotations
 
-import datetime as dt
 import json
 import re
 import time
@@ -17,6 +16,7 @@ from cookies import BrowserCookie, cookiejar_for_domains, has_session_cookies
 from http_helpers import http_text, scrub_credentials
 from io_helpers import atomic_write_text
 from parsers import (
+    fresh_credit_balance,
     parse_batchexecute_payload,
     parse_gemini_usage_info,
     parse_google_one_credits,
@@ -395,30 +395,8 @@ def google_one_credit_fresh(prev: Any) -> dict[str, Any] | None:
     ``GOOGLE_ONE_REFRESH_SECONDS`` — else None (stale/absent/other-source → re-fetch).
 
     ``prev`` is the previous snapshot's *antigravity* provider dict (the Google One balance
-    lands there via ``apply_google_one_credits``). Mirrors ``claude._credit_balance_fresh``,
-    including the None-safety on every step and rejecting negative ages from a clock jump."""
-    if not isinstance(prev, dict):
-        return None
-    cb = prev.get("creditBalance")
-    if not isinstance(cb, dict):
-        return None
-    if cb.get("source") != "google-one-ai":
-        return None
-    fetched = cb.get("fetchedAt")
-    if not isinstance(fetched, str) or not fetched:
-        return None
-    try:
-        # now_iso() emits local time with a UTC offset; the Z-replace is a belt for
-        # foreign/legacy stamps.
-        ts = dt.datetime.fromisoformat(fetched.replace("Z", "+00:00"))
-    except Exception:
-        return None
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=dt.timezone.utc)
-    age = (dt.datetime.now(dt.timezone.utc) - ts).total_seconds()
-    if age < 0 or age >= GOOGLE_ONE_REFRESH_SECONDS:
-        return None
-    return cb
+    lands there via ``apply_google_one_credits``)."""
+    return fresh_credit_balance(prev, GOOGLE_ONE_REFRESH_SECONDS, source="google-one-ai")
 
 
 def run_google_one_credits(cookies: list[BrowserCookie], timeout: float) -> dict[str, Any]:

@@ -1052,3 +1052,31 @@ def parse_grok_billing_config(event: Any) -> dict[str, Any] | None:
         "period": period_info or None,
         "percentExplicit": percent_explicit,
     }
+
+
+def fresh_credit_balance(
+    prev: Any, max_age_seconds: float, source: str | None = None
+) -> dict[str, Any] | None:
+    """The previous provider dict's ``creditBalance`` iff it is a dict (of ``source``, when
+    given) whose ``fetchedAt`` is under ``max_age_seconds`` old; else None. None-safe, and a
+    negative age (clock jump) is not fresh."""
+    if not isinstance(prev, dict):
+        return None
+    cb = prev.get("creditBalance")
+    if not isinstance(cb, dict):
+        return None
+    if source is not None and cb.get("source") != source:
+        return None
+    fetched = cb.get("fetchedAt")
+    if not isinstance(fetched, str) or not fetched:
+        return None
+    try:
+        ts = dt.datetime.fromisoformat(fetched.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=dt.timezone.utc)
+    age = (dt.datetime.now(dt.timezone.utc) - ts).total_seconds()
+    if age < 0 or age >= max_age_seconds:
+        return None
+    return cb
