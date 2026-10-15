@@ -69,7 +69,7 @@ function compactCount(value) {
 }
 
 // Per-provider accent fallback — the SINGLE source shared by CompactRepresentation and
-// FullRepresentation (they previously each hard-coded an identical map that could drift).
+// FullRepresentation.
 // Used only before telemetry arrives / when the backend omits accentColor; PlasmaCore.Theme
 // does not exist in Plasma 6, so these fixed values stand in. Keep in sync with the backend
 // accents (backend.py provider_accent).
@@ -79,7 +79,7 @@ function providerAccent(providerKey) {
     if (providerKey === "antigravity") return "#30b795";
     if (providerKey === "grok") return "#1d9bf0";
     if (providerKey === "grokbot") return "#e6e6e6";
-    return "#218df4"; // codex / default
+    return "#218df4";
 }
 
 // Resolve the first installed family from an Apple-first preference list (both

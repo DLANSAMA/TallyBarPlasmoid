@@ -7,9 +7,6 @@ Item {
     id: root
 
     signal toggleRequested()
-    // Panel-icon interactions. The mouse wheel and middle-click cycle the panel
-    // display MODE (percent → reset → cost → pace → percent); the choice is persisted by
-    // main.qml via the config-write DataSource. tabs is kept for Accessible naming.
     property var tabs: []
     signal cycleModeRequested(int direction)
     // Accumulate wheel deltas so a high-resolution touchpad doesn't machine-gun the cycle;
@@ -110,9 +107,6 @@ Item {
         }
     }
 
-    // Accent fallback lives in lib/format.js (Fmt.providerAccent) — a SINGLE source shared
-    // with FullRepresentation so the panel and popup can't drift. PlasmaCore.Theme does not
-    // exist in Plasma 6, so accents come from the backend with this hardcoded fallback.
     function accentColor() {
         return root.providerData().accentColor || Fmt.providerAccent(root.selectedProvider);
     }
@@ -123,15 +117,13 @@ Item {
         return root.accentColor();
     }
 
-    // Panel-text font resolved via the shared Fmt.pickFont (same list as
-    // FullRepresentation.uiFont) so the panel and popup never diverge.
     readonly property var availableFonts: Qt.fontFamilies()
     readonly property string uiFont: Fmt.pickFont(root.availableFonts,
         ["SF Pro Text", "SF Pro", "Inter", "Roboto", "Noto Sans"])
 
     // Panel display mode (config.panelDisplayMode): "percent" keeps the two bars;
     // "reset"/"cost"/"pace" swap the bars for a compact text value of the selected
-    // provider's primary limit. Default "percent" preserves the original look.
+    // provider's primary limit.
     readonly property string panelMode: {
         const cfg = root.telemetry && root.telemetry.config;
         const m = cfg && cfg.panelDisplayMode ? String(cfg.panelDisplayMode) : "percent";
@@ -257,9 +249,6 @@ Item {
         anchors.centerIn: parent
         width: root.indicatorWidth
         height: root.barHeight * 2 + root.barGap
-        // A bad-status provider shows empty bars identical to a healthy 0%-used account;
-        // dimming the whole glyph reads it as inactive (paired with the badge below). This
-        // is a status signal, so it doesn't touch the accent-colour rule.
         opacity: root.statusBad ? 0.4 : 1.0
 
         Rectangle {

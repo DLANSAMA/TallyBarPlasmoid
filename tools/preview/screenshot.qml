@@ -57,9 +57,6 @@ import QtQuick.Window
 Window {
     id: shot
 
-    // ---------------------------------------------------------------------
-    // Arguments
-    // ---------------------------------------------------------------------
     function argValue(key, fallback) {
         const args = Qt.application.arguments;
         for (let i = 1; i < args.length; ++i) {
@@ -336,7 +333,6 @@ Window {
     property var demo: null
 
     Timer {
-        // One settle pass (fonts, Repeaters, the bars' grow-in springs) before the walk.
         interval: 1500
         running: shot.walk.length > 0
         repeat: false
@@ -504,7 +500,6 @@ Window {
         if (shot.demoDir.length > 0)
             Qt.createQmlObject('import QtQuick; Rectangle { anchors.fill: parent; z: -2000; color: "'
                                + shot.demoCanvas + '" }', card, "demoCanvas");
-        // QtTest is only needed here, so a plain render never depends on it.
         const events = Qt.createQmlObject("import QtTest; TestEvent {}", shot, "demoEvents");
         shot.demo = { card: card, overlay: overlay, events: events, steps: demoSteps(card),
                       i: 0, stepAt: 0, pos: Qt.point(0, 0), clickAt: -1e9, start: Date.now(), frame: 0,

@@ -1,6 +1,5 @@
 // Settings flyout — a separate floating glass window beside the widget (same
-// macOS-submenu pattern as the cost popout). Extracted verbatim from
-// FullRepresentation.qml; `root` is the FullRepresentation root (all the helper
+// macOS-submenu pattern as the cost popout). `root` is the FullRepresentation root (all the helper
 // functions/colours/signals live there) and `anchorItem` is the invisible 1x1
 // left-edge anchor KWin places this window against. Auto-closes on focus-out.
 import QtQuick
@@ -12,14 +11,12 @@ PlasmaCore.PopupPlasmaWindow {
     id: settingsPopout
 
     // The FullRepresentation root (helpers, colours, config state, signals) and the
-    // invisible left-edge anchor this window is placed against — both injected by the
-    // parent so the block below stays a verbatim copy of the original inline version.
+    // invisible left-edge anchor this window is placed against.
     property var root
     property Item anchorItem
 
     // Free-entry monthly budget. The presets row stays; a "Custom…" chip reveals a
-    // numeric field. budgetIsCustom is true when the saved value isn't one of the presets —
-    // that case used to leave NO chip selected.
+    // numeric field. budgetIsCustom is true when the saved value isn't one of the presets.
     readonly property var budgetPresets: [0, 50, 100, 250, 500]
     readonly property bool budgetIsCustom: root.monthlyBudgetValue() > 0
                                            && budgetPresets.indexOf(root.monthlyBudgetValue()) < 0
@@ -74,11 +71,7 @@ PlasmaCore.PopupPlasmaWindow {
             anchors.margins: 14
             spacing: 11
 
-            // While a config write is in flight, disable + dim every control so a click
-            // can't be silently swallowed by writeConfig's `if (configSaving) return`
-            // (correctness is preserved either way — no double-write — but the deleted
-            // interval picker's "control is busy" affordance, enabled:!configSaving + a
-            // dim, is restored here once for all the toggles rather than per-MouseArea).
+            // Dim and disable every control while a config write is in flight.
             // Escape (settingsCard.Keys) and click-away (window onActiveChanged) still
             // dismiss the popout, so the close × being briefly inert is harmless.
             enabled: !root.configSaving
@@ -563,7 +556,7 @@ PlasmaCore.PopupPlasmaWindow {
             }
 
             // Custom… chip + inline numeric field. The chip reads selected when a
-            // non-preset value is saved (and shows it), fixing the "no chip selected" bug.
+            // non-preset value is saved (and shows it).
             Row {
                 Layout.fillWidth: true
                 spacing: 8
@@ -643,8 +636,7 @@ PlasmaCore.PopupPlasmaWindow {
 
                         function commit() {
                             // Parse with the RUNTIME locale's separators — the same locale the
-                            // DoubleValidator accepted the text under. Stripping every comma
-                            // turned a decimal-comma "12,50" (de_DE, fr_FR, …) into $1250.
+                            // DoubleValidator accepted the text under.
                             const loc = Qt.locale();
                             const v = UIHelpers.parseLocaleAmount(budgetField.text, loc.decimalPoint, loc.groupSeparator);
                             if (!isNaN(v) && v >= 0 && v <= 1000000)

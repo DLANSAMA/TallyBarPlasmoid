@@ -127,7 +127,6 @@ Item {
         visible: costMouse.containsMouse && costSection.tipText.length > 0
     }
 
-    // Visible keyboard-focus indicator, invisible unless costMouse has focus.
     Rectangle {
         anchors.fill: parent
         radius: 6
@@ -165,7 +164,6 @@ Item {
         font.pixelSize: 11
         textFormat: Text.PlainText
         text: costSection.hasRealCost ? root.weekCostText(costSection.cost) : ""
-        // Hide when a summary carries no 7-day row so there's no empty gap.
         visible: text.length > 0
     }
 
@@ -182,7 +180,6 @@ Item {
         font.pixelSize: 11
         textFormat: Text.PlainText
         text: costSection.hasRealCost ? root.monthCostText(costSection.cost) : i18n("No local token cost summary found")
-        // Hide the second line when a summary has no 30-day row so there's no empty gap.
         visible: text.length > 0
     }
 
@@ -197,7 +194,6 @@ Item {
         elide: Text.ElideRight
         font.family: root.uiFont
         font.pixelSize: 11
-        // 30-day tokens by type: Input · Output · Cached (cache reads + writes).
         textFormat: Text.PlainText
         text: costSection.breakdownLine
         visible: costSection.hasBreakdown

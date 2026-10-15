@@ -6,10 +6,8 @@
 //   make preview                          # loads FullRepresentation.qml
 //   make preview COMPONENT=CostPopout     # loads CostPopout.qml
 //
-// The COMPONENT name is spliced in by the Makefile via -DcomponentName=...
-// QML's qt.uiLanguage/command-line -D definitions land in Qt.application.arguments,
-// but the simpler approach used here is a plain env-var read at startup via
-// Qt.application.arguments parsing (see below).
+// The Makefile passes the component as `-- componentName=<COMPONENT>`, parsed from
+// Qt.application.arguments below.
 
 import QtQuick
 import QtQuick.Controls as QQC2
@@ -24,11 +22,6 @@ Window {
     visible: true
     color: "#1e1e2e"
 
-    // -----------------------------------------------------------------------
-    // Component name: injected by -DcomponentName=Foo on the qml command line.
-    // The `qml` binary exposes -D key=value pairs via Qt.application.arguments
-    // starting at index 1; we parse them here.
-    // -----------------------------------------------------------------------
     property string componentName: {
         var args = Qt.application.arguments;
         for (var i = 1; i < args.length; ++i) {
@@ -83,16 +76,10 @@ Window {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Loader — resolves path relative to the harness file location
-    // -----------------------------------------------------------------------
     property string uiDir: {
-        // Qt.resolvedUrl gives us an absolute file:// URL to this harness.
-        // Walk up two levels (tools/preview → root) then into the UI directory.
         var here = String(Qt.resolvedUrl("."));
-        // Strip trailing slash if any
         if (here.charAt(here.length - 1) === "/") here = here.slice(0, -1);
-        // up two levels: preview -> tools -> repo root
+        // Up two levels: preview -> tools -> repo root.
         var root = here.replace(/\/[^/]+\/[^/]+$/, "");
         return root + "/io.github.dlansama.tallybar/contents/ui/";
     }
@@ -111,7 +98,6 @@ Window {
                 console.log("Loaded: " + source);
         }
 
-        // Inject mock data after the component is ready
         onLoaded: {
             if (item && "telemetry" in item)
                 item.telemetry = harness.mockTelemetry;
@@ -128,7 +114,6 @@ Window {
         }
     }
 
-    // Status bar at bottom
     Rectangle {
         anchors.bottom: parent.bottom
         anchors.left: parent.left

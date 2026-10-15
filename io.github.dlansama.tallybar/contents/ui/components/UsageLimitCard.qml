@@ -105,8 +105,6 @@ Item {
             width: row.pct > 0 ? Math.max(parent.height, parent.width * row.pct / 100) : 0
             radius: parent.radius
             color: (root && root.accentColor) ? root.accentColor() : "#3daee9"
-            // Near-solid fill at any value (macOS: width encodes the amount,
-            // not opacity). Keep only a whisper of gradient for subtle depth.
             opacity: row.warning ? row.pulse : ((root && root.usageOpacityFromPercent) ? root.usageOpacityFromPercent(row.pct, 0.72, 0.96) : 0.8)
 
             Behavior on width {

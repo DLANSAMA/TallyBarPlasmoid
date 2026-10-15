@@ -1,7 +1,6 @@
 // Token-usage graph as a SEPARATE floating glass window beside the widget (the macOS-
 // submenu look — Day / Week / Month tabs, per-bucket hover tooltips that expand with a
-// per-model breakdown on CLICK only, a close x). Extracted
-// verbatim from FullRepresentation.qml; `root` is the FullRepresentation root (all the helper
+// per-model breakdown on CLICK only, a close x). `root` is the FullRepresentation root (all the helper
 // functions / cost data / costGraphMode state live there) and `anchorItem` is the invisible
 // 1x1 LEFT-EDGE anchor (flyoutAnchor) KWin places this window against so it opens leftward,
 // beside the Cost row, never over the body. Auto-closes on focus-out.
@@ -14,8 +13,7 @@ PlasmaCore.PopupPlasmaWindow {
     id: costPopout
 
     // The FullRepresentation root (helpers, cost data, costGraphMode state, signals) and the
-    // invisible left-edge anchor this window is placed against — both injected by the parent so
-    // the block below stays a verbatim copy of the original inline version.
+    // invisible left-edge anchor this window is placed against.
     property var root
     property Item anchorItem
 
@@ -548,8 +546,7 @@ epsilon: 0.01
 
                                 // Fill the holder's full width across 7 columns so the calendar spans
                                 // the card instead of leaving side gaps, while cell height fills the 6
-                                // rows. (Previously cells were square at min(width,height)-based size,
-                                // so the shorter height constraint won and left horizontal whitespace.)
+                                // rows.
                                 readonly property real cellH: (parent.height - rowSpacing * 5) / 6
                                 // widthFill = cell width that fully fills the holder across 7 columns.
                                 // fillFraction tunes how much of that width to use: 1.0 = edge-to-edge
@@ -653,13 +650,13 @@ epsilon: 0.01
                         // ~12px side margins — so a tip can never be cut off at the window
                         // edge (it "only shows where the popout is" and clips otherwise). The
                         // two-line tips are narrow enough that this clamp almost never engages,
-                        // so it keeps the smooth following without the old chart-bounds "pinned"
-                        // feel. Vertically it sits above the cursor, dropping below near the top.
+                        // so it keeps the smooth following. Vertically it sits above the
+                        // cursor, dropping below near the top.
                         x: Math.max(-10, Math.min(chartArea.width - width + 10,
                                (chartArea.tipX < chartArea.width / 2)
                                ? chartArea.tipX + 12
                                : chartArea.tipX - 12 - width))
-                        // Pinned (clicked) tips grow taller with the per-model lines, so the
+                        // Click-expanded tips grow taller with the per-model lines, so the
                         // vertical position gets the same backstop clamp as x — a breakdown
                         // opened near the chart bottom must not run past the popout edge.
                         y: Math.max(-6, Math.min(chartArea.height - height + 10,

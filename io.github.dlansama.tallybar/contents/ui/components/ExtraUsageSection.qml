@@ -16,10 +16,6 @@ Item {
     Layout.preferredHeight: visible ? root.extraUsageBodyHeight : 0
     visible: root.hasExtraUsage()
 
-    // Extra usage is an informational row (no click target), so it
-    // gets no hover highlight — only the Cost section below reacts
-    // to its own pointer.
-
     Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
@@ -54,7 +50,7 @@ Item {
         radius: 2.5
         color: root.neutralUsageColor(0.2)
         // Keep the geometry (the detail text anchors to extraTrack.bottom and the
-        // section height mirror stays 86) but don't paint an empty track when
+        // section height mirror) but don't paint an empty track when
         // there's no real limit behind it.
         visible: extraUsageSection.hasBar
 

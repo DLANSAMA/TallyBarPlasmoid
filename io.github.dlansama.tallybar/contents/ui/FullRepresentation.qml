@@ -165,9 +165,6 @@ Item {
         return Math.max(0, Math.min(100, n));
     }
 
-    // compactCount + trimDecimals live in lib/format.js (imported as Fmt) — a SINGLE source
-    // shared with Python's accounting.compact_token_count via the node parity test
-    // (tests/test_compact_count_parity.py), so the panel and the backend cost lines can't drift.
 
     function tabLabel(provider) {
         return UIHelpers.tabLabel(provider);
@@ -250,8 +247,8 @@ Item {
         // Cap the inter-tab gap. The dock Row is horizontalCenter-anchored, so with providers
         // hidden via the visibility feature the raw fill gap balloons (~190px at 2 tabs) and
         // pins the tabs to opposite dock edges; clamping it clusters few-tab layouts centered.
-        // The 4- and 5-tab defaults sit below the cap (~23px / ~4px), so their fill gap is
-        // unchanged and the row still spans the full padded width — pixel-identical there.
+        // The 4- and 5-tab defaults sit below the cap (~23px / ~4px), so the row still
+        // spans the full padded width there.
         const raw = (available - root.switcherContentWidth()) / (count - 1);
         return Math.max(1, Math.min(24, raw));
     }
@@ -534,7 +531,6 @@ Item {
             return "";
         return String(root.providerData().actionUrl || "");
     }
-    // Mirror of CompactRepresentation.statusIsBad — the bad/actionable statuses.
     function statusIsBad(status) {
         return UIHelpers.statusIsBad(status);
     }
@@ -571,8 +567,7 @@ Item {
         return String(cost.today || cost.sessionLine || cost.last30Days || cost.monthLine || "").trim().length > 0;
     }
 
-    // Render "$188" as "$ 188"; dropped in the refactor while callers stayed, which
-    // silently killed the Today / Last 30 days cost lines.
+    // Render "$188" as "$ 188".
     function menuMoneySpacing(text) {
         return UIHelpers.menuMoneySpacing(text);
     }
@@ -918,8 +913,6 @@ Item {
     }
 
     function quickActionRows() {
-        // NB: no "Add Account" entry — the widget has no multi-account concept, and it
-        // opened the identical dashboardUrl() as "Usage Dashboard" below (a confusing dupe).
         // The strip is a fixed-height (44px) centered Row, so dropping an entry doesn't touch
         // actionFooterHeight()'s mirror.
         return [{
@@ -965,7 +958,7 @@ Item {
         }
         // All-AI cross-provider total row (26) + its top separator (1), shown only when some
         // provider has cost data; then 1px rule + quick-action strip (44) + 1px rule + system
-        // action rows (Quit). (The refresh-interval picker moved into the Settings popout.)
+        // action rows (Quit).
         const allAi = root.allAiTotals().has ? 27 : 0;
         return allAi + 1 + 44 + 1 + height;
     }
@@ -1012,11 +1005,10 @@ Item {
         return tier.length > 0 ? updated + " · " + tier : updated;
     }
 
-    // Bumped every minute while the popup is open so updatedText() re-evaluates and the
-    // relative age actually advances (otherwise it'd show "just now" until the next refresh).
+    // Bumped while the popup is open so updatedText() re-evaluates and the
+    // relative age advances (otherwise it'd show "just now" until the next refresh).
     property int nowTick: 0
     Timer {
-        // 30s so the relative "Updated Xm ago" line advances promptly while the popup is open.
         interval: 30000
         repeat: true
         running: root.hostExpanded
@@ -1126,8 +1118,7 @@ Item {
     // Size the popup to exactly fit the current provider's content so the body
     // never scrolls. Computed deterministically from the data — NOT from
     // metricsContent.implicitHeight, which reads 0 until the Repeater's
-    // delegates instantiate asynchronously (that race is what collapsed the
-    // popup to a tiny scroller before). Each term mirrors a real
+    // delegates instantiate asynchronously. Each term mirrors a real
     // Layout.preferredHeight in the layout below.
     function rowMetricHeight(limit) {
         const hasSplit = String(root.metricDetailLeftText(limit)).length > 0 || String(root.metricDetailRightText(limit)).length > 0;
@@ -1303,10 +1294,8 @@ Item {
     readonly property real popupScreenCap: Math.max(440, root.availableScreenHeight - 96)
     readonly property real popupFitHeight: Math.max(360, Math.min(root.popupScreenCap, root.popupChromeHeight + root.metricsBodyHeight() + 6))
 
-    // The main widget keeps its NORMAL size at all times — opening the token-usage
-    // graph no longer widens it. Instead the graph appears as a SEPARATE floating
-    // window beside the widget (see costPopout below), so the two read as distinct
-    // cards with the desktop showing between them (the macOS reference layout).
+    // The token-usage graph is a SEPARATE floating window beside the widget (see
+    // costPopout below), so the widget keeps its normal size when it opens.
     readonly property bool drawerExpanded: root.costDrawerOpen && root.hasCostSection()
 
     implicitWidth: root.contentWidth
@@ -1349,7 +1338,7 @@ Item {
         height: 1
     }
 
-    // Token-usage graph extracted to CostPopout.qml. `root` carries the helpers /
+    // Token-usage graph (CostPopout.qml). `root` carries the helpers /
     // cost data / costGraphMode state; `anchorItem` is the left-edge flyoutAnchor KWin
     // places the window against (opens leftward, beside the Cost row).
     CostPopout {
@@ -1357,7 +1346,7 @@ Item {
         anchorItem: flyoutAnchor
     }
 
-    // Settings flyout — extracted to SettingsPopout.qml. `root` carries the helper
+    // Settings flyout (SettingsPopout.qml). `root` carries the helper
     // functions / config state / signals; `anchorItem` is the invisible left-edge
     // anchor KWin places the window against (opens leftward, beside the lower body).
     SettingsPopout {

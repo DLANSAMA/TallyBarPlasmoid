@@ -109,8 +109,6 @@ ColumnLayout {
                     Rectangle {
                         anchors.fill: parent
                         radius: 8
-                        // macOS toolbar/Control-Center style: borderless at rest,
-                        // a soft rounded highlight appears only on hover.
                         color: quickActionMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.12) : "transparent"
                         border.width: 0
 
@@ -151,7 +149,6 @@ ColumnLayout {
                         }
                     }
 
-                    // Visible keyboard-focus indicator, invisible unless quickActionMouse has focus.
                     Rectangle {
                         anchors.fill: parent
                         radius: 8
@@ -248,7 +245,6 @@ ColumnLayout {
                 }
             }
 
-            // Visible keyboard-focus indicator, invisible unless actionMouse has focus.
             Rectangle {
                 anchors.fill: parent
                 anchors.leftMargin: -2
