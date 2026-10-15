@@ -104,10 +104,7 @@ def test_archive_is_bounded_keeping_the_newest_days(monkeypatch, tmp_path):
 
 
 def test_a_fixture_driven_summarise_never_touches_the_shared_archive(tmp_path, monkeypatch):
-    """Regression: the first cut of this banked TEST data into the user's real
-    ~/.tallybar/grok_archive.json — four invented days at a tidy $0.01/1k tokens
-    landed in live history. An injected log_path means fixture data; never bank it.
-    """
+    """An injected log_path means fixture data; never bank it into the real archive."""
     import json as _json
     real = tmp_path / "must_not_be_written.json"
     monkeypatch.setattr(accounting, "GROK_ARCHIVE_PATH", real)

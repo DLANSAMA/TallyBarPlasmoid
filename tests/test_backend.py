@@ -79,14 +79,12 @@ def test_sqlite_copy(tmp_path):
             assert tmp_path.exists()
             assert tmp_path.read_text() == "dummy db"
 
-            # Verify permissions
             stat = tmp_path.stat()
             assert stat.st_mode & 0o777 == 0o600
 
             copied = tmp_path
             tmp_dir = tmp_path.parent
 
-        # After the context exits the copy and its temp dir are gone.
         assert not copied.exists()
         assert not tmp_dir.exists()
     finally:
@@ -657,8 +655,7 @@ async def _build_snapshot_carry_forward(claude_status, cached_snapshot):
 
 @pytest.mark.asyncio
 async def test_build_snapshot_carries_forward_transient_claude_failure():
-    """D1: pins the carry-forward LOOP in build_snapshot (backend.py:1007), not just the
-    unit function. A transient claude 'api-error' with a fresh good cache => the resulting
+    """Pins the carry-forward LOOP in build_snapshot, not just the unit function. A transient claude 'api-error' with a fresh good cache => the resulting
     snapshot's claude entry is 'ok', carries the cached limits, and is marked stale."""
     good_limits = [{"label": "Session", "percent": 40}]
     cached = _cached_provider("Claude", good_limits, ts_offset=60.0)
@@ -806,7 +803,7 @@ async def test_build_snapshot_google_one_refetched_when_stale():
 
 @pytest.mark.asyncio
 async def test_build_snapshot_no_carry_forward_when_cache_too_old():
-    """D1 negative: a cache older than the 900s grace window must let the real error
+    """A cache older than the 900s grace window must let the real error
     surface (the loop's max_stale_seconds bound is live in build_snapshot)."""
     cached = _cached_provider("Claude", [{"label": "Session", "percent": 40}], ts_offset=1000.0)
     res = await _build_snapshot_carry_forward("api-error", cached)
@@ -816,7 +813,7 @@ async def test_build_snapshot_no_carry_forward_when_cache_too_old():
 
 
 def test_carry_forward_staleAsOf_survives_save_load_roundtrip(tmp_path, monkeypatch):
-    """D2: a carried-forward entry's stale/staleAsOf flags must survive the JSON
+    """A carried-forward entry's stale/staleAsOf flags must survive the JSON
     serialization seam (save_snapshot -> load_snapshot), so the widget can read them
     on a cold-start cache paint."""
     monkeypatch.setattr(backend, "SNAPSHOT_PATH", tmp_path / "last_snapshot.json")
@@ -1259,8 +1256,7 @@ def test_carry_forward_staleAsOf_does_not_ratchet():
 
 # --- diagnostics.timings -----------------------------------------------------------
 # The refresh is a one-shot on a 5-minute timer; a phase that quietly grows costs battery
-# and disk on every tick with nothing in the snapshot to show it. That is how the
-# 2026-06-07 cost-scan regression stayed invisible until it started tripping the deadline.
+# and disk on every tick with nothing in the snapshot to show it.
 
 @pytest.mark.asyncio
 async def test_build_snapshot_reports_phase_timings():

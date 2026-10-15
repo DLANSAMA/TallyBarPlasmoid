@@ -85,11 +85,8 @@ def test_backend_once_subprocess_prints_parseable_json(tmp_path):
 
 
 def test_built_plasmoid_ships_no_developer_caches():
-    # A developer-local cache directory inside the applet tree gets tarred straight into
-    # the shipped package: `make typecheck` used to drop a 5 MB .mypy_cache/ into
-    # contents/code/, which tripled the .plasmoid and shipped absolute paths from the
-    # build machine to every user. mypy.ini now parks its cache at the repo root AND the
-    # archive excludes it — this pins both.
+    # A developer-local cache directory inside the applet tree would ship in the package.
+    # mypy.ini parks its cache at the repo root AND the archive excludes it — this pins both.
     make = shutil.which("make")
     if make is None or shutil.which("zip") is None:
         pytest.skip("make/zip not available")

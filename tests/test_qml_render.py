@@ -147,10 +147,8 @@ def test_cost_popout_tooltip_shows_after_a_jump_between_bars(tmp_path):
 
 
 def test_extracted_components_do_not_size_themselves_from_parent():
-    # Regression: EmptyStateSection was extracted with
-    # `Layout.preferredHeight: Math.max(120, parent.height)` where the original read
-    # `metricsScroller.height`. Inside a layout the parent's size is DERIVED from its
-    # children, so the block collapsed to its floor and the sign-in button floated mid-body.
+    # Inside a layout the parent's size is DERIVED from its children, so a component sizing
+    # itself from `parent.height` collapses to its floor.
     # A component's ROOT object must take such sizes from the host via a property.
     offenders = []
     for path in sorted((UI / "components").glob("*.qml")):

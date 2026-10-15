@@ -75,19 +75,13 @@ async def test_cost_summary_error_sink_scrubs_and_caps():
 
 @pytest.mark.asyncio
 async def test_orchestrator_error_sink_scrubs_and_caps():
-    # A non-group Exception escaping the TaskGroup block lands in
-    # diagnostics['orchestrator_error']. Force it by making the cookie-collection succeed but a
-    # provider task path raise a plain Exception via run_codex_rpc coroutine that raises before
-    # the group can bundle — simplest: patch asyncio.TaskGroup out is fragile, so instead drive
-    # the get_task_result sink, which shares the same str(exc) shape and is the notification-
-    # reachable one.
+    # Drives the get_task_result sink, which shares the str(exc) shape of
+    # diagnostics['orchestrator_error'] and is the notification-reachable one.
     async def boom_rpc(*a, **k):
         raise RuntimeError("codex rpc failed: " + SECRET + " " + "z" * 400)
 
-    # run_codex_rpc raises inside bounded_provider, which returns the fallback rather than
-    # raising, so this exercises get_task_result only if the task itself carries an exception.
-    # bounded_provider swallows to fallback; to hit get_task_result's exc branch we let the
-    # antigravity threaded task's future carry the exception.
+    # bounded_provider swallows to its fallback, so the antigravity threaded task's future
+    # carries the exception to reach get_task_result's exc branch.
     async def boom_threaded(func, *a, **k):
         if func.__name__.startswith("run_antigravity_local"):
             raise RuntimeError("antigravity failed: " + SECRET + " " + "q" * 400)

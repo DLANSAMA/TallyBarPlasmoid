@@ -162,4 +162,4 @@ def test_rpc_stems_reconstruct_with_rsplit(monkeypatch, tmp_path):
     assert f"{weird}#0" in out["entries"]
     # The full key "ca#sc#0" rsplits to the full cascade id "ca#sc"; split() would give "ca".
     assert f"{weird}#0".rsplit("#", 1)[0] == weird
-    assert f"{weird}#0".split("#", 1)[0] != weird                        # the old (buggy) form
+    assert f"{weird}#0".split("#", 1)[0] != weird

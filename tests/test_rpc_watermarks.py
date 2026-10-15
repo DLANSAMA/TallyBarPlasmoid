@@ -29,10 +29,6 @@ from providers import antigravity as agmod  # noqa: E402
 from providers import cost as costmod       # noqa: E402
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 _LMT_A = "2026-06-07T10:00:00.000000000Z"
 _LMT_B = "2026-06-07T11:30:00.000000000Z"
 
@@ -98,10 +94,6 @@ def _fake_ports(pid):
     return [12345], {}
 
 
-# ---------------------------------------------------------------------------
-# Test 1: unchanged cascade skipped
-# ---------------------------------------------------------------------------
-
 def test_unchanged_cascade_skipped():
     cid = "aaaa-unchanged"
     calls = []
@@ -115,17 +107,10 @@ def test_unchanged_cascade_skipped():
          patch.object(agmod, "_post_local_rpc", side_effect=fake_post):
         usage, marks = agmod.collect_antigravity_rpc_usage(3.0, known={cid: _LMT_A})
 
-    # No metadata call issued for the unchanged cascade.
     assert cid not in calls
-    # Cascade absent from usage (was skipped).
     assert cid not in usage
-    # Watermark re-confirmed.
     assert marks.get(cid) == _LMT_A
 
-
-# ---------------------------------------------------------------------------
-# Test 2: new / changed cascade queried
-# ---------------------------------------------------------------------------
 
 def test_new_cascade_queried():
     cid_new = "bbbb-new"
@@ -150,10 +135,6 @@ def test_new_cascade_queried():
     assert marks.get(cid_new) == _LMT_A
     assert marks.get(cid_changed) == _LMT_B
 
-
-# ---------------------------------------------------------------------------
-# Test 3: failed metadata call doesn't advance watermark
-# ---------------------------------------------------------------------------
 
 def test_failed_metadata_does_not_advance_mark():
     cid = "dddd-fail"
@@ -191,10 +172,6 @@ def test_exception_during_metadata_does_not_advance_mark():
     assert cid not in usage
     assert cid not in marks
 
-
-# ---------------------------------------------------------------------------
-# Test 4: deadline partial abort
-# ---------------------------------------------------------------------------
 
 def test_deadline_pre_list_returns_empty():
     """Deadline already expired before the list call → returns ({}. {})."""
@@ -255,10 +232,6 @@ def test_deadline_partial_harvest():
     assert cid2 not in marks
 
 
-# ---------------------------------------------------------------------------
-# Test 5: missing / empty lastModifiedTime always queried
-# ---------------------------------------------------------------------------
-
 def test_missing_lmt_always_queried():
     cid = "ffff-nolmt"
     calls = []
@@ -282,10 +255,6 @@ def test_missing_lmt_always_queried():
     # Mark set to empty-string — cascade will be re-queried next refresh (can't tell if changed).
     assert marks.get(cid) == ""
 
-
-# ---------------------------------------------------------------------------
-# Test 6: ledger integration round-trip (marks persisted + fed back as `known`)
-# ---------------------------------------------------------------------------
 
 def test_ledger_marks_round_trip(monkeypatch, tmp_path):
     """Watermarks land in the saved ledger JSON; a second run feeds them back as `known`."""
@@ -323,10 +292,6 @@ def test_ledger_marks_round_trip(monkeypatch, tmp_path):
     assert received_known.get(cid) == lmt
 
 
-# ---------------------------------------------------------------------------
-# Test 7: .bak recovery preserves rpcWatermarks
-# ---------------------------------------------------------------------------
-
 def test_bak_recovery_preserves_watermarks(monkeypatch, tmp_path):
     ledger_path = tmp_path / "ledger.json"
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", ledger_path)
@@ -348,10 +313,6 @@ def test_bak_recovery_preserves_watermarks(monkeypatch, tmp_path):
     loaded = costmod._load_antigravity_ledger()
     assert loaded.get("rpcWatermarks", {}).get(cid) == lmt
 
-
-# ---------------------------------------------------------------------------
-# Test 8: prune rules
-# ---------------------------------------------------------------------------
 
 def test_stale_mark_without_entries_is_pruned(monkeypatch, tmp_path):
     """A mark for a cascade with no persisted entries and absent from live_marks is dropped."""
@@ -400,10 +361,6 @@ def test_entry_bearing_mark_survives_ls_down(monkeypatch, tmp_path):
     assert saved.get("rpcWatermarks", {}).get(cid) == _LMT_A
 
 
-# ---------------------------------------------------------------------------
-# Test 9: no write churn when marks are identical
-# ---------------------------------------------------------------------------
-
 def test_no_write_churn_when_marks_identical(monkeypatch, tmp_path):
     """When watermarks and entries are unchanged, the ledger file is NOT re-written."""
     ledger_path = tmp_path / "ledger.json"
@@ -431,10 +388,6 @@ def test_no_write_churn_when_marks_identical(monkeypatch, tmp_path):
     mtime_after = ledger_path.stat().st_mtime_ns
     assert mtime_before == mtime_after, "Ledger was unnecessarily re-written despite no changes"
 
-
-# ---------------------------------------------------------------------------
-# Test 10: old ledger without / with wrong-typed rpcWatermarks loads fine
-# ---------------------------------------------------------------------------
 
 def test_old_ledger_without_watermarks(monkeypatch, tmp_path):
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")

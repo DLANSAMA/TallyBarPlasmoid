@@ -44,8 +44,7 @@ def test_quoted_uri_opens_read_only_with_special_chars(tmp_path):
 
 
 def test_unquoted_special_char_uri_is_not_read_only(tmp_path):
-    # Guards the fix: the OLD unquoted form lets a '?' in the name break out of
-    # mode=ro (the '#' fragment truncates the path so the file: query is ignored),
+    # An unquoted URI lets the name's '#' truncate the path so the file: query is ignored,
     # yielding a writable connection. The quoted form above must NOT.
     db_path = tmp_path / "hole#x.db"
     _make_ro_db(db_path)

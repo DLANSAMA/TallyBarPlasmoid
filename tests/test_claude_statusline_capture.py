@@ -43,7 +43,7 @@ def test_captures_every_documented_window(tmp_path):
     assert set(state["rateLimits"]) == {"five_hour", "seven_day", "spend_limit"}
     assert state["rateLimits"]["five_hour"] == {"usedPercent": 23.5, "resetsAt": 1738425600.0}
     # capturedAt exists so the backend can AGE the reading rather than assume it is
-    # current — the mistake that had Grok's bar presenting a 15h-old number as fresh.
+    # current.
     assert state["capturedAt"]
     assert "5h 24%" in proc.stdout      # still usable as an actual status line
 

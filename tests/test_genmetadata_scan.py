@@ -214,8 +214,7 @@ def test_genmetadata_deadline_abandons_scan(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_cli_conversations_dir_in_scan_roots():
-    # The agy CLI writes plaintext trajectory DBs since 2026-06-02 — its dir must be scanned
-    # (before this, ~99% of CLI token volume was invisible: only the statusLine push captured).
+    # The agy CLI writes plaintext trajectory DBs — its dir must be scanned.
     assert any(p.parent.name == "antigravity-cli" for p in costmod.ANTIGRAVITY_CONVERSATION_DIRS)
 
 
@@ -455,7 +454,7 @@ def test_scan_memo_does_not_block_ownership_flip(monkeypatch, tmp_path):
 
 
 def test_dominant_enum_picks_max_token_record():
-    # Guard: a single blob is one model in practice (verified 748/748 on-disk), so
+    # Guard: a single blob is one model in practice, so
     # this equals found[0]. But IF records ever mixed models, the summed entry attributes to
     # the DOMINANT (max-token) model, not whichever parsed first.
     assert costmod._dominant_enum([]) == 0
@@ -492,8 +491,7 @@ def test_undated_generation_record_counted_once_unit():
 
 
 def test_undated_generation_blob_ingested_once(monkeypatch, tmp_path):
-    """End to end: the undated fallback used to take _pb_find_usage's two copies and store
-    u=400/o=160 for a 200/80 generation."""
+    """End to end: an undated generation stores u=200/o=80, not _pb_find_usage's two copies."""
     conv = tmp_path / "convs"
     conv.mkdir()
     _make_db(conv / "cas.db", gen=[(0, _undated_generation_blob(model=1026, u=200, o=80, c=30))])
