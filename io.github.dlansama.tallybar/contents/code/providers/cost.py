@@ -1,12 +1,12 @@
 """Cost & token-ledger aggregation for the providers package.
 
 Not a fetch path: this module folds local token usage into provider cost
-summaries. It owns ``apply_local_cost_summaries`` (token/tier propagation) and
-the whole Antigravity token-capture pipeline — ``_pb_find_usage`` (scans the
-trajectory DBs for protobuf usage records), ``update_antigravity_token_ledger``
-(persists new generations to ``~/.tallybar/antigravity_token_ledger.json``), and
-``antigravity_ledger_cost_summary`` (prices each ledger entry per model). Reads
-local on-disk state only; performs no network I/O.
+summaries. It owns ``compute_local_cost_summaries`` / ``apply_cost_summaries``,
+``update_cost_archive``, and the whole Antigravity token-capture pipeline —
+``update_antigravity_token_ledger`` (persists new generations to
+``~/.tallybar/antigravity_token_ledger.json``; its only network I/O is the
+loopback RPC to the local language server) and ``antigravity_ledger_cost_summary``
+(prices each ledger entry per model).
 """
 from __future__ import annotations
 
@@ -49,13 +49,8 @@ from io_helpers import atomic_write_text, flock_with_timeout
 ANTIGRAVITY_CONVERSATION_DIRS = (
     Path.home() / ".gemini" / "antigravity" / "conversations",
     Path.home() / ".gemini" / "antigravity-ide" / "conversations",
-    # The Antigravity CLI (agy) switched to the same plaintext trajectory-DB format on
-    # 2026-06-02 (its older .pb history is encrypted and stays unrecoverable). CLI DBs
-    # are a hybrid: REAL usage lives in `steps` as marker-24 records (the normal steps
-    # scan ingests it), while `gen_metadata` holds marker-24 records that are EXACT 2x
-    # duplicates of the steps usage (verified against the live agy RPC 2026-06-09:
-    # cache tokens matched steps to the digit, gen was precisely double) and no
-    # marker-26 records at all — see the antigravity-cli gate in the gen pass below.
+    # The Antigravity CLI (agy): plaintext trajectory DBs (its older .pb history is
+    # encrypted and unrecoverable). A hybrid — see the antigravity-cli gate in the gen pass.
     Path.home() / ".gemini" / "antigravity-cli" / "conversations",
 )
 ANTIGRAVITY_LEDGER_PATH = Path.home() / ".tallybar" / "antigravity_token_ledger.json"
@@ -68,16 +63,10 @@ ANTIGRAVITY_CLI_USAGE_PATH = Path.home() / ".tallybar" / "antigravity_cli_usage.
 # Antigravity ledger prune — only Antigravity is lossy; the other providers' parse caches
 # are all-time. Past months freeze once written so the prune can't erode them.
 COST_ARCHIVE_PATH = Path.home() / ".tallybar" / "cost_archive.json"
-# Bumped when the disk-scan dating logic changes in a way that needs existing entries rebuilt.
-# v2: generations dated by EMBEDDED protobuf timestamp instead of DB file mtime.
-# v3: usage-record gate accepts Antigravity-2.0 marker (field6 == 26) alongside pre-2.0 (24),
-# so 2.0-format generations are no longer silently dropped.
-# On a version mismatch we clear the per-DB scan cache (``dbScanned``) so every conversation
-# is re-scanned once and its entries re-derived correctly.
+# Bump when the disk-scan dating logic changes in a way that needs existing entries rebuilt.
+# On a version mismatch the per-DB scan memo (``dbScanned``) is cleared so every conversation
+# is re-scanned once.
 ANTIGRAVITY_DISK_DATING_VERSION = 3
-# Per-tick cap on the number of changed DBs scanned, so a first-run backlog (e.g. right after
-# a version-bump cache reset) can't blow the cost-scan budget. Candidates are scanned
-# newest-first, so the cap only defers the oldest, least-relevant DBs to later ticks.
 ANTIGRAVITY_MAX_DBS_PER_TICK = 64
 
 
@@ -85,8 +74,6 @@ ANTIGRAVITY_MAX_DBS_PER_TICK = 64
 # Google AI subscription tier (shared by Gemini + Antigravity)
 # ---------------------------------------------------------------------------
 
-# --- Honest summary for flat-rate subscription providers (Gemini, Antigravity) -------------------
-# These have no locally-measurable per-token cost: the Gemini web app is not metered per token,
 def google_ai_subscription_tier(providers: dict[str, dict[str, Any]]) -> str | None:
     """The Google AI subscription tier (e.g. "Google AI Ultra") shared by Gemini
     and Antigravity. Only Antigravity's GetUserStatus exposes the exact name."""
@@ -118,8 +105,7 @@ def _local_iso(secs: int) -> str:
 
 def _drop_stem_entries(entries: dict[str, Any], stem: str) -> None:
     """Delete every entry belonging to a conversation stem, whatever separator it used
-    (``':'`` / ``'#'`` / ``'@'``). Used to re-derive a conversation from scratch on re-scan so a
-    re-scan is idempotent and disk is the single source of truth for any convo on disk."""
+    (``':'`` / ``'#'`` / ``'@'``)."""
     for key in list(entries.keys()):
         if key == stem:
             del entries[key]
@@ -131,12 +117,9 @@ def _drop_stem_entries(entries: dict[str, Any], stem: str) -> None:
 def _load_antigravity_ledger() -> dict[str, Any]:
     """Load the persistent token ledger, recovering from the last-good ``.bak`` on failure.
 
-    A transient read/parse failure on the main file used to fall straight through to an
-    *empty* ledger — which silently discarded the entire per-day history, because the next
-    scan re-stamped every generation with *today* (the disk path dates by first-seen). To
-    make that non-destructive, ``_save_antigravity_ledger`` mirrors every good write to a
-    ``.bak``; if the main file is missing or corrupt we recover from it — and quarantine the
-    corrupt main as ``.corrupt`` for forensics — instead of resetting tracking to today.
+    ``_save_antigravity_ledger`` mirrors every good write to a ``.bak``; if the main file is
+    missing or corrupt we recover from it — and quarantine the corrupt main as ``.corrupt``
+    for forensics — rather than returning an empty ledger.
     """
     main = ANTIGRAVITY_LEDGER_PATH
     bak = main.with_name(main.name + ".bak")
@@ -173,17 +156,13 @@ def _load_usage_file(path: Path) -> dict[str, Any]:
 
 
 def _save_antigravity_ledger(ledger: dict[str, Any]) -> None:
-    # Atomic 0600 write + ``.bak`` mirror. io_helpers.atomic_write_text is the ONE shared
-    # recipe (unique 0600 mkstemp, fsync, replace, dir-fsync, parent chmod 0700) — the
-    # ledger holds the user's AI usage stats. The same payload is mirrored to a ``.bak``
-    # so a later corruption of the main file is recoverable (see _load_antigravity_ledger)
-    # rather than silently resetting the per-day history to today.
+    # The same payload is mirrored to a ``.bak`` so a later corruption of the main file is
+    # recoverable (see _load_antigravity_ledger).
     payload = json.dumps(ledger)
     try:
         atomic_write_text(ANTIGRAVITY_LEDGER_PATH, payload)
     except OSError:
         return
-    # Best-effort last-good mirror; a bak failure must never break the main write.
     try:
         atomic_write_text(ANTIGRAVITY_LEDGER_PATH.with_name(ANTIGRAVITY_LEDGER_PATH.name + ".bak"), payload)
     except OSError:
@@ -221,8 +200,9 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
     2. **Trajectory DBs** (``_pb_find_usage``) — on-disk fallback for conversations NOT in LS memory
        (history / LS not running); skipped for any conversation the RPC already covers.
 
-    Each entry is keyed per generation (dedup-safe) and stamped with the date the generation occurred
-    (RPC ``createdAt``) or, for the disk scan, the date first seen — so re-scanning never double-counts.
+    Each entry is keyed per generation (dedup-safe), so re-scanning never double-counts. RPC entries
+    are dated by ``createdAt``; steps-pass entries get today for a stem already holding ``:`` entries,
+    else the DB mtime; the ``gen_metadata`` pass (``<stem>@<idx>.<gi>``) uses embedded protobuf timestamps.
 
     An exclusive file lock (fcntl.flock) protects the read-modify-write cycle against concurrent
     executions (e.g. overlapping widget refreshes).
@@ -233,10 +213,9 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
     current = now.astimezone() if now is not None else dt.datetime.now(dt.timezone.utc).astimezone()
     today_iso = current.date().isoformat()
 
-    # Acquire exclusive lock on the ledger to prevent concurrent read-modify-write races.
     ANTIGRAVITY_LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
     try:
-        ANTIGRAVITY_LEDGER_PATH.parent.chmod(0o700)  # match the other ~/.tallybar writers
+        ANTIGRAVITY_LEDGER_PATH.parent.chmod(0o700)
     except OSError:
         pass
     lock_path = ANTIGRAVITY_LEDGER_PATH.with_suffix(".lock")
@@ -260,12 +239,8 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
         entries = ledger["entries"]
         changed = False
 
-        # Version migration: if the stored disk-dating version is older than the current
-        # ANTIGRAVITY_DISK_DATING_VERSION, clear the per-DB scan memo so every conversation
-        # is re-scanned once with the corrected dating logic. The entries themselves are kept
-        # (re-scanning produces new @ keys; old : keys survive until the RPC or prune drops them).
-        # Only set changed when there is an actual dbScanned memo to clear; a fresh ledger has no
-        # memo so the migration is a no-op and must not force a pointless ledger write.
+        # A stale disk-dating version clears the scan memo (entries are kept). Only mark
+        # changed when there was a memo to clear, so a fresh ledger doesn't force a write.
         stored_version = ledger.get("diskDatingVersion", 0)
         if stored_version < ANTIGRAVITY_DISK_DATING_VERSION:
             ledger["diskDatingVersion"] = ANTIGRAVITY_DISK_DATING_VERSION
@@ -299,13 +274,8 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
             rpc_covered.add(cascade_id)
             # The RPC supersedes the on-disk scan for this conversation: drop any legacy DB-sourced
             # entries (plain ``<cascadeId>:<int>`` keys) so RPC + disk never double-count it.
-            # Use strict prefix_len slicing instead of split(":", 1) to handle colons in cascade IDs.
-            # NB the RPC is authoritative PER CONVERSATION and counts per-generation, while the disk
-            # scan counts per-step — so the RPC legitimately having FEWER records than the disk did is
-            # the normal case (one generation spans several steps), NOT a data-loss signal. Gating the
-            # purge on a record-count comparison is therefore WRONG: it would block
-            # superseding in the common case and reintroduce double-counting. Disk entries are an
-            # approximation the authoritative RPC replaces wholesale.
+            # The RPC counts per generation, the disk per step, so fewer RPC records than disk
+            # entries is normal: never gate this purge on a record-count comparison.
             prefix_len = len(cascade_id) + 1
             for key in [k for k in entries
                         if (k.startswith(f"{cascade_id}:") or k.startswith(f"{cascade_id}@"))
@@ -325,11 +295,9 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                     if rec_hour is not None and entries[key].get("h") is None:
                         entries[key]["h"] = rec_hour
                         changed = True
-                    # Re-resolve the model when the mapping has improved: a placeholder that
-                    # was unknown at capture time fell back to a family default (e.g. M132 ->
-                    # gemini-3-pro before 1132 was mapped). The RPC is authoritative, so when
-                    # this cascade is re-queried anyway, heal the stale attribution in place
-                    # (keeps date/hour/tokens — only the pricing/breakdown name changes).
+                    # Re-resolve the model when the mapping has improved: a placeholder unknown
+                    # at capture time fell back to a family default. Heal it in place (keeps
+                    # date/hour/tokens — only the pricing/breakdown name changes).
                     # UPGRADE-ONLY: with no live display name this refresh (GetAvailableModels
                     # failed, or the id was retired from the picker) never DOWNGRADE a stored
                     # name to the family fallback — only fill a missing one.
@@ -361,7 +329,7 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                 if enum is not None:
                     entry["me"] = enum
                 if rec_hour is not None:
-                    entry["h"] = rec_hour   # local hour-of-day for the Day view
+                    entry["h"] = rec_hour 
                 entries[key] = entry
                 changed = True
 
@@ -371,42 +339,31 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
         # '#', so the LAST '#' is always the real separator — rsplit recovers the full cascade id
         # even in the (pathological) case where a cascade id itself contains a '#'.
         rpc_stems = rpc_covered | {k.rsplit("#", 1)[0] for k in entries if "#" in k}
-        # First-scan backdating gates, snapshotted once per run (the per-DB ``any()``
-        # alternative is O(DBs x entries)): a stem with NO prior entries of a shape is a
-        # backlog ingest — its records predate this run, so stamping them ``today`` would
-        # inflate "Today". Date those to the DB file mtime instead (cheap, far closer to
-        # truth); once a stem has entries of that shape, newly appearing records are
-        # genuinely new and get today_iso.
+        # First-scan backdating gates, snapshotted once per run: a stem with NO prior entries
+        # of a shape is a backlog ingest, dated to the DB file mtime (stamping ``today``
+        # would inflate "Today"); once it has some, new records are genuinely new.
         colon_stems = {k.rsplit(":", 1)[0] for k in entries if ":" in k}
         at_stems = {k.rsplit("@", 1)[0] for k in entries if "@" in k}
-        # Prune horizon, needed DURING the scan too: a backlog whose mtime date is already
-        # past the prune would be ingested and deleted in the same run — and, with the stem
-        # left entry-less, re-ingested + re-pruned on EVERY refresh (a permanent double
-        # atomic write + full blob re-parse per refresh). Skip such DBs outright. (The old
-        # today_iso dating had it worse: pruned conversations resurrected onto "Today"
-        # every 35 days.) A stale DB that gets new writes moves its mtime inside the
-        # horizon and is scanned normally.
+        # Prune horizon, needed DURING the scan too: a backlog already past it would be
+        # ingested and pruned in the same run, then re-ingested on every refresh. Such DBs
+        # are skipped outright; a stale DB that gets new writes moves inside the horizon.
         cutoff = (current.date() - dt.timedelta(days=35)).isoformat()
         # Per-DB scan memo (additive ledger key, rides the .bak mirror): skip BOTH passes
         # for a DB whose content signature (_db_signature: main + -wal mtime_ns/size)
-        # matches its last COMPLETE scan. Without it ~35k no-usage blobs were re-parsed
-        # on EVERY refresh (rows that never create entries can't be skipped by the
-        # key-in-entries dedup) — ~3s/refresh of pure waste and real deadline pressure.
-        # Fail-open by design: stat/sqlite errors, deadline expiry, and ownership flips
+        # matches its last COMPLETE scan (rows that never create entries can't be skipped
+        # by the key-in-entries dedup). Fail-open by design: stat/sqlite errors, deadline expiry, and ownership flips
         # all leave the DB un-memoized, so the failure direction is always "rescan".
         old_memo = ledger.get("dbScanned")
         old_memo = old_memo if isinstance(old_memo, dict) else {}
         seen_memo: dict[str, str] = {}
         for conv_dir in ANTIGRAVITY_CONVERSATION_DIRS:
             if deadline is not None and time.time() > deadline:
-                break  # budget spent — abandon the remaining conversation dirs
+                break
             if not conv_dir.is_dir():
                 continue
             for db_path in conv_dir.glob("*.db"):
-                # Budget check BEFORE opening a connection: the inner chunk-loop break
-                # only abandons the current DB's blob reads; without this the outer loop
-                # would still pay a connect + index query for every remaining DB after
-                # the deadline (defeating the documented "abandon mid-scan" contract).
+                # Check the budget BEFORE opening a connection, or every remaining DB
+                # still costs a connect + index query after the deadline.
                 if deadline is not None and time.time() > deadline:
                     break
                 stem = db_path.stem
@@ -436,11 +393,9 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                 sig = _db_signature(db_path)
                 if sig and not force_scan and old_memo.get(stem) == sig:
                     seen_memo[stem] = sig
-                    continue  # content unchanged since the last complete scan
+                    continue
                 db_ok = True   # any sqlite failure below blocks this run's memo
-                # Backlog dating for the steps pass (mirrors the gen pass below): the
-                # first scan of a DB ingests records that may be days old — e.g. the CLI
-                # conversations backlog — so date them to the DB mtime, not today.
+                # Backlog dating for the steps pass (mirrors the gen pass below).
                 if stem in colon_stems:
                     steps_date = today_iso
                 else:
@@ -450,13 +405,10 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                         steps_date = today_iso
                     if steps_date < cutoff:
                         continue  # whole-DB backlog already past the prune horizon (see above)
-                # SQLite read-lock contention (see CLAUDE.md "SQLite Read Lock Contention"): the widget
-                # polls these DBs while live Antigravity agents are writing them. Holding a read lock
-                # during the slow protobuf parse — or re-reading every step's blob on every poll — blocks
-                # the agent from checkpointing its WAL and crashes it with SQLITE_BUSY. So keep the lock
-                # window minimal: read only step indices first (cheap, no blobs), drop the ones already
-                # captured, fetch ONLY the unseen blobs, then close BEFORE parsing. busy_timeout lets us
-                # wait out a transient writer lock instead of failing immediately.
+                # SQLite read-lock discipline (CLAUDE.md "SQLite scans"): the widget polls DBs live
+                # agents are writing, and a held read lock blocks their WAL checkpoint with
+                # SQLITE_BUSY. Read indices only, drop seen keys, fetch ONLY unseen blobs, close
+                # BEFORE parsing.
                 new_idx = []
                 try:
                     con = sqlite3.connect(f"file:{urllib.parse.quote(str(db_path))}?mode=ro", uri=True)
@@ -465,7 +417,7 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                         "SELECT idx FROM steps WHERE metadata IS NOT NULL")
                         if f"{stem}:{i}" not in entries]
                 except sqlite3.Error:
-                    db_ok = False  # couldn't read -> never memo a possibly-partial scan
+                    db_ok = False
                 finally:
                     try: con.close()
                     except Exception: pass
@@ -488,7 +440,6 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                         try: con.close()
                         except Exception: pass
 
-                    # Parse without lock
                     for idx, blob in chunk_rows:
                         if not isinstance(blob, (bytes, bytearray)):
                             continue
@@ -503,7 +454,7 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                             "c": sum(vd.get(5, 0) for vd in found),   # cached input
                             "o": sum(vd.get(3, 0) for vd in found),   # output (candidates)
                             "t": sum(vd.get(9, 0) for vd in found),   # thoughts
-                            "x": sum(vd.get(10, 0) for vd in found),  # tool
+                            "x": sum(vd.get(10, 0) for vd in found),  # response output (o = t + x)
                             "me": _dominant_enum(found),  # model enum (for per-model pricing)
                         }
                         if len(found) > 1:
@@ -512,13 +463,8 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                             entries[f"{stem}:{idx}"]["n"] = len(found)
                         changed = True
 
-                # CLI DBs: STOP after the steps pass. Their gen_metadata rows hold
-                # marker-24 records that are EXACT 2x duplicates of the steps usage
-                # (verified against the live agy RPC 2026-06-09 — ingesting them would
-                # double-count every CLI generation) and no marker-26 records at all.
-                # Skipping also keeps the scan cheap: with no "@" entries ever written
-                # for these stems, the pass below would re-fetch and re-parse every
-                # gen blob of every CLI DB on every refresh.
+                # CLI DBs: STOP after the steps pass (their gen_metadata rows are exact 2x
+                # duplicates of the steps usage — see CLAUDE.md "Antigravity CLI (agy) capture").
                 if conv_dir.parent.name == "antigravity-cli":
                     if db_ok and sig and (deadline is None or time.time() <= deadline):
                         seen_memo[stem] = sig  # steps pass IS the complete scan here
@@ -576,7 +522,7 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                             f"SELECT idx, data FROM gen_metadata WHERE idx IN ({placeholders})", chunk
                         ).fetchall()
                     except sqlite3.Error:
-                        db_ok = False  # couldn't read -> never memo a possibly-partial scan
+                        db_ok = False
                     finally:
                         try: con.close()
                         except Exception: pass
@@ -584,8 +530,6 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                     for idx, blob in chunk_rows:
                         if not isinstance(blob, (bytes, bytearray)):
                             continue
-                        # Use _pb_generations to extract per-generation usage WITH embedded timestamps
-                        # (the accuracy fix: date by embedded secs, not file mtime).
                         gens = _pb_generations(bytes(blob))
                         if not gens:
                             # Undated blob. Prefer the same structural read without the
@@ -601,10 +545,8 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                                 found = _dedupe_usage_records(_pb_find_usage(bytes(blob), marker=26))
                             if not found:
                                 continue
-                            # Use today_iso for new records in a known stem (the stem already has
-                            # "@" entries from a prior scan so this blob is genuinely new); use
-                            # mtime_fallback_date for first-scan backlog ingests (mirrors the
-                            # at_stems backfill logic for the _pb_generations path below).
+                            # today_iso for a stem that already has "@" entries (genuinely new
+                            # blob); the DB mtime for a first-scan backlog ingest.
                             gen_date = today_iso if stem in at_stems else mtime_fallback_date
                             if gen_date >= cutoff:
                                 # One entry per record (same key shape as the dated path) so
@@ -625,7 +567,7 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                         for gi, gen in enumerate(gens):
                             gen_date = _local_iso(gen["secs"])
                             if gen_date < cutoff:
-                                continue  # skip generations already past the prune horizon
+                                continue
                             key = f"{stem}@{idx}.{gi}"
                             if key in entries:
                                 continue
@@ -653,23 +595,16 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
             ledger["dbScanned"] = new_memo
             changed = True
 
-        # Prune persistent ledger entries older than 35 days (``cutoff`` computed above,
-        # before the scan — the scan skips backlogs already past it).
+        # Prune entries older than 35 days (``cutoff``, computed before the scan).
         for key in list(entries.keys()):
             e = entries[key]
             if e.get("d", "") < cutoff:
                 del entries[key]
                 changed = True
 
-        # Merge + prune watermarks.  Run AFTER the entry prune so ``stems_with_entries``
-        # reflects the post-prune set.  Prune rule: drop marks for cascades that are neither
-        # live this run (not in ``live_marks``) nor have persisted ``#`` entries — so stale
-        # marks for long-gone conversations don't accumulate forever.  Marks for entry-bearing
-        # cascades survive the LS going down (one-LS-restart grace), and die naturally once
-        # their entries age past 35 days.  The ``new_marks != marks`` gate is load-bearing —
-        # don't drop it: without it every refresh pays the double atomic write (main + .bak)
-        # even when nothing changed.  All watermark mutation is inside the flock'd section;
-        # the flock-contention early-return (above) skips this block entirely.
+        # Merge + prune watermarks AFTER the entry prune: keep marks only for cascades live
+        # this run or with persisted ``#`` entries. The ``new_marks != marks`` gate is
+        # load-bearing (tests/test_rpc_watermarks.py::test_no_write_churn_when_marks_identical).
         stems_with_entries = {k.rsplit("#", 1)[0] for k in entries if "#" in k}
         new_marks = {k: v for k, v in marks.items() if k in stems_with_entries}
         new_marks.update(live_marks)
@@ -708,9 +643,8 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
 
 
 # Per-MTok prices for models neither the LiteLLM catalog nor pricing_data's embedded
-# _FALLBACK_PRICING carries. ESTIMATES — tune as needed. gpt-oss is an open-weights model
-# whose hosted rates are far below the Pro fallback, so without this it would be badly
-# overstated. Keys are normalised (lowercase, hyphenated) pricing keys. A published rate
+# _FALLBACK_PRICING carries. gpt-oss is an open-weights model whose hosted rates are
+# far below the Pro fallback, so without this it would be badly overstated. Keys are normalised (lowercase, hyphenated) pricing keys. A published rate
 # belongs in _FALLBACK_PRICING instead: its rows are always merged into the active
 # pricing, so the same key here would never be read.
 _EXTRA_MODEL_PRICES: dict[str, dict[str, float]] = {
@@ -719,11 +653,8 @@ _EXTRA_MODEL_PRICES: dict[str, dict[str, float]] = {
     "gpt-oss": {"input": 0.15, "cache_read": 0.075, "output": 0.60},
 }
 
-# Desktop/IDE ledger entries identify the model only by an integer enum (protobuf field 1).
-# Mapping derived by correlating the enum with co-located model strings in the gen_metadata blobs
-# (gen_metadata .1.19) and the language-server RPC's `model`/`apiProvider`. The RPC reports the same
-# model as MODEL_PLACEHOLDER_M<N> where enum == 1000 + N (M133->1133, M26->1026, M16->1016).
-# Unmapped enums fall through to the Gemini 3.1 Pro default. Extend as new enums are observed.
+# The RPC reports a model as MODEL_PLACEHOLDER_M<N>, where the protobuf model enum == 1000 + N
+# (M133->1133, M26->1026, M16->1016).
 def _placeholder_enum(placeholder: str) -> "int | None":
     """``MODEL_PLACEHOLDER_M<N>`` -> protobuf model enum ``1000 + N`` (None if unparseable)."""
     if "_M" in str(placeholder):
@@ -734,17 +665,9 @@ def _placeholder_enum(placeholder: str) -> "int | None":
     return None
 
 
-# EXACT Antigravity model-picker display names, verified live via the language server's
-# GetAvailableModels RPC (2026-06-09) — displayName + MODEL_PLACEHOLDER_M<N> pairs. The
-# breakdown shows these verbatim; pricing strips the effort parenthetical and normalizes
-# (_normalize_model_name), so "Gemini 3.5 Flash (High)" still prices as gemini-3.5-flash.
-# NOTE: there is NO "Gemini 3 Pro" in the picker — enum 1016 (M16) is Gemini 3.1 Pro
-# (High); the old "gemini-3-pro" name was our mislabel (ledger migrated 2026-06-09).
-# Legacy ledger model strings -> exact picker names. Entries written before 2026-06-09
-# stored normalized pricing keys (and "gemini-3-pro" was an outright mislabel of M16 =
-# Gemini 3.1 Pro (High) — the picker has no "Gemini 3 Pro"). Applied on every ledger
-# update so old ledgers / .bak restores / racing writers all converge; me-bearing
-# entries would resolve via the enum map anyway, this also fixes the me-less ones.
+# Legacy ledger model strings -> exact picker names ("gemini-3-pro" mislabels M16 =
+# Gemini 3.1 Pro (High); the picker has no "Gemini 3 Pro"). Applied on every ledger update
+# so old ledgers / .bak restores converge; me-bearing entries resolve via the enum map anyway.
 # NOT here: "gemini-3.1-pro" — it is the CURRENT unknown-Gemini fallback string
 # (_rpc_model_pricing_key), so migrating it would morph honest unknowns into a
 # specific effort claim; its old enum-1036 entries resolve via "me" regardless.
@@ -757,6 +680,9 @@ _LEGACY_MODEL_STRINGS: dict[str, str] = {
     "claude-opus-4-6": "Claude Opus 4.6 (Thinking)",
 }
 
+# EXACT Antigravity model-picker display names keyed by protobuf model enum. The breakdown
+# shows these verbatim; pricing strips the effort parenthetical (_normalize_model_name), so
+# "Gemini 3.5 Flash (High)" still prices as gemini-3.5-flash.
 _MODEL_ENUM_NAMES: dict[int, str] = {
     # Sub-1000 enums: raw protobuf model ids from older / utility API paths (not the
     # 1000+N MODEL_PLACEHOLDER_M<N> convention). 330 is observed as a flash-lite-tier
@@ -779,16 +705,12 @@ _MODEL_ENUM_NAMES: dict[int, str] = {
     1133: "Gemini 3.5 Flash",  # retired pre-effort-split 3.5 Flash id; effort unknowable
     1187: "Gemini 3.5 Flash (Low)",
     1198: "Gemini 3.5 Flash Lite",
-    # Gemini 3.6 Flash effort trio (M264/M265/M266), confirmed live via
-    # GetAvailableModels 2026-07 (matches the ledger's learnedModelNames). Static
-    # entries make _prices_for/_rpc_model_pricing_key resolve them even for the
-    # me-only disk entries captured before the names were learned.
+    # Gemini 3.6 Flash effort trio (M264/M265/M266).
     1264: "Gemini 3.6 Flash (High)",
     1265: "Gemini 3.6 Flash (Medium)",
     1266: "Gemini 3.6 Flash (Low)",
     1277: "Gemini 3.5 Flash Lite",
-    # Gemini 3.7 Flash (M298-M300) and 3.8 Flash (M318-M320) effort trios, confirmed live
-    # via GetAvailableModels (the ledger's learnedModelNames, 2026-10-01).
+    # Gemini 3.7 Flash (M298-M300) and 3.8 Flash (M318-M320) effort trios.
     1298: "Gemini 3.7 Flash (High)",
     1299: "Gemini 3.7 Flash (Medium)",
     1300: "Gemini 3.7 Flash (Low)",
@@ -826,9 +748,7 @@ def _resolve_model_display(e: dict[str, Any], learned: "dict[int, str] | None" =
     protobuf enum) falls all the way to "Unknown".
     """
     me = e.get("me")
-    # Both tables are int-keyed (the ledger persists learnedModelNames with JSON
-    # string keys and the caller converts them back), so a non-int "me" simply
-    # misses both — same outcome as the old unguarded .get, now stated outright.
+    # Both tables are int-keyed, so a non-int "me" simply misses both.
     me_key = me if isinstance(me, int) else None
     name = None
     if me_key is not None:
@@ -866,13 +786,10 @@ def _rpc_model_pricing_key(placeholder: str, api_provider: str) -> str:
 
 @functools.lru_cache(maxsize=128)
 def _normalize_model_name(name: str) -> str:
-    """Map a CLI statusLine model *display* name to a pricing-catalog key.
+    """Map a model *display* name to a pricing-catalog key.
 
     "Gemini 3.5 Flash (High)" -> "gemini-3.5-flash"; "Gemini 3.1 Pro (High)" -> "gemini-3.1-pro".
     Drops the reasoning-effort parenthetical, lowercases, and hyphenates spaces.
-
-    Memoized via lru_cache: called per ledger entry during cost calculations;
-    caching eliminates redundant regex operations across thousands of entries.
     """
     s = re.sub(r"\(.*?\)", "", str(name)).strip().lower()
     return re.sub(r"\s+", "-", s)
@@ -904,9 +821,6 @@ def _model_family(name: Any) -> str:
 
 
 def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: float | None = None) -> dict[str, str] | None:
-    # NOTE: no `tier` parameter — Antigravity ledger costing is per-entry per-model
-    # (see _prices_for) and tier-independent, so the caller's tier never affected the
-    # result. The dead arg was dropped to stop implying tier-aware pricing here.
     ledger = update_antigravity_token_ledger(now, deadline)
     # Live-learned model names (see update_antigravity_token_ledger) — keys are the enum-as-str
     # form persisted to JSON; convert back to int to match _MODEL_ENUM_NAMES / entry["me"].
@@ -919,14 +833,10 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
                 learned_names[int(k)] = str(v)
             except (TypeError, ValueError):
                 continue
-    # Merge both local Antigravity token sources: the IDE/desktop-app/CLI trajectory ledger and
-    # the Antigravity CLI (agy) statusLine push. Key namespaces are disjoint ("<db_stem>:<idx>" vs
-    # "cli:<session>"), so a plain dict merge is a safe union — neither source clobbers the other.
-    # BUT a statusLine entry is the session's CUMULATIVE total: once the same session is covered
-    # per-generation by the ledger (its trajectory DB got scanned, or a live agy answered the
-    # RPC — the CLI writes plaintext trajectory DBs since 2026-06-02), keeping the "cli:" entry
-    # would count the whole session twice. Ledger coverage supersedes; statusLine remains the
-    # only record for the encrypted pre-06-02 .pb era and any session whose DB never appears.
+    # Merge the trajectory ledger with the agy statusLine push; key namespaces are disjoint
+    # ("<db_stem>:<idx>" vs "cli:<session>"). A statusLine entry is the session's CUMULATIVE
+    # total, so ledger coverage of the same stem supersedes it (else the session counts twice);
+    # it stays the only record for the encrypted .pb era and sessions whose DB never appears.
     ledger_entries = ledger.get("entries", {})
     covered_stems = {k.rsplit(sep, 1)[0] for k in ledger_entries
                      for sep in ("#", "@", ":") if sep in k}
@@ -939,10 +849,8 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
     current = now.astimezone() if now is not None else dt.datetime.now(dt.timezone.utc).astimezone()
     today_iso = current.date().isoformat()
     m30_iso = (current - dt.timedelta(days=30)).date().isoformat()
-    # Per-entry pricing. IDE/desktop trajectory entries carry no model id — price them at Gemini
-    # 3.1 Pro (the model that desktop usage actually runs on). CLI entries carry a "model" display
-    # name (e.g. "Gemini 3.5 Flash (High)") which we normalise to a pricing key, so Flash/Claude/etc.
-    # CLI sessions are priced at their real rate instead of the Pro default.
+    # Per-entry pricing: entries carry a model enum ("me") and/or a "model" display name;
+    # the Gemini 3.1 Pro default applies only when nothing resolves.
     default_prices = model_pricing("gemini-3.1-pro")
     _price_cache: dict[str, dict[str, Any]] = {}
 
@@ -950,11 +858,8 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
         # Enum map FIRST: it's the freshest knowledge. An RPC entry whose placeholder was
         # unknown at capture stores a family-fallback "model" string plus the raw "me"
         # enum — once the enum gets mapped, pricing/attribution heal retroactively.
-        # CLI entries (display-name string, no "me") and disk entries ("me" only) are
-        # unaffected by the order. The same static → learned → entry-string chain as
-        # _resolve_model_display: a disk entry whose enum is known only from
-        # learnedModelNames must bill at that model's rate, not the Pro default, or the
-        # breakdown names one model while the cost is computed for another.
+        # Same static → learned → entry-string chain as _resolve_model_display, so the
+        # breakdown never names one model while the cost is computed for another.
         me_key = e.get("me")
         m = None
         if isinstance(me_key, int):
@@ -990,13 +895,8 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
         in_rate = p.get("input", 0.0) or 0.0
         cache_rate = p.get("cache_read", 0.0) or 0.0
         out_rate = p.get("output", 0.0) or 0.0
-        # "o" is the TOTAL output (thinking + response). The desktop ledger's "t"/"x"
-        # (thinking / response output) are SUBSETS of "o", not additive components —
-        # verified o == t + x across every ledger entry and every GetCascadeTrajectory-
-        # GeneratorMetadata RPC record (outputTokens == thinkingOutputTokens +
-        # responseOutputTokens). So bill "o" once at the output rate; the old
-        # "o + t" (+ "x" at input rate) double-counted thinking and re-billed the
-        # response. CLI entries already store o=total with t=x=0, so they were correct.
+        # "o" is the TOTAL output (thinking + response). The ledger's "t"/"x" (thinking /
+        # response output) are SUBSETS of "o" (o == t + x), so bill "o" once at the output rate.
         #
         # "c" is billed as recorded on EVERY entry, whatever its key namespace. Each
         # ':' (disk steps), '@' (gen_metadata) and '#' (RPC) entry is one API call, and
@@ -1029,12 +929,8 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
     hourless_tok = 0
     hourless_cost = 0.0
     hourless_models: dict[str, dict[str, Any]] = {}
-    # Display-name + family resolution memo. Only ~18 distinct (me, model) pairs exist
-    # across the ~47k ledger entries, yet _resolve_model_display's lookup chain plus
-    # _model_family's two regex subs ran per entry. Cache is keyed on the ONLY two entry
-    # fields the resolution reads (_resolve_model_display uses e["me"]/e["model"]) and is
-    # LOCAL to this call — a module-global would answer with a stale name after
-    # learned_names changes between refreshes (learned_names is per-call input here).
+    # Display-name + family memo keyed on the only two fields the resolution reads. LOCAL to
+    # this call: learned_names changes between refreshes, so a module-global would go stale.
     family_cache: dict[tuple[Any, Any], str] = {}
     for key, e in entries.items():
         d = e.get("d", "")
@@ -1053,10 +949,8 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
         # By type: input lane = uncached input; output lane = total output; cache reads.
         split = UsageSplit(tok, c, (e.get("u", 0), e.get("o", 0), cached, 0),
                            (u_cost, o_cost, c_cost, 0.0))
-        # Enum map first (mirrors _prices_for): heals fallback-attributed entries
-        # retroactively once a new placeholder enum gets mapped. Then collapse to the
-        # display FAMILY — the single choke point that keeps the 30-day breakdown and
-        # every per-bucket tooltip grouped the same way (pricing already happened above).
+        # Collapse to the display FAMILY: the single choke point that keeps the 30-day
+        # breakdown and every per-bucket tooltip grouped the same way (pricing already ran).
         fk = (e.get("me"), e.get("model"))
         mname = family_cache.get(fk)
         if mname is None:
@@ -1219,8 +1113,6 @@ def update_cost_archive(summaries: dict[str, Any] | None,
         return
     lock_path = COST_ARCHIVE_PATH.with_suffix(".lock")
     lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
-    # Bound the wait by the cost-scan deadline (short default if none) — same daemon-thread
-    # reasoning as the ledger lock: never park on a held lock past our budget.
     lock_budget = max(0.0, min((deadline - _time.time()) if deadline is not None else 2.0, 5.0))
     if not flock_with_timeout(lock_fd, lock_budget):
         os.close(lock_fd)
@@ -1235,7 +1127,7 @@ def update_cost_archive(summaries: dict[str, Any] | None,
         if not months or (isinstance(existing, dict) and existing.get("partial")):
             target["partial"] = True
         if existing == target:
-            return  # change-gate: nothing changed for the current month
+            return
         months[month_key] = target
         _save_cost_archive(archive)
     finally:
@@ -1248,22 +1140,18 @@ def compute_local_cost_summaries(deadline: float | None = None) -> dict[str, dic
     scan, deliberately split out so ``build_snapshot`` can run it CONCURRENTLY with the
     network provider fetches (it reads only ~/.claude, ~/.codex, ~/.gemini and the
     Antigravity ledger — never the live ``providers`` dict, so it needs no provider results
-    and can start before they exist). ``tier`` is a dead passthrough in ``token_summary``
-    (it stores no tier field), so omitting it here changes nothing. Returns a fresh
+    and can start before they exist). Returns a fresh
     ``{provider: summary|None}`` map for ``apply_cost_summaries`` to merge once the fetches
     finish — keeping the summaries OUT of ``providers`` until then is what makes a scan
     timeout a clean no-op (no torn write to roll back). The ``deadline`` is threaded into
-    the Antigravity ledger's per-DB scan loop exactly as before, AND into each local-log
-    summarizer's file walk (accounting._cached_log_records). A walk the deadline cuts
+    the Antigravity ledger's per-DB scan loop AND into each local-log summarizer's file walk (accounting._cached_log_records). A walk the deadline cuts
     checkpoints its parse cache and raises LogScanIncomplete (a TimeoutError), so a slow
     cold parse finishes over several refreshes instead of restarting each time, and no
     summary — nor the cost archive below — is ever built from partial records."""
     from accounting import (local_claude_token_summary, local_codex_token_summary,
                             local_gemini_token_summary, local_grok_token_summary)
     from .grok import grok_billing_period
-    # Grok billing period: read the current billing week from the unified log so
-    # local_grok_token_summary can accumulate billingWeekTokens/billingWeekCost.
-    # Best-effort — an exception (e.g. disk error) must never block the rest of the scan.
+    # Best-effort: a failure here must never block the rest of the scan.
     grok_week_start = grok_week_end = None
     try:
         bp = grok_billing_period()
@@ -1275,20 +1163,15 @@ def compute_local_cost_summaries(deadline: float | None = None) -> dict[str, dic
         "codex": local_codex_token_summary(deadline=deadline),
         "claude": local_claude_token_summary(deadline=deadline),
         "gemini": local_gemini_token_summary(deadline=deadline),
-        # Grok Build CLI: REAL per-turn tokens parsed from ~/.grok/logs/unified.jsonl.
-        # None when there's no local Grok CLI data, so the tab stays hidden.
+        # None when there's no local data, so the tab stays hidden.
         "grok": local_grok_token_summary(
             deadline=deadline,
             week_start=grok_week_start,
             week_end=grok_week_end,
         ),
-        # Antigravity: REAL per-generation tokens from the persistent ledger (IDE/desktop
-        # trajectory DBs + the agy CLI statusLine push). None when there's no local token
-        # data, so the cost section stays off rather than showing the subscription price.
         "antigravity": antigravity_ledger_cost_summary(deadline=deadline),
     }
-    # Roll the current month's per-provider totals into the append-only archive.
-    # Best-effort — enrichment must never break the snapshot.
+    # Best-effort: enrichment must never break the snapshot.
     try:
         update_cost_archive(summaries, deadline=deadline)
     except Exception:
@@ -1333,25 +1216,19 @@ def apply_cost_summaries(providers: dict[str, dict[str, Any]],
         ("codex", "Codex", "json-rpc"),
         ("claude", "Claude", "browser-api"),
         ("gemini", "Gemini", "gemini-web"),
-        # Grok is local-only this pass (no live fetch); setdefault creates the provider
-        # entry from its costSummary so the tab appears whenever ~/.grok logs exist.
+        # _attach_summary creates the provider entry from its costSummary, so the tab
+        # appears whenever ~/.grok logs exist.
         ("grok", "Grok", "local-grok-logs"),
     ):
         _attach_summary(providers, provider, summaries, label, source)
 
-    # We no longer gate Antigravity on the provider being "ok": CLI token data can exist
-    # while the IDE is closed (status != ok), and that usage should still surface.
+    # CLI token data can exist while the IDE is closed (status != ok).
     if providers.get("antigravity") is not None:
         _attach_summary(providers, "antigravity", summaries)
 
-    # Gemini: the cost section is pay-per-use only (from local gemini-cli token logs).
-    # gemini.google.com isn't token-metered, so when there are no local logs we show no
-    # cost section — deliberately NOT the monthly-subscription price.
-
 
 def apply_local_cost_summaries(providers: dict[str, dict[str, Any]], deadline: float | None = None) -> None:
-    """Compute + merge the local cost summaries in one synchronous call (the original
-    sequential API, kept for direct callers/tests). ``build_snapshot`` instead calls the
-    two halves separately so the compute can overlap the network fetches."""
+    """Compute + merge the local cost summaries in one synchronous call; ``build_snapshot``
+    calls the two halves separately so the compute can overlap the network fetches."""
     apply_cost_summaries(providers, compute_local_cost_summaries(deadline))
 

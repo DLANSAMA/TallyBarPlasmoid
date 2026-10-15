@@ -110,8 +110,7 @@ DEFAULT_NOTIFY_THRESHOLDS = (90, 100)
 # each dip and the critical popup re-fires every few minutes. Re-arm only when usage drops
 # meaningfully below the threshold — a genuine window reset drops to ~0 and always re-arms.
 _THRESHOLD_REARM_GAP = 10
-# Monthly-budget alert levels: warn when approaching (80%) and at/over budget (100%).
-# Distinct from the per-limit usage thresholds above (those are usage %, this is total $).
+# Monthly-budget alert levels, as a percent of total spend (not per-limit usage %).
 _BUDGET_THRESHOLDS = (80, 100)
 
 # Provider statuses that mean the provider needs user action (sign-in / unlock) or hit a
@@ -239,10 +238,8 @@ def public_config(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# Weekly-alert threshold (feature 6): fire ONE desktop notification the first time any
-# provider's weekly window crosses this used-% — independent of the user's configurable
-# usage thresholds, re-armed when usage falls back below the hysteresis floor (a
-# genuine window reset drops usage to ~0). Keyed provider|label, NOT resetAt.
+# Weekly-alert threshold: ONE desktop notification the first time any provider's weekly
+# window crosses this used-%, independent of the configurable usage thresholds.
 _WEEKLY_ALERT_THRESHOLD = 80
 
 
@@ -337,28 +334,21 @@ def compute_notifications(providers: dict[str, Any], config: dict[str, Any],
     import fcntl
     NOTIFY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     lock_path = NOTIFY_STATE_PATH.parent / ".notify.lock"
-    # "a" not "w": opening for write truncates the lockfile to 0 bytes BEFORE the lock is
-    # held (a TOCTOU, same as config.json's .config.lock). Bounded non-blocking wait
-    # so two concurrent --once invocations can't lost-update the armed-set
-    # (a process that loses the race raises, caught by main()'s post-snapshot tail guard,
-    # which degrades to notifications=[] for that run rather than crashing stdout).
+    # Bounded wait so two concurrent --once invocations can't lost-update the armed-set
+    # (the loser raises, caught by main()'s post-snapshot tail guard: notifications=[]).
     with _open_lock_0600(lock_path) as lock_fd:
         if not flock_with_timeout(lock_fd, 5.0):
             raise TimeoutError("could not acquire notify-state lock (another write in progress)")
         try:
             previously_fired = _load_notify_state()
-            # Seed from the persisted armed-set so a crossing stays fired across refreshes — and,
-            # crucially, is NOT re-armed when a provider transiently fails. A timed-out/errored
-            # provider comes back as default_provider with limits:[], so the loop below never
-            # touches its keys and they're preserved; only a limit we ACTUALLY observe this run
-            # can change its armed state (the explicit discard handles a genuine drop). Rebuilding
-            # now_fired from scratch each run (the old behaviour) made any transient fetch failure
-            # indistinguishable from "dropped below threshold" and replayed an already-sent alert.
+            # Seed from the persisted armed-set so a crossing is NOT re-armed when a provider
+            # transiently fails: a timed-out provider comes back with limits:[], so the loop
+            # below never touches its keys; only a limit actually observed this run changes its
+            # armed state.
             now_fired: set[str] = set(previously_fired)
             notifications: list[dict[str, Any]] = []
-            # Muted providers raise no desktop notifications (status, usage
-            # thresholds, or the weekly-80 alert). Their armed-set keys are simply left
-            # untouched (like a transient failure), so unmuting doesn't replay old crossings.
+            # Muted providers raise no notifications; their armed-set keys are left untouched
+            # (like a transient failure), so unmuting doesn't replay old crossings.
             raw_muted = config.get("mutedProviders")
             muted = {str(m) for m in raw_muted} if isinstance(raw_muted, (list, tuple)) else set()
             for pkey, provider in providers.items():
@@ -384,21 +374,17 @@ def compute_notifications(providers: dict[str, Any], config: dict[str, Any],
                     now_fired.discard(skey)  # recovered -> re-arm for the next outage
                 for limit in provider.get("limits", []) or []:
                     if not isinstance(limit, dict) or limit.get("isExtraUsage"):
-                        continue  # skip credit/extra-usage rows — they're not capacity limits
+                        continue
                     label = str(limit.get("label") or "").strip() or "Usage"
                     try:
                         pct = float(limit.get("percent") or 0.0)
                     except (TypeError, ValueError):
                         continue
-                    # Weekly-window 80% alert (feature 6): independent of the user's usage
-                    # thresholds. Fire ONCE when a weekly window first crosses 80% used, keyed
-                    # by provider+label — NOT by resetAt: Claude's API recomputes resets_at on
-                    # every request (microsecond drift each fetch), so a resetAt-based key churned
-                    # every refresh and re-fired the alert every 5 minutes. Re-arm when usage
-                    # drops back below the threshold with hysteresis (a genuine window reset
-                    # drops usage to ~0; the 5-point gap stops a value hovering at the boundary
-                    # from flapping fire→re-arm→fire). Label in the key also stops a provider's
-                    # two weekly rows (Claude "Weekly" + "Fable") from sharing one armed slot.
+                    # Weekly-window alert, keyed by provider+label, NOT resetAt: Claude's API
+                    # recomputes resets_at on every request, so a resetAt key would re-fire every
+                    # refresh. The label also keeps a provider's two weekly rows (Claude "Weekly"
+                    # + "Fable") in separate armed slots. Re-arm only 5 points below the threshold
+                    # so a value hovering at the boundary doesn't flap.
                     if _is_weekly_limit(limit):
                         wkey = f"weekly80|{pkey}|{label}"
                         # One-time migration: drop old-format resetAt-timestamp keys.
@@ -420,20 +406,14 @@ def compute_notifications(providers: dict[str, Any], config: dict[str, Any],
                             now_fired.add(wkey)
                         elif pct < _WEEKLY_ALERT_THRESHOLD - 5:
                             now_fired.discard(wkey)
-                        # else 75–80%: hold armed state (hysteresis band)
-                    # This limit WAS observed this run: arm each threshold it currently exceeds.
-                    # Re-arm (discard) a key only when usage drops meaningfully below the
-                    # threshold (hysteresis) — a rolling-window limit flapping at the ceiling
-                    # (100→98→100) would otherwise re-fire the critical popup on each dip. In the
-                    # gap band [t - _THRESHOLD_REARM_GAP, t) hold the current armed state; a genuine
-                    # window reset drops to ~0 and clears the gap, re-arming for the next crossing.
+                    # Arm each threshold this limit currently exceeds; re-arm only below
+                    # t - _THRESHOLD_REARM_GAP, holding the armed state in the gap band.
                     for t in thresholds:
                         key = f"{pkey}|{label}|{t}"
                         if pct >= t:
                             now_fired.add(key)
                         elif pct < t - _THRESHOLD_REARM_GAP:
                             now_fired.discard(key)
-                        # else: gap band — hold armed state (no add, no discard)
                     # Notify on the HIGHEST threshold this limit currently exceeds, so a jump
                     # straight past 90→100 alerts once at 100, not twice.
                     crossed = [t for t in thresholds if pct >= t]
@@ -442,9 +422,9 @@ def compute_notifications(providers: dict[str, Any], config: dict[str, Any],
                     top = max(crossed)
                     key = f"{pkey}|{label}|{top}"
                     if key in previously_fired:
-                        continue  # already alerted for this crossing
+                        continue
                     if not enabled:
-                        continue  # state still tracks the crossing; just don't emit while off
+                        continue  # state still tracks the crossing
                     at_limit = top >= 100
                     notifications.append({
                         "provider": pkey,
@@ -527,7 +507,7 @@ def compute_notifications(providers: dict[str, Any], config: dict[str, Any],
                     now_fired.discard(proj_key)
                 # else (95%–100% of budget, or mtd >= budget): hold the current armed state.
             if now_fired != previously_fired:
-                _save_notify_state(now_fired)  # only rewrite+fsync when the armed-set actually changed
+                _save_notify_state(now_fired)
         finally:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
     return notifications
@@ -645,8 +625,7 @@ def carry_forward_provider_last_good(provider: dict[str, Any], cached: Any,
     providers = cached.get("providers")
     if not isinstance(providers, dict):
         return provider
-    # Find the matching cached entry by label (the provider dicts don't carry a stable key
-    # inside themselves; the caller passes the same label-bearing dict it stored).
+    # Match by label: provider dicts don't carry their key.
     cached_entry = None
     for entry in providers.values():
         if isinstance(entry, dict) and entry.get("label") == label:
@@ -660,7 +639,6 @@ def carry_forward_provider_last_good(provider: dict[str, Any], cached: Any,
     if not (isinstance(cached_limits, list) and cached_limits):
         return provider
 
-    # Age off the cached snapshot's own top-level fetch time.
     cached_ts = cached.get("timestamp")
     try:
         ts = dt.datetime.fromisoformat(str(cached_ts).replace("Z", "+00:00"))
@@ -670,9 +648,8 @@ def carry_forward_provider_last_good(provider: dict[str, Any], cached: Any,
         ts = ts.replace(tzinfo=dt.timezone.utc)
     age = (dt.datetime.now(dt.timezone.utc) - ts).total_seconds()
 
-    # staleAsOf is the ORIGINAL good-fetch time: prefer a value already stamped on the cached
-    # entry (a prior carry-forward), else the cache timestamp itself. This is what age must be
-    # measured against so the window can't ratchet forward across repeated carry-forwards.
+    # Age is measured from the ORIGINAL good fetch (a staleAsOf already stamped by a prior
+    # carry-forward, else the cache timestamp) so the window can't ratchet.
     prior_stale_as_of = cached_entry.get("staleAsOf")
     if isinstance(prior_stale_as_of, str) and prior_stale_as_of:
         try:
@@ -714,8 +691,6 @@ def cost_export(snapshot: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {"generatedAt": snapshot.get("timestamp"), "providers": {}}
     total_cost30 = total_burn = 0.0
     for name, provider in (snapshot.get("providers") or {}).items():
-        # The backend only ever attaches "costSummary" (apply_local_cost_summaries /
-        # antigravity_ledger_cost_summary); there is no top-level "cost" provider key.
         cost = provider.get("costSummary")
         if not isinstance(cost, dict):
             continue
@@ -751,9 +726,7 @@ def update_refresh_interval(minutes: float) -> dict[str, Any]:
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.parent.chmod(0o700)
     lock_path = CONFIG_PATH.parent / ".config.lock"
-    # "a" not "w": opening for write truncates the lockfile to 0 bytes BEFORE the lock is held
-    # (a TOCTOU). Acquire non-blocking with a bounded wait so a stuck holder can't hang this
-    # one-shot config-write process forever.
+    # Bounded wait so a stuck holder can't hang this one-shot config-write process.
     with _open_lock_0600(lock_path) as lock_fd:
         if not flock_with_timeout(lock_fd, 5.0):
             raise TimeoutError("could not acquire config lock (another write in progress)")
@@ -770,15 +743,16 @@ _PANEL_DISPLAY_MODES = ("percent", "reset", "cost", "pace")
 
 def update_config_values(updates: dict[str, Any]) -> dict[str, Any]:
     """Whitelisted, validated load-modify-save of the user-tunable config keys
-    (notifications + panel display), under the same exclusive flock as
+    (notifications, panel display, providers, mutedProviders, monthlyBudget,
+    refreshIntervalMinutes), under the same exclusive flock as
     update_refresh_interval so concurrent writes can't lost-update config.json.
     Unknown/invalid keys are ignored rather than raising."""
     import fcntl
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.parent.chmod(0o700)
     lock_path = CONFIG_PATH.parent / ".config.lock"
-    with _open_lock_0600(lock_path) as lock_fd:  # 0600 + "a" (no truncate before locking)
-        if not flock_with_timeout(lock_fd, 5.0):  # bounded, non-blocking
+    with _open_lock_0600(lock_path) as lock_fd:
+        if not flock_with_timeout(lock_fd, 5.0):
             raise TimeoutError("could not acquire config lock (another write in progress)")
         try:
             config = load_config()
@@ -809,19 +783,16 @@ def update_config_values(updates: dict[str, Any]) -> dict[str, Any]:
             if "providers" in updates:
                 raw = updates["providers"]
                 if isinstance(raw, list):
-                    # Keep the canonical order, drop unknowns/dupes, require non-empty
-                    # (an empty provider set would leave the widget with no tabs).
+                    # Canonical order, unknowns/dupes dropped; non-empty (else no tabs).
                     chosen = [p for p in PROVIDER_ORDER if p in raw]
                     if chosen:
                         config["providers"] = chosen
             if "mutedProviders" in updates:
-                # Whitelist to known providers, keep canonical order, drop dupes.
                 raw = updates["mutedProviders"]
                 if isinstance(raw, list):
                     config["mutedProviders"] = [p for p in PROVIDER_ORDER if p in raw]
             if "monthlyBudget" in updates:
-                # Optional monthly USD budget for the cross-provider spend alert. 0 (or
-                # absent) disables it. Clamp to a sane range; ignore garbage rather than raise.
+                # 0 (or absent) disables the budget alert.
                 try:
                     budget = float(updates["monthlyBudget"])
                     if 0.0 <= budget <= 1_000_000.0:
@@ -857,12 +828,8 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     }
     diagnostics: dict[str, Any] = {}
 
-    # Per-phase wall clock, surfaced as diagnostics.timings. The refresh is a one-shot
-    # process on a 5-minute timer, so a phase that quietly grows costs the user battery and
-    # disk on every tick with nothing in the snapshot to show it — exactly how the 2026-06-07
-    # "Cost scan timed out" regression (110+ cascades re-queried per run) stayed invisible
-    # until it started tripping the deadline. Monotonic, so a clock step can't produce a
-    # negative. These do NOT sum to `total`: the cost scan deliberately overlaps the provider
+    # Per-phase wall clock, surfaced as diagnostics.timings. Monotonic, so a clock step can't
+    # produce a negative. These do NOT sum to `total`: the cost scan deliberately overlaps the provider
     # fetches, and `cost_scan` measures launch -> clean await, not CPU time.
     phase_start = time.monotonic()
     snapshot_deadline = phase_start + refresh_worst_case_seconds(args.timeout)
@@ -871,10 +838,9 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     def mark(name: str, since: float) -> None:
         timings[name] = int((time.monotonic() - since) * 1000)
 
-    # Load the last-known-good snapshot ONCE up front and reuse it for: (1) the Claude
-    # credit/overage throttle (prev creditBalance.fetchedAt gates the two slow GETs), (2)
-    # the Antigravity partial-lane carry-forward, and (3) the transient-failure carry-forward
-    # for claude/gemini/codex below. One disk read, not three.
+    # Load the last-known-good snapshot ONCE and reuse it for the Claude credit throttle, the
+    # Antigravity partial-lane carry-forward, the Google One throttle and the transient-failure
+    # carry-forward below.
     cached_snapshot = load_snapshot()
     prev_providers = cached_snapshot.get("providers") if isinstance(cached_snapshot, dict) else None
     prev_claude = prev_providers.get("claude") if isinstance(prev_providers, dict) else None
@@ -888,12 +854,10 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
 
     # Kick off the local cost scan NOW so its CPU/disk work (parsing ~/.claude, ~/.codex,
     # ~/.gemini logs + the Antigravity ledger) overlaps the network provider fetches below
-    # instead of running serially after them. It is provider-result-INDEPENDENT — it never
-    # touches `providers` and returns a separate {provider: summary} map — so it's safe to
-    # start before the providers are known, and a torn-write on timeout is impossible (the
-    # merge happens later, only after a clean await; no deepcopy needed). Double-bounded
-    # exactly like the old serial version: the outer asyncio.wait_for(timeout) here, plus a
-    # cooperative wall-clock `deadline` threaded into the Antigravity ledger's per-DB loop.
+    # instead of running serially after them. It never touches `providers` and returns a
+    # separate {provider: summary} map, so a timeout can't tear a write (the merge happens
+    # only after a clean await). Double-bounded: the outer asyncio.wait_for(timeout) here,
+    # plus a cooperative wall-clock `deadline` threaded into the Antigravity ledger's per-DB loop.
     cost_deadline = time.time() + args.timeout
     cost_scan_start = time.monotonic()
     cost_scan = asyncio.ensure_future(
@@ -984,14 +948,8 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
                             fallback=providers["grokbot"],
                         )
                     )
-                    # The OpenAI cookie-API GET is a FALLBACK for a failed codex CLI
-                    # RPC — it is fired lazily (post-group, serialized) only when the
-                    # local `codex` RPC result is not "ok". In steady state (healthy
-                    # codex CLI) it is skipped entirely, dropping one authenticated
-                    # OpenAI call (a second Cloudflare-flaggable surface) per refresh.
-                    # Skip the one.google.com credit RPC entirely when the previous
-                    # snapshot's balance is still fresh (< 300s); it's carried forward at
-                    # the apply site below instead.
+                    # Skip the one.google.com credit RPC when the previous snapshot's balance
+                    # is still fresh; it's carried forward at the apply site below.
                     if carried_g1 is None:
                         api_tasks["google_one"] = group.create_task(
                             run_threaded_provider(
@@ -1007,14 +965,12 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
                     # TaskGroup.
                     from pricing_data import cache_is_current, refresh_pricing
                     if not cache_is_current():
-                        # Guard the pricing refresh: it is a background cache write
-                        # whose result isn't read this run, so its failure must NEVER
-                        # propagate out of the TaskGroup (which would cancel every
-                        # sibling provider task and blank the whole snapshot).
+                        # Its result isn't read this run, and a failure must NEVER propagate
+                        # out of the TaskGroup (that would cancel every sibling provider task).
                         async def _safe_refresh_pricing(t: float) -> None:
                             try:
                                 await refresh_pricing(t)
-                            except Exception as exc:  # noqa: BLE001 - swallow fetch errors so a pricing-refresh failure can't cancel sibling tasks; CancelledError/SystemExit are NOT Exception, so timeout/shutdown still propagate
+                            except Exception as exc:
                                 diagnostics["pricing_refresh_error"] = scrub_credentials(f"{exc.__class__.__name__}: {str(exc)}")[:160]
                         group.create_task(_safe_refresh_pricing(args.timeout))
     except TimeoutError:
@@ -1112,10 +1068,9 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
             "Grok Bot"
         )
 
-        # Lazy OpenAI cookie fallback: only fire the authenticated chatgpt.com GET
-        # when the local codex CLI RPC path did NOT succeed. bounded_provider applies
-        # its own timeout, so this post-group await is bounded even outside the
-        # TaskGroup's asyncio.timeout wrapper (intended — it's the rare fallback path).
+        # Lazy OpenAI cookie fallback: only fire the authenticated chatgpt.com GET when the
+        # local codex CLI RPC did NOT succeed (saves a Cloudflare-flaggable call per refresh).
+        # bounded_provider applies its own timeout outside the TaskGroup's asyncio.timeout.
         if providers["codex"].get("status") != "ok":
             # Capped to what's left of the refresh budget so refresh_worst_case_seconds is a
             # guarantee the widget's watchdog can rely on, not just the usual case.
@@ -1128,15 +1083,13 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
             if codex_cookie["status"] == "ok":
                 providers["codex"] = codex_cookie
 
-        # Read google_one only when the task finished cleanly — guard .exception()
-        # too, else a done-with-exception task would re-raise here (outside any
-        # try) and abort the whole snapshot instead of just dropping the credit bar.
         if carried_g1 is not None:
             # Throttled: the RPC was skipped above. Re-apply the carried balance so the
-            # credit bar keeps rendering — without this the code path below would apply
-            # None (no task) and drop the bar. fetchedAt is NOT re-stamped (bounded 300s).
+            # credit bar keeps rendering (fetchedAt is NOT re-stamped, so the carry is age-bounded).
             apply_google_one_credits(providers["antigravity"], {"status": "ok", "creditBalance": carried_g1})
         else:
+            # Read the result only when the task finished cleanly: a done-with-exception task
+            # would re-raise here and abort the snapshot instead of just dropping the credit bar.
             google_one_task = api_tasks.get("google_one")
             google_one_result = None
             if (google_one_task is not None and google_one_task.done()
@@ -1182,11 +1135,9 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
                 )
 
     # Bounded last-known-good carry-forward for the network providers. A transient blip
-    # (Cloudflare challenge / one-off timeout) on Claude/Gemini/Codex/Grok Bot — but with the other
-    # providers live — would otherwise overwrite the cache with an error card. Freeze the last
-    # good reading for a short grace window off the SAME cached snapshot loaded up top; beyond
-    # the window the real error resurfaces. No-op for non-transient statuses (e.g. the offline
-    # branch's cookies-ready/missing-cookies) or when the provider already has limits.
+    # (Cloudflare challenge / one-off timeout) on Claude/Gemini/Codex/Grok Bot would otherwise
+    # overwrite the cache with an error card. Freeze the last good reading for a short grace
+    # window off the cached snapshot loaded up top; beyond it the real error resurfaces.
     for _name in ("claude", "gemini", "codex", "grokbot"):
         providers[_name] = carry_forward_provider_last_good(providers[_name], cached_snapshot)
 
@@ -1198,11 +1149,9 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     providers["claude"] = apply_claude_statusline_fallback(providers["claude"], load_claude_statusline())
 
     # Merge the cost summaries computed CONCURRENTLY since the top of build_snapshot
-    # (the scan overlapped the network fetches above). apply_cost_summaries propagates the
-    # Antigravity tier to Gemini and attaches each summary — it runs ONLY after this clean
-    # await, so a scan timeout (caught -> diagnostic) leaves the snapshot exactly as the
-    # providers produced it, with no half-written cost summary. The scan never touched
-    # `providers`, so unlike the old deepcopy/merge-back there is nothing to roll back.
+    # (the scan overlapped the network fetches above). It runs ONLY after this clean await,
+    # so a scan timeout (caught -> diagnostic) leaves the snapshot exactly as the providers
+    # produced it, with no half-written cost summary.
     try:
         summaries = await cost_scan
         apply_cost_summaries(providers, summaries)
@@ -1214,11 +1163,10 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         diagnostics["cost_summary_timeout"] = True
     except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
         raise  # cooperative cancellation / process-stop must propagate, never be masked here
-    except BaseException as exc:  # noqa: BLE001 - enrichment must never break the snapshot. A
-        # BaseException raised inside the cost-scan daemon thread is set on the future by
-        # to_daemon_thread, so `await cost_scan` re-raises it — and a bare `except Exception`
-        # would let it slip past and crash build_snapshot, printing NO JSON for the whole
-        # refresh. Record it and ship the freshly-computed provider data unenriched.
+    except BaseException as exc:
+        # Enrichment must never break the snapshot. A BaseException raised inside the cost-scan
+        # daemon thread is re-raised by `await cost_scan`, and a bare `except Exception` would
+        # let it crash build_snapshot with no JSON. Record it and ship the data unenriched.
         diagnostics["cost_summary_error"] = scrub_credentials(f"{exc.__class__.__name__}: {str(exc)}")[:160]
     mark("cost_scan", cost_scan_start)
     enrich_ui_formatting(providers)
@@ -1300,11 +1248,8 @@ def main() -> int:
             snapshot = asyncio.run(build_snapshot(args))
         except (KeyboardInterrupt, SystemExit):
             raise
-        except BaseException as exc:  # noqa: BLE001 - mirror the --once tail guard below:
-            # build_snapshot is contracted to always RETURN a snapshot, but a BaseException
-            # escaping the orchestrator (e.g. the TaskGroup's re-raised base_part, or the cost
-            # scan) would otherwise crash --cost with a bare traceback and empty stdout instead
-            # of the documented graceful degrade. Fall back to the last cached snapshot (or an
+        except BaseException as exc:
+            # Mirrors the --once tail guard below: fall back to the last cached snapshot (or an
             # empty one) so cost_export still has something to project.
             snapshot = load_snapshot() or {"ok": False, "timestamp": now_iso(), "providers": {}}
             snapshot.setdefault("diagnostics", {})["fatal"] = scrub_credentials(f"{exc.__class__.__name__}: {str(exc)}")[:160]
@@ -1343,9 +1288,8 @@ def main() -> int:
         print(json.dumps(cached, indent=2 if args.pretty else None, separators=None if args.pretty else (",", ":")))
         return 0
 
-    # Best-effort sweep of orphaned atomic-write temps (crashed mkstemp / .tmp leftovers) so
-    # ~/.tallybar can't slowly fill with them (observed: stale July tmp* files + a 101 MB
-    # claude_logs.json.<rand>.tmp). Never fatal — wrapped so a sweep failure can't touch stdout.
+    # Best-effort sweep of orphaned atomic-write temps so ~/.tallybar can't slowly fill with
+    # them. Never fatal — a sweep failure can't touch stdout.
     try:
         from io_helpers import sweep_stale_temp_files
         _tallybar = Path.home() / ".tallybar"
@@ -1372,32 +1316,25 @@ def main() -> int:
         snapshot = asyncio.run(build_snapshot(args))
     except (KeyboardInterrupt, SystemExit):
         raise
-    except BaseException as exc:  # noqa: BLE001 - build_snapshot is contracted to always RETURN
-        # a snapshot (every provider has a fallback dict), but a BaseException escaping the
-        # orchestrator (e.g. the TaskGroup's re-raised base_part, or the cost scan) would crash
-        # to stderr with EMPTY stdout — and the widget JSON.parses stdout, so an empty refresh
-        # surfaces as a parse error instead of a graceful degrade. Emit the last cached snapshot
-        # (or a minimal degraded one) so the widget always gets parseable JSON. Don't touch the
-        # cold-start cache here — a fatal must never clobber last-known-good.
+    except BaseException as exc:
+        # build_snapshot should always RETURN a snapshot, but a BaseException escaping it would
+        # leave stdout EMPTY and the widget's JSON.parse would fail. Emit the last cached
+        # snapshot (or a minimal degraded one). Don't touch the cold-start cache here — a
+        # fatal must never clobber last-known-good.
         fallback = load_snapshot() or {"ok": False, "timestamp": now_iso(), "providers": {}}
         fallback["notifications"] = []
         fallback.setdefault("diagnostics", {})["fatal"] = scrub_credentials(f"{exc.__class__.__name__}: {str(exc)}")[:160]
         print(json.dumps(fallback, indent=2 if args.pretty else None, separators=None if args.pretty else (",", ":")))
         return 0
-    # Always print the fresh snapshot (the widget shows the live state, including any
-    # 'timed out' bars). But only overwrite the cold-start cache when this snapshot
-    # has live data, OR when the existing cache is itself degraded/absent — so a
-    # transient full outage can't clobber the last-known-good values cold start paints.
-    # The cache write and notification pass are enrichment on top of an already-built
-    # snapshot: a failure in either (e.g. a corrupted config value) must degrade to
-    # printing the snapshot without them — never to empty stdout.
+    # Always print the fresh snapshot, but only overwrite the cold-start cache when it has
+    # live data OR the existing cache is itself degraded/absent. The cache write and
+    # notification pass are enrichment: a failure in either must degrade to printing the
+    # snapshot without them — never to empty stdout.
     try:
         if _snapshot_has_live_data(snapshot) or not _snapshot_has_live_data(load_snapshot()):
             save_snapshot(snapshot)
-        # Threshold notifications are attached AFTER the cache write so the cached snapshot
-        # never carries them — otherwise the cold-start cacheLoader would re-fire stale
-        # alerts. Only this live --once path emits them (not --cost); the QML fires each via
-        # KNotification. State de-dup lives in compute_notifications.
+        # Attached AFTER the cache write so the cached snapshot never carries them (the
+        # cold-start cacheLoader would re-fire stale alerts). Only this --once path emits them.
         diags_raw = snapshot.get("diagnostics")
         diags = diags_raw if isinstance(diags_raw, dict) else {}
         cost_ok = not (diags.get("cost_summary_timeout") or diags.get("cost_summary_error"))
@@ -1405,7 +1342,7 @@ def main() -> int:
                                                           cost_available=cost_ok)
     except (KeyboardInterrupt, SystemExit):
         raise
-    except BaseException as exc:  # noqa: BLE001 - same rationale as the build_snapshot guard
+    except BaseException as exc:
         snapshot["notifications"] = []
         snapshot.setdefault("diagnostics", {})["post_snapshot_error"] = scrub_credentials(f"{exc.__class__.__name__}: {str(exc)}")[:160]
     try:
