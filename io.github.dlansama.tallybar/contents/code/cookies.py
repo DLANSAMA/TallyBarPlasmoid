@@ -286,18 +286,18 @@ def decrypt_chromium_value(
 
 def _query_sqlite_with_wal_retry(
     tmp: Path,
-    query_fn: Callable[[sqlite3.Connection], list[BrowserCookie]],
-) -> list[BrowserCookie]:
+    query_fn: Callable[[sqlite3.Connection], tuple[list[BrowserCookie], dict[str, int]]],
+) -> tuple[list[BrowserCookie], dict[str, int]]:
     """Open `tmp` read-only and run `query_fn` against it. A torn/corrupted copy of
     an actively-written -wal or -shm sidecar can raise sqlite3.DatabaseError not just
     at connect() time but also once a pragma/execute/fetchall actually walks the
     corrupted page — so this wraps the WHOLE query, not just the connect(). On
     DatabaseError from anywhere in query_fn, strip the sidecars and retry once
     against just the main file (the same fallback previously reachable only from a
-    connect()-time failure). query_fn must return a fresh list each call (no
-    caller-visible partial state to roll back)."""
+    connect()-time failure). query_fn returns its cookies with the row counters
+    of that attempt, so a discarded attempt leaves nothing behind."""
 
-    def _attempt() -> list[BrowserCookie]:
+    def _attempt() -> tuple[list[BrowserCookie], dict[str, int]]:
         con = sqlite3.connect(f"file:{urllib.parse.quote(str(tmp))}?mode=ro", uri=True, timeout=1.0)
         try:
             con.row_factory = sqlite3.Row
@@ -347,13 +347,8 @@ def read_chromium_cookies(
             stats["errors"] = 1
             return cookies, stats
 
-        def _query(con: sqlite3.Connection) -> list[BrowserCookie]:
-            # Fresh per attempt: on a wal/shm-strip retry the whole query re-runs, so
-            # the counters below must not double-count a discarded partial attempt.
-            stats["rows"] = 0
-            stats["matched"] = 0
-            stats["decrypted"] = 0
-            stats["errors"] = 0
+        def _query(con: sqlite3.Connection) -> tuple[list[BrowserCookie], dict[str, int]]:
+            counts = {"rows": 0, "matched": 0, "decrypted": 0, "errors": 0}
             found: list[BrowserCookie] = []
             columns = {row["name"] for row in con.execute("pragma table_info(cookies)")}
             value_col = "value" if "value" in columns else "'' as value"
@@ -368,20 +363,20 @@ def read_chromium_cookies(
                 """
             )
             for row in rows:
-                stats["rows"] += 1
+                counts["rows"] += 1
                 host = str(row["host_key"] or "")
                 if domain_filter and not host_matches_any(host, domain_filter):
                     continue
-                stats["matched"] += 1
+                counts["matched"] += 1
                 value = str(row["value"] or "")
                 encrypted = bytes(row["encrypted_value"] or b"")
                 if not value and encrypted:
                     decrypted = decrypt_chromium_value(crypto, host, encrypted, store.family, passwords)
                     if decrypted is None:
-                        stats["errors"] += 1
+                        counts["errors"] += 1
                         continue
                     value = decrypted
-                    stats["decrypted"] += 1
+                    counts["decrypted"] += 1
                 if not value:
                     continue
                 found.append(
@@ -398,10 +393,11 @@ def read_chromium_cookies(
                         last_used_unix=_chromium_time_unix(row["last_access_utc"]),
                     )
                 )
-            return found
+            return found, counts
 
         try:
-            cookies = _query_sqlite_with_wal_retry(tmp, _query)
+            cookies, counts = _query_sqlite_with_wal_retry(tmp, _query)
+            stats.update(counts)
         except Exception:
             stats["errors"] += 1
     return cookies, stats
@@ -423,21 +419,17 @@ def read_firefox_cookies(path: Path, domain_filter: tuple[str, ...]) -> tuple[li
             stats["errors"] = 1
             return cookies, stats
 
-        def _query(con: sqlite3.Connection) -> list[BrowserCookie]:
-            # Fresh per attempt: on a wal/shm-strip retry the whole query re-runs, so
-            # the counters below must not double-count a discarded partial attempt.
-            stats["rows"] = 0
-            stats["matched"] = 0
-            stats["errors"] = 0
+        def _query(con: sqlite3.Connection) -> tuple[list[BrowserCookie], dict[str, int]]:
+            counts = {"rows": 0, "matched": 0, "errors": 0}
             found: list[BrowserCookie] = []
             columns = {r["name"] for r in con.execute("pragma table_info(moz_cookies)")}
             access_col = "lastAccessed" if "lastAccessed" in columns else "0 as lastAccessed"
             for row in con.execute(f"select host, name, path, value, isSecure, expiry, {access_col} from moz_cookies"):
-                stats["rows"] += 1
+                counts["rows"] += 1
                 host = str(row["host"] or "")
                 if domain_filter and not host_matches_any(host, domain_filter):
                     continue
-                stats["matched"] += 1
+                counts["matched"] += 1
                 value = str(row["value"] or "")
                 if value:
                     found.append(
@@ -454,10 +446,11 @@ def read_firefox_cookies(path: Path, domain_filter: tuple[str, ...]) -> tuple[li
                             last_used_unix=_unix_time_any_unit(row["lastAccessed"]),
                         )
                     )
-            return found
+            return found, counts
 
         try:
-            cookies = _query_sqlite_with_wal_retry(tmp, _query)
+            cookies, counts = _query_sqlite_with_wal_retry(tmp, _query)
+            stats.update(counts)
         except Exception:
             stats["errors"] += 1
     return cookies, stats
