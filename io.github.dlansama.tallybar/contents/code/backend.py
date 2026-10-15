@@ -592,7 +592,7 @@ def carry_forward_partial_antigravity_lanes(provider: dict[str, Any],
 _TRANSIENT_PROVIDER_STATUSES = frozenset(("timeout", "api-error", "unauthorized", "error"))
 
 
-def carry_forward_provider_last_good(provider: dict[str, Any], cached: Any,
+def carry_forward_provider_last_good(provider: dict[str, Any], cached: Any, key: str,
                                      *, max_stale_seconds: int = 900) -> dict[str, Any]:
     """Freeze the last-known-good reading over a TRANSIENT provider failure.
 
@@ -623,18 +623,12 @@ def carry_forward_provider_last_good(provider: dict[str, Any], cached: Any,
         return provider
     if provider.get("limits"):
         return provider
-    label = provider.get("label")
     if not isinstance(cached, dict):
         return provider
     providers = cached.get("providers")
     if not isinstance(providers, dict):
         return provider
-    # Match by label: provider dicts don't carry their key.
-    cached_entry = None
-    for entry in providers.values():
-        if isinstance(entry, dict) and entry.get("label") == label:
-            cached_entry = entry
-            break
+    cached_entry = providers.get(key)
     if not isinstance(cached_entry, dict):
         return provider
     if cached_entry.get("status") not in _LIVE_PROVIDER_STATUSES:
@@ -1135,7 +1129,7 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     # overwrite the cache with an error card. Freeze the last good reading for a short grace
     # window off the cached snapshot loaded up top; beyond it the real error resurfaces.
     for _name in ("claude", "gemini", "codex", "grokbot"):
-        providers[_name] = carry_forward_provider_last_good(providers[_name], cached_snapshot)
+        providers[_name] = carry_forward_provider_last_good(providers[_name], cached_snapshot, _name)
 
     # Claude Code statusLine fallback (integrations/claude_code/statusline_capture.py): when
     # the claude.ai cookie path produced no live limits — Cloudflare 403/429, signed out,

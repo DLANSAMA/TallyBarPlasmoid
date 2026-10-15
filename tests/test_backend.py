@@ -819,7 +819,7 @@ def test_carry_forward_staleAsOf_survives_save_load_roundtrip(tmp_path, monkeypa
     monkeypatch.setattr(backend, "SNAPSHOT_PATH", tmp_path / "last_snapshot.json")
     cached = _cached_provider("Claude", [{"label": "Session", "percent": 40}], ts_offset=60.0)
     failing = {"label": "Claude", "status": "api-error", "limits": []}
-    carried = backend.carry_forward_provider_last_good(failing, cached)
+    carried = backend.carry_forward_provider_last_good(failing, cached, "claude")
     assert carried["stale"] is True
 
     snapshot = {"timestamp": _iso(0.0), "ok": True, "providers": {"claude": carried}}
@@ -1156,11 +1156,11 @@ def _iso(offset_seconds: float = 0.0) -> str:
     return ts.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _cached_provider(label, limits, *, status="ok", ts_offset=0.0, extra=None):
+def _cached_provider(label, limits, *, status="ok", ts_offset=0.0, extra=None, key=None):
     entry = {"label": label, "status": status, "limits": limits}
     if extra:
         entry.update(extra)
-    return {"timestamp": _iso(ts_offset), "providers": {label.lower(): entry}}
+    return {"timestamp": _iso(ts_offset), "providers": {key or label.lower(): entry}}
 
 
 def test_carry_forward_transient_within_window_freezes_last_good():
@@ -1169,7 +1169,7 @@ def test_carry_forward_transient_within_window_freezes_last_good():
     good_limits = [{"label": "Session", "percent": 40}]
     cached = _cached_provider("Claude", good_limits, ts_offset=60.0)
     failing = {"label": "Claude", "status": "unauthorized", "limits": [], "message": "403"}
-    out = backend.carry_forward_provider_last_good(failing, cached)
+    out = backend.carry_forward_provider_last_good(failing, cached, "claude")
     assert out["status"] == "ok"
     assert out["limits"] == good_limits
     assert out["stale"] is True
@@ -1181,7 +1181,7 @@ def test_carry_forward_preserves_creditBalance_and_tier():
         "Claude", [{"label": "Session", "percent": 40}], ts_offset=30.0,
         extra={"tier": "Pro", "creditBalance": {"amount": 5.0}})
     failing = {"label": "Claude", "status": "api-error", "limits": []}
-    out = backend.carry_forward_provider_last_good(failing, cached)
+    out = backend.carry_forward_provider_last_good(failing, cached, "claude")
     assert out["tier"] == "Pro"
     assert out["creditBalance"] == {"amount": 5.0}
 
@@ -1191,7 +1191,7 @@ def test_carry_forward_beyond_window_surfaces_original_error():
     must surface after the grace window)."""
     cached = _cached_provider("Claude", [{"label": "Session", "percent": 40}], ts_offset=1000.0)
     failing = {"label": "Claude", "status": "unauthorized", "limits": []}
-    out = backend.carry_forward_provider_last_good(failing, cached, max_stale_seconds=900)
+    out = backend.carry_forward_provider_last_good(failing, cached, "claude", max_stale_seconds=900)
     assert out is failing
     assert out["status"] == "unauthorized"
 
@@ -1200,25 +1200,25 @@ def test_carry_forward_noop_for_non_transient_status():
     cached = _cached_provider("Claude", [{"label": "Session", "percent": 40}], ts_offset=10.0)
     for status in ("ok", "missing-cookies", "cookies-ready", "api-empty"):
         prov = {"label": "Claude", "status": status, "limits": []}
-        assert backend.carry_forward_provider_last_good(prov, cached) is prov
+        assert backend.carry_forward_provider_last_good(prov, cached, "claude") is prov
 
 
 def test_carry_forward_noop_when_provider_already_has_limits():
     cached = _cached_provider("Claude", [{"label": "Session", "percent": 40}], ts_offset=10.0)
     prov = {"label": "Claude", "status": "timeout", "limits": [{"label": "Session", "percent": 1}]}
-    assert backend.carry_forward_provider_last_good(prov, cached) is prov
+    assert backend.carry_forward_provider_last_good(prov, cached, "claude") is prov
 
 
 def test_carry_forward_noop_when_cache_missing_or_degraded():
     failing = {"label": "Claude", "status": "unauthorized", "limits": []}
     # No cache at all.
-    assert backend.carry_forward_provider_last_good(dict(failing), None)["status"] == "unauthorized"
+    assert backend.carry_forward_provider_last_good(dict(failing), None, "claude")["status"] == "unauthorized"
     # Cache present but the matching entry is itself degraded (no live status).
     degraded = _cached_provider("Claude", [], status="api-error", ts_offset=10.0)
-    assert backend.carry_forward_provider_last_good(dict(failing), degraded)["status"] == "unauthorized"
+    assert backend.carry_forward_provider_last_good(dict(failing), degraded, "claude")["status"] == "unauthorized"
     # Cache present but has no entry for this provider.
     other = _cached_provider("Gemini", [{"label": "Session", "percent": 5}], ts_offset=10.0)
-    assert backend.carry_forward_provider_last_good(dict(failing), other)["status"] == "unauthorized"
+    assert backend.carry_forward_provider_last_good(dict(failing), other, "claude")["status"] == "unauthorized"
 
 
 def test_carry_forward_staleAsOf_does_not_ratchet():
@@ -1235,13 +1235,13 @@ def test_carry_forward_staleAsOf_does_not_ratchet():
                                  "limits": [{"label": "Session", "percent": 40}]}},
     }
     failing = {"label": "Claude", "status": "unauthorized", "limits": []}
-    carried1 = backend.carry_forward_provider_last_good(dict(failing), cached1)
+    carried1 = backend.carry_forward_provider_last_good(dict(failing), cached1, "claude")
     assert carried1["staleAsOf"] == original_ts
 
     # Run 2: the carried-forward entry becomes the cache, but with a FRESH top-level timestamp
     # (as save_snapshot would stamp). staleAsOf must ride through unchanged.
     cached2 = {"timestamp": _iso(0.0), "providers": {"claude": carried1}}
-    carried2 = backend.carry_forward_provider_last_good(dict(failing), cached2)
+    carried2 = backend.carry_forward_provider_last_good(dict(failing), cached2, "claude")
     assert carried2["staleAsOf"] == original_ts  # NOT reset to the fresh cache timestamp
 
     # Now push the original past the window: even with a brand-new cache timestamp, age is
@@ -1250,7 +1250,7 @@ def test_carry_forward_staleAsOf_does_not_ratchet():
     carried_expired = dict(carried1)
     carried_expired["staleAsOf"] = expired_origin
     cached3 = {"timestamp": _iso(0.0), "providers": {"claude": carried_expired}}
-    out = backend.carry_forward_provider_last_good(dict(failing), cached3, max_stale_seconds=900)
+    out = backend.carry_forward_provider_last_good(dict(failing), cached3, "claude", max_stale_seconds=900)
     assert out["status"] == "unauthorized"  # window expired off the original fetch time
 
 
@@ -1298,7 +1298,7 @@ def test_carry_forward_drops_cached_cost_summary():
     cached = _cached_provider("Claude", [{"label": "Session", "percent": 40}], ts_offset=60.0,
                               extra={"costSummary": {"cost30d": 1.0}, "creditBalance": {"amount": 5}})
     failing = {"label": "Claude", "status": "unauthorized", "limits": [], "message": "403"}
-    out = backend.carry_forward_provider_last_good(failing, cached)
+    out = backend.carry_forward_provider_last_good(failing, cached, "claude")
     assert out["stale"] is True
     assert "costSummary" not in out
     assert out["creditBalance"] == {"amount": 5}   # network data IS carried
@@ -1497,7 +1497,7 @@ async def test_grok_bot_runs_with_the_background_flag():
 @pytest.mark.asyncio
 async def test_grok_bot_transient_failure_carries_the_last_good_bar():
     good = [{"label": "Weekly", "percent": 30.0}]
-    cached = _cached_provider("Grok Bot", good, ts_offset=60.0)
+    cached = _cached_provider("Grok Bot", good, ts_offset=60.0, key="grokbot")
     failing = {"label": "Grok Bot", "status": "api-error", "limits": [], "message": "HTTP 503"}
     res, _, _ = await _grokbot_snapshot(no_network=False, grok_bot_result=failing, cached=cached)
     gb = res["providers"]["grokbot"]
