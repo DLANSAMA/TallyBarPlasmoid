@@ -59,15 +59,16 @@ ANTIGRAVITY_LEDGER_PATH = Path.home() / ".tallybar" / "antigravity_token_ledger.
 # the IDE ledger; keys namespaced "cli:<session>" so they never collide with the IDE's
 # "<db_stem>:<idx>" keys when the two are merged for costing.
 ANTIGRAVITY_CLI_USAGE_PATH = Path.home() / ".tallybar" / "antigravity_cli_usage.json"
-# Append-only per-month per-provider cost/token rollup. Survives the 35-day
-# Antigravity ledger prune — only Antigravity is lossy; the other providers' parse caches
+# Append-only per-month per-provider cost/token rollup. Survives the Antigravity
+# ledger's retention prune — only Antigravity is lossy; the other providers' parse caches
 # are all-time. Past months freeze once written so the prune can't erode them.
 COST_ARCHIVE_PATH = Path.home() / ".tallybar" / "cost_archive.json"
 # Bump when the disk-scan dating logic changes in a way that needs existing entries rebuilt.
 # On a version mismatch the per-DB scan memo (``dbScanned``) is cleared so every conversation
 # is re-scanned once.
 ANTIGRAVITY_DISK_DATING_VERSION = 3
-ANTIGRAVITY_MAX_DBS_PER_TICK = 64
+# How long a ledger entry is kept; older ones are pruned, and DBs past it are not ingested.
+ANTIGRAVITY_RETENTION_DAYS = 35
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +95,12 @@ from proto_wire import (  # noqa: F401
     _pb_find_usage,
     _pb_generations,
     _pb_read_varint,
+    USAGE_CACHED,
+    USAGE_INPUT,
+    USAGE_MODEL,
+    USAGE_OUTPUT,
+    USAGE_RESPONSE,
+    USAGE_THOUGHTS,
 )
 
 
@@ -101,17 +108,6 @@ def _local_iso(secs: int) -> str:
     """Local-time ``YYYY-MM-DD`` for a unix timestamp (seconds). Used to date disk-scanned
     generations by their embedded protobuf timestamp."""
     return dt.datetime.fromtimestamp(secs).date().isoformat()
-
-
-def _drop_stem_entries(entries: dict[str, Any], stem: str) -> None:
-    """Delete every entry belonging to a conversation stem, whatever separator it used
-    (``':'`` / ``'#'`` / ``'@'``)."""
-    for key in list(entries.keys()):
-        if key == stem:
-            del entries[key]
-            continue
-        if key.startswith(stem) and len(key) > len(stem) and key[len(stem)] in (":", "#", "@"):
-            del entries[key]
 
 
 def _load_antigravity_ledger() -> dict[str, Any]:
@@ -344,10 +340,10 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
         # would inflate "Today"); once it has some, new records are genuinely new.
         colon_stems = {k.rsplit(":", 1)[0] for k in entries if ":" in k}
         at_stems = {k.rsplit("@", 1)[0] for k in entries if "@" in k}
-        # Prune horizon, needed DURING the scan too: a backlog already past it would be
-        # ingested and pruned in the same run, then re-ingested on every refresh. Such DBs
-        # are skipped outright; a stale DB that gets new writes moves inside the horizon.
-        cutoff = (current.date() - dt.timedelta(days=35)).isoformat()
+        # Needed DURING the scan too: a backlog already past the horizon would be ingested
+        # and pruned in the same run, then re-ingested on every refresh. Such DBs are skipped
+        # outright; a stale DB that gets new writes moves inside the horizon.
+        cutoff = (current.date() - dt.timedelta(days=ANTIGRAVITY_RETENTION_DAYS)).isoformat()
         # Per-DB scan memo (additive ledger key, rides the .bak mirror): skip BOTH passes
         # for a DB whose content signature (_db_signature: main + -wal mtime_ns/size)
         # matches its last COMPLETE scan (rows that never create entries can't be skipped
@@ -450,11 +446,11 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                             continue
                         entries[f"{stem}:{idx}"] = {
                             "d": steps_date,
-                            "u": sum(vd.get(2, 0) for vd in found),   # uncached input
-                            "c": sum(vd.get(5, 0) for vd in found),   # cached input
-                            "o": sum(vd.get(3, 0) for vd in found),   # output (candidates)
-                            "t": sum(vd.get(9, 0) for vd in found),   # thoughts
-                            "x": sum(vd.get(10, 0) for vd in found),  # response output (o = t + x)
+                            "u": sum(vd.get(USAGE_INPUT, 0) for vd in found),
+                            "c": sum(vd.get(USAGE_CACHED, 0) for vd in found),
+                            "o": sum(vd.get(USAGE_OUTPUT, 0) for vd in found),
+                            "t": sum(vd.get(USAGE_THOUGHTS, 0) for vd in found),
+                            "x": sum(vd.get(USAGE_RESPONSE, 0) for vd in found),  # o = t + x
                             "me": _dominant_enum(found),  # model enum (for per-model pricing)
                         }
                         if len(found) > 1:
@@ -557,10 +553,10 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                                         continue
                                     entries[key] = {
                                         "d": gen_date,
-                                        "u": vd.get(2, 0),
-                                        "c": vd.get(5, 0),
-                                        "o": vd.get(3, 0),
-                                        "me": vd.get(1, 0),
+                                        "u": vd.get(USAGE_INPUT, 0),
+                                        "c": vd.get(USAGE_CACHED, 0),
+                                        "o": vd.get(USAGE_OUTPUT, 0),
+                                        "me": vd.get(USAGE_MODEL, 0),
                                     }
                                     changed = True
                             continue
@@ -595,7 +591,7 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
             ledger["dbScanned"] = new_memo
             changed = True
 
-        # Prune entries older than 35 days (``cutoff``, computed before the scan).
+        # Prune entries past the retention horizon (``cutoff``, computed before the scan).
         for key in list(entries.keys()):
             e = entries[key]
             if e.get("d", "") < cutoff:

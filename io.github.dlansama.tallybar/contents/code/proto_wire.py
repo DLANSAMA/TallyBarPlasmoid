@@ -8,6 +8,15 @@ from __future__ import annotations
 
 from typing import Any
 
+# Field numbers of an Antigravity usage record.
+USAGE_MODEL = 1       # model enum
+USAGE_INPUT = 2       # uncached input tokens
+USAGE_OUTPUT = 3      # output tokens (thoughts + response)
+USAGE_CACHED = 5      # cached input tokens
+USAGE_MARKER = 6      # 24 = steps.metadata layout, 26 = gen_metadata layout
+USAGE_THOUGHTS = 9    # thinking tokens
+USAGE_RESPONSE = 10   # response tokens (output = thoughts + response)
+
 
 def _pb_read_varint(buf: bytes, i: int) -> tuple[int, int]:
     """Read an unsigned LEB128 varint from buf[i:].
@@ -39,8 +48,8 @@ def _dominant_enum(found: list[dict[int, int]]) -> int:
     """
     if not found:
         return 0
-    best = max(found, key=lambda vd: vd.get(2, 0) + vd.get(5, 0) + vd.get(3, 0))
-    return best.get(1, 0)
+    best = max(found, key=lambda vd: sum(vd.get(f, 0) for f in (USAGE_INPUT, USAGE_CACHED, USAGE_OUTPUT)))
+    return best.get(USAGE_MODEL, 0)
 
 
 def _pb_fields(buf: bytes) -> tuple[dict[int, int], list[tuple[int, bytes]]]:
@@ -132,7 +141,8 @@ def _pb_find_usage(
                 break
         except (IndexError, ValueError):
             break
-    if varints.get(6) in _valid_markers and 1 in varints and 2 in varints:
+    if (varints.get(USAGE_MARKER) in _valid_markers
+            and USAGE_MODEL in varints and USAGE_INPUT in varints):
         out.append(varints)
     for chunk in subs:
         _pb_find_usage(chunk, depth + 1, out, marker)
@@ -187,7 +197,7 @@ def _pb_generations(buf: bytes, require_timestamp: bool = True) -> list[dict[str
         for fn, sub in gsubs:
             if fn == 4 and usage is None:
                 uva, _ = _pb_fields(sub)
-                if uva.get(6) in (24, 26) and 1 in uva and 2 in uva:
+                if uva.get(USAGE_MARKER) in (24, 26) and USAGE_MODEL in uva and USAGE_INPUT in uva:
                     usage = uva
             elif fn == 9 and secs is None:
                 _, s9 = _pb_fields(sub)
@@ -199,11 +209,11 @@ def _pb_generations(buf: bytes, require_timestamp: bool = True) -> list[dict[str
                             break
         if usage is not None and (secs is not None or not require_timestamp):
             out.append({
-                "u": usage.get(2, 0),
-                "c": usage.get(5, 0),
-                "o": usage.get(3, 0),
-                "me": usage.get(1, 0),
-                "mk": usage.get(6, 0),
+                "u": usage.get(USAGE_INPUT, 0),
+                "c": usage.get(USAGE_CACHED, 0),
+                "o": usage.get(USAGE_OUTPUT, 0),
+                "me": usage.get(USAGE_MODEL, 0),
+                "mk": usage.get(USAGE_MARKER, 0),
                 "secs": secs,
             })
     return out
