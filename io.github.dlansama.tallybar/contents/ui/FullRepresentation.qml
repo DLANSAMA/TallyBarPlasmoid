@@ -36,7 +36,7 @@ Item {
         if (root.configError.length > 0)
             root.settingsDrawerOpen = true;
     }
-    property var tabs: ["codex", "claude", "gemini", "antigravity", "grok"]
+    property var tabs: ["codex", "claude", "gemini", "antigravity", "grok", "grokbot"]
     property var screenGeometry: null
     property bool hostExpanded: true
     property bool costDrawerOpen: false
@@ -63,6 +63,7 @@ Item {
     readonly property int costFooterSpacing: 5
     readonly property int costBurnRowHeight: 18
     readonly property int costModelRowHeight: 16
+    readonly property int costTypeRowHeight: 16
     // Extra-usage section height — single source shared by the section's own
     // Layout.preferredHeight AND metricsBodyHeight()'s mirror, so the two can't drift
     // (the documented foot-gun; the metric rows + cost section are already single-sourced
@@ -74,6 +75,9 @@ Item {
         let h = 360;
         if (Number(cost.burnRatePerDay || 0) > 0)
             h += root.costBurnRowHeight + root.costFooterSpacing;   // burn line (= 23)
+        const types = root.costTypeRows(root.costTypePeriod()).length;
+        if (types > 0)    // separator (3 top margin + 1 + 5 spacing) + "BY TYPE" header (19) + N type rows (21 each)
+            h += 9 + 19 + types * (root.costTypeRowHeight + root.costFooterSpacing);
         const models = root.costModelBreakdown().length;
         if (models > 0)   // separator + "TOP MODELS" header (= 6 + 18) + N model rows (21 each)
             h += 6 + 18 + models * (root.costModelRowHeight + root.costFooterSpacing);
@@ -213,9 +217,11 @@ Item {
         return root.tabAccentTintColor(root.selectedProvider, alpha);
     }
 
+    // Six tabs (54+56+56+66+54+54 = 340) must fit the popup's padded dock width (~347);
+    // wider, the row runs past the 16px side padding toward the card edge.
     function switcherTabWidth(provider) {
-        if (provider === "claude" || provider === "gemini") return 60;
-        if (provider === "antigravity") return 78;
+        if (provider === "claude" || provider === "gemini") return 56;
+        if (provider === "antigravity") return 66;
         return 54;
     }
 
@@ -420,6 +426,7 @@ Item {
         case "codex": return i18n("Codex isn't running — start the Codex app to read usage.");
         case "antigravity": return i18n("Antigravity isn't running — open it to read live session usage.");
         case "grok": return i18n("No recent Grok session — start one to see usage.");
+        case "grokbot": return i18n("Not signed in to Grok Bot — open Grok Bot and sign in to see its weekly usage.");
         default: return i18n("%1 isn't running.", root.tabLabel(providerKey));
         }
     }
@@ -498,6 +505,11 @@ Item {
         // fires when there's no concrete problem status to show.
         if (root.loading && (status === "" || status === "ok"))
             return i18n("Fetching usage data…");
+        // Grok Bot's wallet need is its own sign-in, not browser cookies.
+        if (status === "wallet-locked" && root.selectedProvider === "grokbot")
+            return i18n("KWallet is locked. Unlock it to read your Grok Bot sign-in.");
+        if (status === "wallet-state-unknown" && root.selectedProvider === "grokbot")
+            return i18n("KWallet state couldn't be checked. Unlock it and refresh to read your Grok Bot sign-in.");
         if (status === "wallet-locked")
             return i18n("KWallet is locked. Unlock it to read this provider's session cookies.");
         if (status === "wallet-state-unknown")
@@ -844,7 +856,7 @@ Item {
         });
     }
 
-    readonly property var allProviderKeys: ["codex", "claude", "gemini", "antigravity", "grok"]
+    readonly property var allProviderKeys: ["codex", "claude", "gemini", "antigravity", "grok", "grokbot"]
     function providersValue() {
         const p = root.configValue("providers", root.allProviderKeys);
         return Array.isArray(p) && p.length > 0 ? p : root.allProviderKeys;
@@ -1129,21 +1141,122 @@ Item {
     function costSectionHeight() {
         if (!root.hasCostSection())
             return 0;
+        return 107 + (root.costBreakdownText().length > 0 ? 20 : 0);
+    }
+
+    // Usage by type, from the backend's typeBreakdown: uncached input, output, cache reads,
+    // cache writes, then "unsplit" — tokens a provider's own total held beyond its typed
+    // parts. Display order.
+    readonly property var costTypeKinds: ["input", "output", "cacheRead", "cacheWrite", "unsplit"]
+
+    function costTypeLabel(kind) {
+        if (kind === "input")
+            return i18n("Uncached input");
+        if (kind === "output")
+            return i18n("Output");
+        if (kind === "cacheRead")
+            return i18n("Cache reads");
+        if (kind === "cacheWrite")
+            return i18n("Cache writes");
+        return i18n("Not split by type");
+    }
+
+    // One window's ("today" / "7d" / "30d") types that hold anything, in display order, as
+    // [{kind, tokens, cost}]. Empty for a snapshot cached before the split existed.
+    function costTypeRows(windowKey) {
         const cost = root.costSummary() || ({});
-        const hasBreak = String(cost.breakdown || "").trim().length > 0;
-        return 107 + (hasBreak ? 20 : 0);
+        const split = cost.typeBreakdown ? cost.typeBreakdown[windowKey] : null;
+        const rows = [];
+        if (!split)
+            return rows;
+        for (let i = 0; i < root.costTypeKinds.length; ++i) {
+            const kind = root.costTypeKinds[i];
+            const slot = split[kind];
+            if (!slot)
+                continue;
+            const tokens = Number(slot.tokens || 0);
+            const usd = Number(slot.cost || 0);
+            if (tokens > 0 || usd > 0)
+                rows.push({ "kind": kind, "tokens": tokens, "cost": usd });
+        }
+        return rows;
+    }
+
+    // The popout's by-type window follows the Day / Week / Month switch, like Top models.
+    function costTypePeriod() {
+        if (root.costGraphMode === "day")
+            return "today";
+        return root.costGraphMode === "week" ? "7d" : "30d";
+    }
+
+    // The cost section's 30-day line: tokens by type, cache reads and writes apart. A
+    // snapshot cached before the split keeps the backend's lumped "breakdown" line.
+    function costBreakdownText() {
+        const rows = root.costTypeRows("30d");
+        if (rows.length === 0) {
+            const cost = root.costSummary() || ({});
+            return String(cost.breakdown || "").trim();
+        }
+        // Cache reads and writes share one "Cached" item: four items overflow the line at
+        // real volumes, and each line's tooltip and the popout's BY TYPE list keep them apart.
+        let input = 0, output = 0, cached = 0;
+        for (let i = 0; i < rows.length; ++i) {
+            if (rows[i].kind === "input")
+                input = rows[i].tokens;
+            else if (rows[i].kind === "output")
+                output = rows[i].tokens;
+            else if (rows[i].kind === "cacheRead" || rows[i].kind === "cacheWrite")
+                cached += rows[i].tokens;
+        }
+        const parts = [];
+        if (input > 0)
+            parts.push(i18n("Input %1", Fmt.compactCount(input)));
+        if (output > 0)
+            parts.push(i18n("Output %1", Fmt.compactCount(output)));
+        if (cached > 0)
+            parts.push(i18n("Cached %1", Fmt.compactCount(cached)));
+        return parts.join(" · ");
+    }
+
+    // Hover text for one of the cost section's Today / 7-day / 30-day lines: that window
+    // by type, in dollars and tokens.
+    function costTypeTooltip(windowKey) {
+        const rows = root.costTypeRows(windowKey);
+        if (rows.length === 0)
+            return "";
+        const lines = [windowKey === "today" ? i18n("Today by type")
+            : (windowKey === "7d" ? i18n("Last 7 days by type") : i18n("Last 30 days by type"))];
+        for (let i = 0; i < rows.length; ++i)
+            lines.push(i18n("%1: %2 · %3 tok", root.costTypeLabel(rows[i].kind),
+                root.compactUsd(rows[i].cost), Fmt.compactCount(rows[i].tokens)));
+        return lines.join("\n");
     }
 
     function compactUsd(value) {
         return UIHelpers.compactUsd(value);
     }
 
-    // Top per-model cost rows (from the backend's modelBreakdown, already top-6 by $),
-    // capped to a handful for the popout. Each row: {model, cost, tokens}.
+    // The window the Top-models rows cover: the graph mode's own window when the backend
+    // sent its breakdown, else the 30-day list. The header reads this too, so a snapshot
+    // cached before modelBreakdown1d/7d existed never labels 30-day rows "Today".
+    function costModelBreakdownPeriod() {
+        const cost = root.costSummary() || ({});
+        if (root.costGraphMode === "day" && Array.isArray(cost.modelBreakdown1d))
+            return "day";
+        if (root.costGraphMode === "week" && Array.isArray(cost.modelBreakdown7d))
+            return "week";
+        return "month";
+    }
+
+    // Top per-model cost rows for costModelBreakdownPeriod() (from the backend's
+    // modelBreakdown1d / modelBreakdown7d / modelBreakdown, already top-6 by $), capped to
+    // a handful for the popout.
     function costModelBreakdown(limit) {
         const cost = root.costSummary() || ({});
-        const rows = Array.isArray(cost.modelBreakdown) ? cost.modelBreakdown : [];
-        return rows.slice(0, limit || 4);
+        const period = root.costModelBreakdownPeriod();
+        const rows = period === "day" ? cost.modelBreakdown1d
+            : (period === "week" ? cost.modelBreakdown7d : cost.modelBreakdown);
+        return (Array.isArray(rows) ? rows : []).slice(0, limit || 4);
     }
 
     // Prettify a pricing-catalog key for display: "claude-opus-4-7" -> "Claude Opus 4.7",

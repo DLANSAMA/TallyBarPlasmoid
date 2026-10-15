@@ -3,6 +3,7 @@
 import datetime as dt
 import io
 import json
+import stat
 import sys
 from pathlib import Path
 
@@ -14,6 +15,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(CLI_DIR))
 
 from providers import cost as costmod  # noqa: E402
+import pricing_data  # noqa: E402
 from providers import antigravity as agmod  # noqa: E402
 import cli_statusline_capture as cap  # noqa: E402
 
@@ -83,6 +85,15 @@ def test_cli_priced_per_model_not_pro_default(cli_paths, monkeypatch, tmp_path):
     """A Flash CLI session must cost less than the same tokens at the Pro default rate."""
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ide_ledger.json")
+    # A pinned catalog: the resolution order is under test, not today's LiteLLM rates
+    # (this used to read whatever the developer's own pricing cache held). No gpt-oss key,
+    # so that one must come from _EXTRA_MODEL_PRICES. 3.6 Flash is here because the real
+    # active pricing always carries its embedded _FALLBACK_PRICING row.
+    catalog = {"gemini-3.5-flash": {"input": 1.5, "output": 9.0, "cache_read": 0.15},
+               "gemini-3.6-flash": {"input": 0.75, "output": 3.75, "cache_read": 0.075},
+               "gemini-3.1-pro": {"input": 2.0, "output": 12.0, "cache_read": 0.2},
+               "claude-opus-4-6": {"input": 5.0, "output": 25.0, "cache_read": 0.5}}
+    monkeypatch.setattr(costmod, "model_pricing", lambda name, *a, **k: dict(catalog.get(name, {})))
     today = dt.date.today().isoformat()
     toks = {"u": 100000, "c": 0, "o": 50000, "t": 0, "x": 0}
 
@@ -98,8 +109,7 @@ def test_cli_priced_per_model_not_pro_default(cli_paths, monkeypatch, tmp_path):
     opus_cost = cost_with({"model": "Claude Opus 4.6 (Thinking)", **toks})
     # GPT-OSS has no catalog price -> our embedded estimate (cheap), must NOT fall back to Pro.
     oss_cost = cost_with({"model": "GPT-OSS 120B", **toks})
-    # Gemini 3.6 Flash: no LiteLLM key yet -> the _EXTRA_MODEL_PRICES estimate
-    # ($1.50/$7.50, output cheaper than 3.5 Flash's $9), must NOT fall back to Pro.
+    # Gemini 3.6 Flash ($0.75/$3.75, below 3.5 Flash's $1.50/$9) must NOT fall back to Pro.
     flash36_cost = cost_with({"model": "Gemini 3.6 Flash (High)", **toks})
     assert 0 < oss_cost < flash36_cost < flash_cost < pro_cost < opus_cost
 
@@ -111,7 +121,15 @@ def test_gemini_36_enums_resolve(monkeypatch, tmp_path):
         name = costmod._MODEL_ENUM_NAMES[enum]
         assert name.startswith("Gemini 3.6 Flash")
         assert costmod._normalize_model_name(name) == "gemini-3.6-flash"
-    assert "gemini-3.6-flash" in costmod._EXTRA_MODEL_PRICES
+    assert "gemini-3.6-flash" in dict(pricing_data._FALLBACK_PRICING)
+
+
+def test_extra_model_prices_never_shadow_an_embedded_fallback_row():
+    """_FALLBACK_PRICING rows are always merged into the active pricing, so _prices_for
+    finds them first and an _EXTRA_MODEL_PRICES entry with the same key is never read.
+    Two such tables once billed Gemini 3.6 Flash at two different rates."""
+    fallback_keys = {key for key, _ in pricing_data._FALLBACK_PRICING}
+    assert not set(costmod._EXTRA_MODEL_PRICES) & fallback_keys
 
 
 def test_capture_is_idempotent_overwrite(cli_paths, monkeypatch):
@@ -262,6 +280,90 @@ def test_unmapped_enum_shows_self_documenting_placeholder_not_other(monkeypatch,
     labels = {row["model"] for row in summary["modelBreakdown"]}
     assert "Model M84" in labels
     assert "Other" not in labels and "Unknown" not in labels
+
+
+_FLASH_38 = {"input": 0.75, "output": 3.75, "cache_read": 0.075}
+_PRO_31 = {"input": 2.0, "output": 12.0, "cache_read": 0.2}
+
+
+def _summary_for_disk_entry(monkeypatch, tmp_path, me, learned=None, pinned_catalog=True):
+    """Summarize a ledger holding ONE disk-scan entry (enum only, no model string).
+    pinned_catalog=False prices it through the real pricing chain instead."""
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
+    ledger = tmp_path / "ide_ledger.json"
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", ledger)
+    if pinned_catalog:
+        catalog = {"gemini-3.8-flash": _FLASH_38, "gemini-3.1-pro": _PRO_31}
+        monkeypatch.setattr(costmod, "model_pricing", lambda name, *a, **k: dict(catalog.get(name, {})))
+    today = dt.date.today().isoformat()
+    body = {"trackingStarted": today,
+            "entries": {"disk-stem:0": {"d": today, "me": me, "u": 1000, "c": 200, "o": 500}}}
+    if learned:
+        body["learnedModelNames"] = learned
+    ledger.write_text(json.dumps(body))
+    return costmod.antigravity_ledger_cost_summary()
+
+
+# 1000 input + 200 cache read + 500 output: $0.00264 at 3.8 Flash, $0.00804 at the Pro default.
+_FLASH_38_COST = (1000 * 0.75 + 200 * 0.075 + 500 * 3.75) / 1e6
+
+
+def test_learned_enum_bills_at_its_learned_model_not_the_pro_default(monkeypatch, tmp_path):
+    """A disk entry carries only the model enum. When that enum is known only from the
+    ledger's learnedModelNames, the breakdown already showed the learned name, but pricing
+    skipped the learned table and billed the gemini-3.1-pro default (about 3x for Flash)."""
+    assert 1999 not in costmod._MODEL_ENUM_NAMES  # this test is about a LEARNED-only enum
+    summary = _summary_for_disk_entry(monkeypatch, tmp_path, 1999,
+                                      learned={"1999": "Gemini 3.8 Flash (High)"})
+    assert summary["cost30d"] == pytest.approx(_FLASH_38_COST)
+    assert {row["model"] for row in summary["modelBreakdown"]} == {"Gemini 3.8 Flash"}
+
+
+def test_static_enum_table_prices_gemini_3_8_flash_without_learned_names(monkeypatch, tmp_path):
+    """Cold start / a machine that never ran the live RPC: no learnedModelNames, so the
+    static table alone must name and price the current Flash enums."""
+    for me in (1318, 1319, 1320, 1322):
+        summary = _summary_for_disk_entry(monkeypatch, tmp_path, me)
+        assert summary["cost30d"] == pytest.approx(_FLASH_38_COST), me
+        assert {row["model"] for row in summary["modelBreakdown"]} == {"Gemini 3.8 Flash"}
+
+
+def test_static_enum_table_names_and_prices_gemini_4_argon(monkeypatch, tmp_path):
+    """Offline (no catalog on disk), the embedded row prices Argon at $2 in / $0.10 cache
+    read / $10 out. The row was first added as a copy of Gemini 3.1 Pro's ($0.20 / $12)."""
+    monkeypatch.setattr(pricing_data, "PRICING_CACHE_PATH", tmp_path / "missing" / "pricing_cache.json")
+    for me in (1417, 1418, 1419):
+        summary = _summary_for_disk_entry(monkeypatch, tmp_path, me, pinned_catalog=False)
+        assert {row["model"] for row in summary["modelBreakdown"]} == {"Gemini 4 Argon"}
+        assert summary["cost30d"] == pytest.approx((1000 * 2.0 + 200 * 0.10 + 500 * 10.0) / 1e6), me
+
+
+def test_antigravity_model_breakdown_per_window(monkeypatch, tmp_path):
+    """modelBreakdown1d / modelBreakdown7d / modelBreakdown each cover only their own
+    window: one model used today, one three days ago, one 20 days ago."""
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
+    ledger = tmp_path / "ide_ledger.json"
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", ledger)
+    monkeypatch.setattr(costmod, "model_pricing", lambda name, *a, **k: dict(_PRO_31))
+    today = dt.date.today()
+
+    def day(n):
+        return (today - dt.timedelta(days=n)).isoformat()
+
+    used = ((0, 1318), (3, 1418), (20, 1036))  # 3.8 Flash, 4 Argon, 3.1 Pro
+    entries = {f"stem{i}:0": {"d": day(n), "me": me, "u": 1000, "c": 0, "o": 100}
+               for i, (n, me) in enumerate(used)}
+    ledger.write_text(json.dumps({"trackingStarted": day(30), "entries": entries}))
+    summary = costmod.antigravity_ledger_cost_summary()
+    names = {k: {row["model"] for row in summary[k]}
+             for k in ("modelBreakdown1d", "modelBreakdown7d", "modelBreakdown")}
+    assert names["modelBreakdown1d"] == {"Gemini 3.8 Flash"}
+    assert names["modelBreakdown7d"] == {"Gemini 3.8 Flash", "Gemini 4 Argon"}
+    assert names["modelBreakdown"] == {"Gemini 3.8 Flash", "Gemini 4 Argon", "Gemini 3.1 Pro"}
+    assert sum(r["cost"] for r in summary["modelBreakdown1d"]) == pytest.approx(summary["costToday"], abs=1e-6)
+    assert sum(r["cost"] for r in summary["modelBreakdown7d"]) == pytest.approx(summary["cost7d"], abs=1e-6)
 
 
 def test_no_summary_without_tokens(cli_paths, monkeypatch, tmp_path):
@@ -417,12 +519,12 @@ def test_update_antigravity_token_ledger_pruning(monkeypatch, tmp_path):
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
     ledger_path = tmp_path / "ide_ledger.json"
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", ledger_path)
-    
+
     # Save a ledger with some old entries and some recent entries
     current_date = dt.date.today()
     old_date = (current_date - dt.timedelta(days=36)).isoformat()
     recent_date = (current_date - dt.timedelta(days=34)).isoformat()
-    
+
     ledger_data = {
         "trackingStarted": old_date,
         "entries": {
@@ -431,14 +533,14 @@ def test_update_antigravity_token_ledger_pruning(monkeypatch, tmp_path):
         }
     }
     ledger_path.write_text(json.dumps(ledger_data))
-    
+
     # Run the ledger update (or ledger_cost_summary which triggers update)
     res = costmod.update_antigravity_token_ledger()
-    
+
     # Verify old entry is pruned, recent entry is kept
     assert "old:1" not in res["entries"]
     assert "recent:1" in res["entries"]
-    
+
     # Verify file is updated on disk
     saved_data = json.loads(ledger_path.read_text())
     assert "old:1" not in saved_data["entries"]
@@ -455,9 +557,9 @@ def test_update_antigravity_token_ledger_multi_generation_aggregation(monkeypatc
          patch("providers.cost.sqlite3.connect") as mock_connect, \
          patch("providers.cost._load_antigravity_ledger", return_value={"trackingStarted": None, "entries": {}}), \
          patch("providers.cost._save_antigravity_ledger") as mock_save:
-        
+
         mock_con = MagicMock()
-        
+
         def mock_execute(query, *args):
             cursor = MagicMock()
             if "PRAGMA" in query:
@@ -470,18 +572,18 @@ def test_update_antigravity_token_ledger_multi_generation_aggregation(monkeypatc
                 cursor.__iter__.return_value = [(1, b"mockblob")]
                 cursor.fetchall.return_value = [(1, b"mockblob")]
             return cursor
-            
+
         mock_con.execute.side_effect = mock_execute
         mock_connect.return_value = mock_con
-        
+
         # Mock ANTIGRAVITY_CONVERSATION_DIRS to have at least one directory with a DB file
         db_dir = tmp_path / "convs"
         db_dir.mkdir()
         (db_dir / "test.db").write_text("")
         monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", (db_dir,))
-        
+
         res = costmod.update_antigravity_token_ledger()
-        
+
         # Verify the sum of the elements in the entries
         entry = res["entries"]["test:1"]
         assert entry["u"] == 300 # 100 + 200
@@ -490,6 +592,7 @@ def test_update_antigravity_token_ledger_multi_generation_aggregation(monkeypatc
         assert entry["t"] == 15 # 5 + 10
         assert entry["x"] == 6 # 2 + 4
         assert entry["me"] == 1016
+        assert entry["n"] == 2  # two distinct records summed -> bills at the base rates
 
         mock_save.assert_called_once()
 
@@ -802,14 +905,102 @@ def test_cli_statusline_superseded_by_ledger_coverage(monkeypatch, tmp_path):
     assert names == {"Gemini 3.5 Flash", "Gemini 3.1 Pro"}
 
 
-def test_agy_cmdline_discovered_tokenless():
-    # The agy CLI serves the language-server RPC in-process with NO CSRF token; its
-    # cmdline is just "agy" (which the language-server gate rejects).
+def test_agy_cmdline_discovered():
+    # The agy CLI serves the language-server RPC in-process; its cmdline is just "agy"
+    # (which the language-server gate rejects). Without a pid there is no token to look up.
     assert agmod._parse_agy_cmdline(["agy"]) == ("", "http")
     assert agmod._parse_agy_cmdline(["/usr/local/bin/agy", "--continue"]) == ("", "http")
     assert agmod._parse_agy_cmdline(["agy-helper"]) is None
     assert agmod._parse_agy_cmdline([]) is None
     assert agmod._parse_language_server_cmdline("agy", ["agy"]) is None
+
+
+def _fake_proc(root, pid, ppid, env=None, start=1000):
+    """A /proc/<pid> entry: stat (ppid = field 4, start time = field 22) and environ."""
+    d = root / str(pid)
+    d.mkdir(parents=True)
+    fields = ["S", str(ppid)] + ["0"] * 17 + [str(start), "0", "0"]
+    (d / "stat").write_text(f"{pid} (sh (x)) " + " ".join(fields))  # comm may hold spaces/parens
+    (d / "environ").write_bytes(b"\0".join(f"{k}={v}".encode() for k, v in (env or {}).items()) + b"\0")
+
+
+_TOOL_ENV = {"PATH": "/bin", "ANTIGRAVITY_CSRF_TOKEN": "xyz", "ANTIGRAVITY_LS_ADDRESS": "localhost:33387"}
+
+
+def test_agy_csrf_token_found_below_agy_and_remembered(monkeypatch, tmp_path):
+    """agy 1.2.x answers 401 "missing CSRF token" without the header and hands the token only
+    to the commands its agent runs (not to its MCP servers or statusLine). A tool command two
+    levels down carries it; the backend saves it under agy's pid + start time so later
+    refreshes work while no command is running, and drops records of exited processes."""
+    sessions = tmp_path / "antigravity" / "cli_sessions.json"
+    monkeypatch.setattr(agmod, "ANTIGRAVITY_CLI_SESSIONS_PATH", sessions)
+    sessions.parent.mkdir()
+    sessions.write_text(json.dumps({"sessions": {"999": {"csrf_token": "gone", "start": "5"}}}))
+    proc = tmp_path / "proc"
+    _fake_proc(proc, 4242, 1, start=777)                                   # agy
+    _fake_proc(proc, 300, 4242, {"PATH": "/bin"})                          # an MCP server
+    _fake_proc(proc, 301, 4242)                                            # a shell ...
+    _fake_proc(proc, 302, 301, _TOOL_ENV)                                  # ... running a tool
+    _fake_proc(proc, 400, 9999, {"ANTIGRAVITY_CSRF_TOKEN": "another-agys-token"})
+    (proc / "self").mkdir()
+    assert agmod._find_agy_csrf_token(4242, proc_root=str(proc)) == "xyz"
+    saved = json.loads(sessions.read_text())["sessions"]
+    assert list(saved) == ["4242"]
+    assert saved["4242"]["csrf_token"] == "xyz" and saved["4242"]["start"] == "777"
+    assert saved["4242"]["address"] == "localhost:33387"
+    assert stat.S_IMODE(sessions.stat().st_mode) == 0o600
+
+    # The tool has finished: the saved record still answers for this agy process...
+    import shutil
+    shutil.rmtree(proc / "302")
+    assert agmod._find_agy_csrf_token(4242, proc_root=str(proc)) == "xyz"
+    # ...but not for a new process that reused the pid (different start time).
+    shutil.rmtree(proc / "4242")
+    _fake_proc(proc, 4242, 1, start=888)
+    assert agmod._find_agy_csrf_token(4242, proc_root=str(proc)) == ""
+
+
+def test_agy_csrf_token_never_taken_from_another_agys_record(monkeypatch, tmp_path):
+    sessions = tmp_path / "cli_sessions.json"
+    sessions.write_text(json.dumps({"sessions": {"5151": {"csrf_token": "tok-b", "start": "1000"}}}))
+    monkeypatch.setattr(agmod, "ANTIGRAVITY_CLI_SESSIONS_PATH", sessions)
+    proc = tmp_path / "proc"
+    _fake_proc(proc, 4242, 1)
+    _fake_proc(proc, 5151, 1)
+    assert agmod._find_agy_csrf_token(4242, proc_root=str(proc)) == ""
+    assert agmod._find_agy_csrf_token(5151, proc_root=str(proc)) == "tok-b"
+
+
+def test_agy_csrf_token_empty_when_no_source_has_it(monkeypatch, tmp_path):
+    """Fail open: an empty token keeps the old request shape (no CSRF header)."""
+    monkeypatch.setattr(agmod, "ANTIGRAVITY_CLI_SESSIONS_PATH", tmp_path / "missing.json")
+    proc = tmp_path / "proc"
+    _fake_proc(proc, 4242, 1)
+    _fake_proc(proc, 300, 4242, {"PATH": "/bin"})
+    assert agmod._find_agy_csrf_token(4242, proc_root=str(proc)) == ""
+    assert agmod._find_agy_csrf_token(31337, proc_root=str(proc)) == ""  # agy already gone
+    (tmp_path / "corrupt.json").write_text("{not json")
+    monkeypatch.setattr(agmod, "ANTIGRAVITY_CLI_SESSIONS_PATH", tmp_path / "corrupt.json")
+    assert agmod._find_agy_csrf_token(4242, proc_root=str(proc)) == ""
+    assert not (tmp_path / "missing.json").exists()
+
+
+def test_scan_keeps_language_servers_ahead_of_an_agy_with_a_token(monkeypatch):
+    """Account-level calls take the first process. Once agy carries a token it must still
+    rank after a Desktop/IDE language server (sorting on 'has a token' alone put it first)."""
+    import types
+    uid = types.SimpleNamespace(real=agmod.os.getuid())
+    procs = [types.SimpleNamespace(info={"pid": 10, "cmdline": ["agy"], "uids": uid}),
+             types.SimpleNamespace(info={"pid": 20, "uids": uid, "cmdline": [
+                 "/opt/antigravity/language_server", "--app_data_dir", "antigravity",
+                 "--csrf_token", "ls-token"]})]
+    fake_psutil = types.SimpleNamespace(
+        process_iter=lambda attrs: iter(procs),
+        NoSuchProcess=OSError, AccessDenied=OSError, ZombieProcess=OSError)
+    monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+    monkeypatch.setattr(agmod.os, "listdir", lambda path: [])
+    monkeypatch.setattr(agmod, "_find_agy_csrf_token", lambda pid, proc_root="/proc": "agy-token")
+    assert agmod._scan_antigravity_processes() == [(20, "ls-token", "http"), (10, "agy-token", "http")]
 
 
 def test_local_rpc_csrf_header_omitted_when_tokenless(monkeypatch):
@@ -1154,8 +1345,8 @@ def test_antigravity_summary_burn_rate_uses_unbiased_denominator(tmp_path, monke
     # (easier: patch trailing_week_days and verify it is consulted).
     called_with = []
 
-    def fake_twd():
-        v = accounting.trailing_week_days.__wrapped__() if hasattr(accounting.trailing_week_days, "__wrapped__") else accounting.trailing_week_days()
+    def fake_twd(now=None):
+        v = accounting.trailing_week_days(now)
         called_with.append(v)
         return v
 
@@ -1359,12 +1550,12 @@ def test_marker26_and_marker24_steps_disjoint_keys(tmp_path, monkeypatch):
     res = cm.update_antigravity_token_ledger()
     entries = res["entries"]
     # Exactly two entries: steps:0 and gen@1 — the gen-side marker-24 is skipped
-    assert set(entries) == {"dedup:0", "dedup@1"}, (
-        f"Expected {{dedup:0, dedup@1}}, got {set(entries)}"
+    assert set(entries) == {"dedup:0", "dedup@1.0"}, (
+        f"Expected {{dedup:0, dedup@1.0}}, got {set(entries)}"
     )
     assert entries["dedup:0"]["u"] == 100
-    assert entries["dedup@1"]["u"] == 200
-    assert entries["dedup@1"]["me"] == 1026
+    assert entries["dedup@1.0"]["u"] == 200
+    assert entries["dedup@1.0"]["me"] == 1026
 
 
 def test_apply_cost_summaries_replaces_stale_and_clears_on_no_data():
@@ -1382,3 +1573,57 @@ def test_apply_cost_summaries_replaces_stale_and_clears_on_no_data():
     assert "costSummary" not in providers["codex"]
     assert providers["gemini"]["costSummary"]["cost30d"] == 3.0      # not in this scan: untouched
     assert providers["antigravity"]["costSummary"]["cost30d"] == 44.0
+
+
+# --- Prompt-length tiers on the ledger: per call, never on a cumulative session total ----
+# Gemini 3.1 Pro bills a prompt over 200K at $4 / $18 / $0.40 (base $2 / $12 / $0.20).
+_PRO_31_TIERED = {"input": 2.0, "output": 12.0, "cache_read": 0.2, "long_context_threshold": 200_000,
+                  "long_input": 4.0, "long_output": 18.0, "long_cache_read": 0.4}
+
+
+def _tiered_cost_today(monkeypatch, tmp_path, ledger_entries, cli_entries=None):
+    """costToday for one IDE-ledger + statusLine fixture, priced with _PRO_31_TIERED."""
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
+    ledger, cli = tmp_path / "ide_ledger.json", tmp_path / "cli.json"
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", ledger)
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CLI_USAGE_PATH", cli)
+    monkeypatch.setattr(costmod, "model_pricing",
+                        lambda name, *a, **k: dict(_PRO_31_TIERED) if name == "gemini-3.1-pro" else {})
+    today = dt.date.today().isoformat()
+    for path, entries in ((ledger, ledger_entries), (cli, cli_entries or {})):
+        path.write_text(json.dumps({"trackingStarted": today, "entries": {
+            k: {"d": today, **v} for k, v in entries.items()}}))
+    return costmod.antigravity_ledger_cost_summary()["costToday"]
+
+
+def test_ledger_calls_pick_their_own_prompt_tier(monkeypatch, tmp_path):
+    """Each ':' / '@' / '#' ledger entry is one API call, so its own prompt (uncached input
+    + cache reads) picks the tier: 200_001 tokens bills every rate at the tier, exactly
+    200_000 stays on the base rates."""
+    over = {"me": 1016, "u": 150_000, "c": 50_001, "o": 10_000}
+    at = {"me": 1016, "u": 150_000, "c": 50_000, "o": 10_000}
+    # 150_000*4 + 50_001*0.4 + 10_000*18 = 800_000.4 per call, in every per-call namespace.
+    assert _tiered_cost_today(monkeypatch, tmp_path, {"a:0": over, "b@0": over, "c#g0": over}) \
+        == pytest.approx(3 * 0.8000004, abs=1e-6)
+    # 150_000*2 + 50_000*0.2 + 10_000*12 = 430_000
+    assert _tiered_cost_today(monkeypatch, tmp_path, {"a:0": at}) == pytest.approx(0.43, abs=1e-6)
+
+
+def test_cumulative_cli_entry_bills_at_the_base_rates(monkeypatch, tmp_path):
+    """A statusLine "cli:" entry is a whole session's running total: its u + c adds every
+    call's prompt together, so passing 200K says nothing about any one call. It bills at
+    the base rates, where the same numbers as one ledger call take the tier."""
+    session = {"model": "Gemini 3.1 Pro (High)", "u": 150_000, "c": 50_001, "o": 10_000}
+    # 150_000*2 + 50_001*0.2 + 10_000*12 = 430_000.2
+    assert _tiered_cost_today(monkeypatch, tmp_path, {}, {"cli:s": session}) \
+        == pytest.approx(0.43, abs=1e-6)
+
+
+def test_summed_entry_bills_at_the_base_rates_unless_it_is_one_call(monkeypatch, tmp_path):
+    """An entry marked "n" > 1 sums several requests (no single prompt size is known), so it
+    bills at the base rates; the identical entry without "n" is one call and takes the tier."""
+    entry = {"me": 1016, "u": 150_000, "c": 50_001, "o": 10_000}
+    assert _tiered_cost_today(monkeypatch, tmp_path, {"a:0": {**entry, "n": 2}}) \
+        == pytest.approx(0.43, abs=1e-6)       # 150_000*2 + 50_001*0.2 + 10_000*12 (base)
+    assert _tiered_cost_today(monkeypatch, tmp_path, {"a:0": entry}) \
+        == pytest.approx(0.8000004, abs=1e-6)  # same numbers as one call: long tier

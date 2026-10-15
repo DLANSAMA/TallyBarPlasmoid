@@ -191,3 +191,16 @@ def test_checker_ignores_nested_children(tmp_path):
         '}\n'
     )
     assert find_unpinned_texts(f) == [(4, "outer.value")]
+
+
+def test_token_counts_never_sit_in_a_32_bit_int_property():
+    """QML `int` is 32-bit: a day past 2,147,483,647 tokens wrapped negative and the cost
+    popout drew no bar for it. Token and cost values belong in `real` (or `var`)."""
+    pattern = re.compile(r"\bproperty\s+int\s+\w+\s*:.*\b(tokens|cost)\b")
+    hits = [
+        f"{path.relative_to(UI)}:{number}"
+        for path in sorted(UI.rglob("*.qml"))
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if pattern.search(line)
+    ]
+    assert hits == []

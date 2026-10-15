@@ -21,19 +21,26 @@ from pathlib import Path
 from typing import Any
 
 from accounting import (
+    UsageSplit,
+    breakdown_from_split,
     compact_token_count,
     cost_breakdown_line,
     default_provider,
     bucket_add,
+    buckets_model_costs,
     empty_hourly_token_buckets,
     empty_monthly_token_buckets,
+    empty_type_split,
     empty_weekly_token_buckets,
     exact_usd,
     hourly_token_usage,
     model_breakdown_rows,
     model_pricing,
     monthly_token_usage,
+    prompt_tier_prices,
     trailing_week_days,
+    type_breakdown,
+    type_split_add,
     weekly_token_usage,
 )
 from io_helpers import atomic_write_text, flock_with_timeout
@@ -302,7 +309,10 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
             prefix_len = len(cascade_id) + 1
             for key in [k for k in entries
                         if (k.startswith(f"{cascade_id}:") or k.startswith(f"{cascade_id}@"))
-                        and k[prefix_len:].isdigit()]:
+                        and (k[prefix_len:].isdigit()
+                             or (k.startswith(f"{cascade_id}@")
+                                 and re.fullmatch(r"\d+\.\d+", k[prefix_len:]))
+                             )]:
                 del entries[key]
                 changed = True
             for rec in records:
@@ -482,7 +492,9 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                     for idx, blob in chunk_rows:
                         if not isinstance(blob, (bytes, bytearray)):
                             continue
-                        found = _pb_find_usage(bytes(blob))
+                        # A steps row can repeat one request's usage record (field 9 plus an
+                        # exact copy at 28.2); dedupe first so it counts once and stays one call.
+                        found = _dedupe_usage_records(_pb_find_usage(bytes(blob)))
                         if not found:
                             continue
                         entries[f"{stem}:{idx}"] = {
@@ -494,6 +506,10 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                             "x": sum(vd.get(10, 0) for vd in found),  # tool
                             "me": _dominant_enum(found),  # model enum (for per-model pricing)
                         }
+                        if len(found) > 1:
+                            # Several distinct records summed into one entry: no single call's
+                            # size is known, so the cost summary bills it at the base rates.
+                            entries[f"{stem}:{idx}"]["n"] = len(found)
                         changed = True
 
                 # CLI DBs: STOP after the steps pass. Their gen_metadata rows hold
@@ -591,14 +607,20 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                             # at_stems backfill logic for the _pb_generations path below).
                             gen_date = today_iso if stem in at_stems else mtime_fallback_date
                             if gen_date >= cutoff:
-                                entries[f"{stem}@{idx}"] = {
-                                    "d": gen_date,
-                                    "u": sum(vd.get(2, 0) for vd in found),
-                                    "c": sum(vd.get(5, 0) for vd in found),
-                                    "o": sum(vd.get(3, 0) for vd in found),
-                                    "me": _dominant_enum(found),
-                                }
-                                changed = True
+                                # One entry per record (same key shape as the dated path) so
+                                # each is one call that can pick its own prompt-length tier.
+                                for gi, vd in enumerate(found):
+                                    key = f"{stem}@{idx}.{gi}"
+                                    if key in entries:
+                                        continue
+                                    entries[key] = {
+                                        "d": gen_date,
+                                        "u": vd.get(2, 0),
+                                        "c": vd.get(5, 0),
+                                        "o": vd.get(3, 0),
+                                        "me": vd.get(1, 0),
+                                    }
+                                    changed = True
                             continue
                         for gi, gen in enumerate(gens):
                             gen_date = _local_iso(gen["secs"])
@@ -685,19 +707,16 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
         os.close(lock_fd)
 
 
-# Per-MTok prices for models the LiteLLM catalog doesn't carry. ESTIMATES — tune as needed.
-# gpt-oss is an open-weights model whose hosted rates are far below the Pro fallback, so without
-# this it would be badly overstated. Keys are normalised (lowercase, hyphenated) pricing keys.
+# Per-MTok prices for models neither the LiteLLM catalog nor pricing_data's embedded
+# _FALLBACK_PRICING carries. ESTIMATES — tune as needed. gpt-oss is an open-weights model
+# whose hosted rates are far below the Pro fallback, so without this it would be badly
+# overstated. Keys are normalised (lowercase, hyphenated) pricing keys. A published rate
+# belongs in _FALLBACK_PRICING instead: its rows are always merged into the active
+# pricing, so the same key here would never be read.
 _EXTRA_MODEL_PRICES: dict[str, dict[str, float]] = {
     "gpt-oss-120b": {"input": 0.15, "cache_read": 0.075, "output": 0.60},
     "gpt-oss-20b": {"input": 0.05, "cache_read": 0.025, "output": 0.20},
     "gpt-oss": {"input": 0.15, "cache_read": 0.075, "output": 0.60},
-    # Google's published rate (2026-07): $1.50 in / $7.50 out per MTok; cache read at
-    # the standard Gemini 10%-of-input discount. LiteLLM has no gemini-3.6 key yet —
-    # _prices_for tries the live catalog first, so this estimate self-heals to the
-    # catalog rate the moment LiteLLM adds one. Without it, 3.6 Flash usage billed
-    # at the Gemini 3.1 Pro default ($2/$12) — ~60% high on output.
-    "gemini-3.6-flash": {"input": 1.50, "cache_read": 0.15, "output": 7.50},
 }
 
 # Desktop/IDE ledger entries identify the model only by an integer enum (protobuf field 1).
@@ -753,9 +772,13 @@ _MODEL_ENUM_NAMES: dict[int, str] = {
     1036: "Gemini 3.1 Pro (Low)",
     1037: "Gemini 3.1 Pro (High)",
     1050: "Gemini 3.1 Flash Lite",
+    1071: "Gemini 3.6 Flash (High)",
+    1072: "Gemini 3.6 Flash (Medium)",
+    1073: "Gemini 3.6 Flash (Low)",
     1132: "Gemini 3.5 Flash (High)",
     1133: "Gemini 3.5 Flash",  # retired pre-effort-split 3.5 Flash id; effort unknowable
     1187: "Gemini 3.5 Flash (Low)",
+    1198: "Gemini 3.5 Flash Lite",
     # Gemini 3.6 Flash effort trio (M264/M265/M266), confirmed live via
     # GetAvailableModels 2026-07 (matches the ledger's learnedModelNames). Static
     # entries make _prices_for/_rpc_model_pricing_key resolve them even for the
@@ -763,6 +786,25 @@ _MODEL_ENUM_NAMES: dict[int, str] = {
     1264: "Gemini 3.6 Flash (High)",
     1265: "Gemini 3.6 Flash (Medium)",
     1266: "Gemini 3.6 Flash (Low)",
+    1277: "Gemini 3.5 Flash Lite",
+    # Gemini 3.7 Flash (M298-M300) and 3.8 Flash (M318-M320) effort trios, confirmed live
+    # via GetAvailableModels (the ledger's learnedModelNames, 2026-10-01).
+    1298: "Gemini 3.7 Flash (High)",
+    1299: "Gemini 3.7 Flash (Medium)",
+    1300: "Gemini 3.7 Flash (Low)",
+    1318: "Gemini 3.8 Flash (High)",
+    1319: "Gemini 3.8 Flash (Medium)",
+    1320: "Gemini 3.8 Flash (Low)",
+    1322: "Gemini 3.8 Flash",  # TieredModelConfig MODEL_TIER_FLASH subagent model (M322 -> gemini-3.8-flash-tiered)
+    1400: "Claude Opus 5.5 (Low)",
+    1401: "Claude Opus 5.5 (Medium)",
+    1402: "Claude Opus 5.5 (High)",
+    1403: "Claude Sonnet 5.5 (Low)",
+    1404: "Claude Sonnet 5.5 (Medium)",
+    1405: "Claude Sonnet 5.5 (High)",
+    1417: "Gemini 4 Argon (High)",
+    1418: "Gemini 4 Argon (Medium)",
+    1419: "Gemini 4 Argon (Low)",
 }
 
 
@@ -909,9 +951,14 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
         # unknown at capture stores a family-fallback "model" string plus the raw "me"
         # enum — once the enum gets mapped, pricing/attribution heal retroactively.
         # CLI entries (display-name string, no "me") and disk entries ("me" only) are
-        # unaffected by the order.
+        # unaffected by the order. The same static → learned → entry-string chain as
+        # _resolve_model_display: a disk entry whose enum is known only from
+        # learnedModelNames must bill at that model's rate, not the Pro default, or the
+        # breakdown names one model while the cost is computed for another.
         me_key = e.get("me")
-        m = _MODEL_ENUM_NAMES.get(me_key) if isinstance(me_key, int) else None
+        m = None
+        if isinstance(me_key, int):
+            m = _MODEL_ENUM_NAMES.get(me_key) or learned_names.get(me_key)
         if not m:
             m = e.get("model")  # CLI entries carry a display-name string
         if not m:
@@ -933,8 +980,13 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
             _price_cache[key] = chosen
         return _price_cache[key]
 
-    def cost_of(e: dict[str, int]) -> float:
+    def cost_of(e: dict[str, int], per_call: bool = True) -> tuple[float, tuple[float, float, float]]:
         p = _prices_for(e)
+        if per_call:
+            # Prompt-length tier (Gemini 3.1 Pro bills prompts over 200K higher): one call's
+            # prompt is its uncached input + cache reads ("o" is output). Only a per-call
+            # entry can pick one — see the caller for the cumulative "cli:" entries.
+            p = prompt_tier_prices(p, e.get("u", 0) + e.get("c", 0))
         in_rate = p.get("input", 0.0) or 0.0
         cache_rate = p.get("cache_read", 0.0) or 0.0
         out_rate = p.get("output", 0.0) or 0.0
@@ -955,12 +1007,18 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
         # scan agree to the digit), so any per-namespace deflation makes a conversation's
         # cost depend on which path captured it — and change when CLI ownership flips.
         # → tests/test_cli_usage.py::test_cache_read_billed_per_call_*
-        return (e.get("u", 0) * in_rate + e.get("c", 0) * cache_rate
-                + e.get("o", 0) * out_rate) / 1_000_000.0
+        #
+        # Returns the cost and its (input, output, cache-read) parts; the ledger records
+        # no cache writes.
+        u_cost = e.get("u", 0) * in_rate
+        c_cost = e.get("c", 0) * cache_rate
+        o_cost = e.get("o", 0) * out_rate
+        return ((u_cost + c_cost + o_cost) / 1_000_000.0,
+                (u_cost / 1_000_000.0, o_cost / 1_000_000.0, c_cost / 1_000_000.0))
 
     today_cost = month_cost = 0.0
     today_tok = month_tok = 0
-    month_in = month_out = month_cached = 0
+    split_today, split_week, split_month = empty_type_split(), empty_type_split(), empty_type_split()
     model_costs: dict[str, dict[str, Any]] = {}  # per-model 30-day cost/tokens for the breakdown
     daily = empty_weekly_token_buckets(current)
     monthly_buckets = empty_monthly_token_buckets(current)
@@ -981,10 +1039,20 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
     for key, e in entries.items():
         d = e.get("d", "")
         cached = e.get("c", 0)
-        c = cost_of(e)
+        # A ':' / '@' / '#' entry is one API call (gen_metadata stores one entry per
+        # generation), so it picks its own prompt-length tier. A steps row holding several
+        # distinct records is marked "n" and bills at the base rates, like a "cli:" entry:
+        # a sum can't pick a tier. An entry without "n" is one call.
+        # A "cli:" entry is the statusLine's CUMULATIVE session total: its u + c adds up
+        # every call's prompt and says nothing about any one call's size, and the capture
+        # keeps no per-call record to tier from — so it bills at the base rates.
+        c, (u_cost, o_cost, c_cost) = cost_of(e, per_call=not key.startswith("cli:") and e.get("n", 1) == 1)
         # Token VOLUME = total tokens processed = uncached input + cached re-read + output
         # (industry standard: volume includes cache reads; cost bills them discounted).
         tok = e.get("u", 0) + cached + e.get("o", 0)  # o = total output (see cost_of)
+        # By type: input lane = uncached input; output lane = total output; cache reads.
+        split = UsageSplit(tok, c, (e.get("u", 0), e.get("o", 0), cached, 0),
+                           (u_cost, o_cost, c_cost, 0.0))
         # Enum map first (mirrors _prices_for): heals fallback-attributed entries
         # retroactively once a new placeholder enum gets mapped. Then collapse to the
         # display FAMILY — the single choke point that keeps the 30-day breakdown and
@@ -997,20 +1065,19 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
         if d >= m30_iso:
             month_cost += c
             month_tok += tok
-            # input lane = uncached input; output lane = total output; cached = cache reads
-            month_in += e.get("u", 0)
-            month_out += e.get("o", 0)
-            month_cached += cached
+            type_split_add(split_month, split)
             slot = model_costs.setdefault(str(mname), {"cost": 0.0, "tokens": 0})
             slot["cost"] += c
             slot["tokens"] += tok
         if d in daily:
             bucket_add(daily[d], tok, c, mname)
+            type_split_add(split_week, split)
         if d in monthly_buckets and monthly_buckets[d].get("inMonth"):
             bucket_add(monthly_buckets[d], tok, c, mname)
         if d == today_iso:
             today_cost += c
             today_tok += tok
+            type_split_add(split_today, split)
             h = e.get("h")
             if isinstance(h, int) and 0 <= h <= 23:
                 bucket_add(hourly[h], tok, c, mname)
@@ -1031,7 +1098,7 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
     # "Last 7 days" = the daily buckets summed, so it matches the Week graph's bars exactly.
     week_tok = sum(b["tokens"] for b in daily.values())
     week_cost = sum(b["cost"] for b in daily.values())
-    burn_rate = week_cost / trailing_week_days()  # trailing-7-day average $/day (unbiased)
+    burn_rate = week_cost / trailing_week_days(current)  # trailing-7-day average $/day (unbiased)
     result = {
         "title": "Cost (if pay-per-use)",
         "today": f"Today: {exact_usd(today_cost)} · {compact_token_count(today_tok)} tok",
@@ -1052,8 +1119,11 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
         "burnRatePerDay": round(burn_rate, 6),
         "projectedMonthlyCost": round(burn_rate * 30.0, 6),
         "modelBreakdown": model_breakdown_rows(model_costs),
+        "modelBreakdown7d": model_breakdown_rows(buckets_model_costs(daily)),
+        "modelBreakdown1d": model_breakdown_rows(daily.get(today_iso, {}).get("models")),
+        "typeBreakdown": type_breakdown(split_today, split_week, split_month),
     }
-    line = cost_breakdown_line(month_in, month_out, month_cached)
+    line = cost_breakdown_line(*breakdown_from_split(split_month))
     if line:
         result["breakdown"] = line
     return result
@@ -1184,9 +1254,10 @@ def compute_local_cost_summaries(deadline: float | None = None) -> dict[str, dic
     finish — keeping the summaries OUT of ``providers`` until then is what makes a scan
     timeout a clean no-op (no torn write to roll back). The ``deadline`` is threaded into
     the Antigravity ledger's per-DB scan loop exactly as before, AND into each local-log
-    summarizer's file walk (accounting._cached_log_records) — a slow cold parse checks in
-    against the same budget instead of running unbounded and self-perpetuating across
-    refreshes with no incremental checkpoint."""
+    summarizer's file walk (accounting._cached_log_records). A walk the deadline cuts
+    checkpoints its parse cache and raises LogScanIncomplete (a TimeoutError), so a slow
+    cold parse finishes over several refreshes instead of restarting each time, and no
+    summary — nor the cost archive below — is ever built from partial records."""
     from accounting import (local_claude_token_summary, local_codex_token_summary,
                             local_gemini_token_summary, local_grok_token_summary)
     from .grok import grok_billing_period

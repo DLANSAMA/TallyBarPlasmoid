@@ -1,4 +1,4 @@
-.PHONY: install upgrade remove build test lint qmllint typecheck check preview screenshots pot clean
+.PHONY: install upgrade remove build test lint qmllint typecheck check preview screenshots render-baselines pot clean
 
 APPLET := io.github.dlansama.tallybar
 VENV := .venv/bin
@@ -101,33 +101,67 @@ preview:
 	    exit 1; \
 	fi
 
-# Re-render docs/screenshots/*.png from the same mock fixture the preview uses.
-# Runs fully offscreen (no Plasma session, no display) and never touches real
-# usage data. QT_QUICK_BACKEND=software: the offscreen platform has no GL
-# surface. XDG_ICON_THEME=breeze-dark: without it Kirigami.Icon resolves the
-# light Breeze glyphs, which vanish against the widget's dark card.
-# XDG_CONFIG_HOME: a repo-local kdeglobals pins the icon theme (the kde platform theme
-# reads it from there, overriding XDG_ICON_THEME) so renders don't follow the developer's
-# desktop theme. SHOT_DAY pins the day the fixture's week/month buckets are rebased onto,
-# so the PNGs are byte-stable on any day. tests/test_qml_render.py mirrors both.
+# Offscreen renders of the widget's own QML (no Plasma session, no display).
+# QT_QUICK_BACKEND=software: the offscreen platform has no GL surface.
+# XDG_ICON_THEME=breeze-dark: without it Kirigami.Icon resolves the light Breeze glyphs,
+# which vanish against the widget's dark card. XDG_CONFIG_HOME: a repo-local kdeglobals
+# pins the icon theme (the kde platform theme reads it from there, overriding
+# XDG_ICON_THEME) so renders don't follow the developer's desktop theme.
 SHOT_DAY := 2026-09-17
 SHOT_ENV := $(QML_ENV) QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
             XDG_ICON_THEME=breeze-dark QT_QPA_PLATFORMTHEME=kde \
             XDG_CONFIG_HOME=$(CURDIR)/tools/preview/xdg-config
 SHOT := tools/preview/screenshot.qml
+BACKEND := $(APPLET)/contents/code/backend.py
+
+DEMO := tools/preview/demo_gif.py
+# The pointer drawn in walk= renders: a 24 px Breeze cursor at the grab's default scale=2.
+CURSOR_PX := 48
+
+# README images (docs/screenshots/): the widget and cost-flyout PNGs plus cost-demo.gif (a
+# pointer touring the flyout's three tabs), all from ONE fresh backend snapshot of THIS
+# machine's real usage, fetched the way the widget fetches it (--background: no KWallet
+# prompt). The snapshot and the GIF's frames live in a temp dir, removed on exit. The images
+# are published and show real spend: look at every one before committing. They change with
+# every refresh, so the render tests compare against render-baselines instead. The GIF needs
+# ffmpeg, Qt's QtTest QML module and the Breeze cursor theme.
 screenshots:
 	@command -v qml6 > /dev/null 2>&1 || { \
 	    echo "qml6 not found — install qt6-declarative (qt6-tools)"; exit 1; }
+	@command -v ffmpeg > /dev/null 2>&1 || { echo "ffmpeg not found — install ffmpeg"; exit 1; }
 	@mkdir -p docs/screenshots
-	@$(SHOT_ENV) qml6 $(SHOT) -- today=$(SHOT_DAY) provider=claude      out=docs/screenshots/widget-claude.png
-	@$(SHOT_ENV) qml6 $(SHOT) -- today=$(SHOT_DAY) provider=antigravity out=docs/screenshots/widget-antigravity.png
+	@tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
+	python3 $(BACKEND) --once --timeout 12 --background > "$$tmp/snapshot.json" && \
+	$(MAKE) --no-print-directory _render OUTDIR=docs/screenshots SOURCE="snapshot=$$tmp/snapshot.json" && \
+	python3 $(DEMO) cursors "$$tmp/cursors" $(CURSOR_PX) && mkdir "$$tmp/frames" && \
+	$(SHOT_ENV) qml6 $(SHOT) -- snapshot="$$tmp/snapshot.json" component=CostPopout graphMode=day \
+	    walk=tour demo="$$tmp/frames" cursors="$$tmp/cursors" && \
+	python3 $(DEMO) assemble "$$tmp/frames" docs/screenshots/cost-demo.gif 624
+	@echo "Wrote docs/screenshots/*.png and cost-demo.gif"
+
+# Render baselines (tests/render-baselines/): the same shots from the mock fixture, with
+# its week/month buckets rebased onto SHOT_DAY so the PNGs are byte-stable on any day, plus
+# the Day tab with a pointer resting on its busiest bar (its tooltip must show).
+# tests/test_qml_render.py compares against these and mirrors SHOT_DAY + SHOT_ENV.
+render-baselines:
+	@command -v qml6 > /dev/null 2>&1 || { \
+	    echo "qml6 not found — install qt6-declarative (qt6-tools)"; exit 1; }
+	@mkdir -p tests/render-baselines
+	@$(MAKE) --no-print-directory _render OUTDIR=tests/render-baselines SOURCE="today=$(SHOT_DAY)"
+	@tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && python3 $(DEMO) cursors "$$tmp" $(CURSOR_PX) && \
+	$(SHOT_ENV) qml6 $(SHOT) -- today=$(SHOT_DAY) component=CostPopout graphMode=day walk=hover \
+	    cursors="$$tmp" out=tests/render-baselines/cost-day-hover.png
+	@echo "Wrote tests/render-baselines/*.png"
+
+_render:
+	@$(SHOT_ENV) qml6 $(SHOT) -- $(SOURCE) provider=claude      out=$(OUTDIR)/widget-claude.png
+	@$(SHOT_ENV) qml6 $(SHOT) -- $(SOURCE) provider=antigravity out=$(OUTDIR)/widget-antigravity.png
 	@# Cost flyout — one shot per Day/Week/Month tab. Driven through the widget's own
 	@# costGraphMode/costDrawerOpen state, so these can only show a view the widget can
 	@# actually reach. Placement beside the widget still needs a live session to verify.
-	@$(SHOT_ENV) qml6 $(SHOT) -- today=$(SHOT_DAY) component=CostPopout graphMode=day   out=docs/screenshots/cost-day.png
-	@$(SHOT_ENV) qml6 $(SHOT) -- today=$(SHOT_DAY) component=CostPopout graphMode=week  out=docs/screenshots/cost-week.png
-	@$(SHOT_ENV) qml6 $(SHOT) -- today=$(SHOT_DAY) component=CostPopout graphMode=month out=docs/screenshots/cost-month.png
-	@echo "Wrote docs/screenshots/*.png"
+	@$(SHOT_ENV) qml6 $(SHOT) -- $(SOURCE) component=CostPopout graphMode=day   out=$(OUTDIR)/cost-day.png
+	@$(SHOT_ENV) qml6 $(SHOT) -- $(SOURCE) component=CostPopout graphMode=week  out=$(OUTDIR)/cost-week.png
+	@$(SHOT_ENV) qml6 $(SHOT) -- $(SOURCE) component=CostPopout graphMode=month out=$(OUTDIR)/cost-month.png
 
 # Regenerate the translation template from the i18n() calls in the QML.
 # CLAUDE.md tells contributors to run this after adding user-visible prose; the

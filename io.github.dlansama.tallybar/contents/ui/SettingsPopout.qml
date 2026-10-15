@@ -269,7 +269,9 @@ PlasmaCore.PopupPlasmaWindow {
 
                         property bool act: root.providerEnabled(modelData)
 
-                        width: (root.settingsWidth - 28 - 18) / root.allProviderKeys.length
+                        // Share the row with the Row's real gaps (spacing 6 × n-1), so a
+                        // sixth provider doesn't push the last chip past the card edge.
+                        width: (root.settingsWidth - 28 - 6 * (root.allProviderKeys.length - 1)) / root.allProviderKeys.length
                         height: 28
                         radius: 7
                         color: act ? root.tabAccentTintColor(modelData, 0.24) : (provMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.08) : Qt.rgba(1, 1, 1, 0.04))
@@ -322,7 +324,9 @@ PlasmaCore.PopupPlasmaWindow {
                         // Muted reads as the "active" (highlighted) chip here.
                         property bool act: root.providerMuted(modelData)
 
-                        width: (root.settingsWidth - 28 - 18) / root.allProviderKeys.length
+                        // Share the row with the Row's real gaps (spacing 6 × n-1), so a
+                        // sixth provider doesn't push the last chip past the card edge.
+                        width: (root.settingsWidth - 28 - 6 * (root.allProviderKeys.length - 1)) / root.allProviderKeys.length
                         height: 28
                         radius: 7
                         color: act ? root.accentTintColor(0.24) : (muteMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.08) : Qt.rgba(1, 1, 1, 0.04))

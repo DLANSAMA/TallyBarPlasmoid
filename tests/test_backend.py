@@ -1,4 +1,5 @@
 import datetime as dt
+import json
 from pathlib import Path
 from unittest.mock import patch, mock_open, MagicMock
 
@@ -17,7 +18,7 @@ import cookies
 async def test_run_threaded_provider_success():
     def dummy_func(x):
         return {"status": "ok", "value": x}
-    
+
     res = await http_helpers.run_threaded_provider(
         dummy_func,
         42,
@@ -30,7 +31,7 @@ async def test_run_threaded_provider_success():
 async def test_run_threaded_provider_exception():
     def dummy_func():
         raise ValueError("Oops")
-    
+
     res = await http_helpers.run_threaded_provider(
         dummy_func,
         timeout=1.0,
@@ -206,19 +207,19 @@ async def test_build_snapshot_resilience_on_timeout():
 def test_read_firefox_cookies_quoting(tmp_path):
     import urllib.parse
     special_path = tmp_path / "path with spaces and # hashes" / "cookies.sqlite"
-    
+
     with patch("cookies.sqlite_copy") as mock_sqlite_copy, \
          patch("sqlite3.connect") as mock_connect:
-        
+
         mock_sqlite_copy.return_value.__enter__.return_value = special_path
         mock_sqlite_copy.return_value.__exit__.return_value = None
-        
+
         mock_con = MagicMock()
         mock_con.execute.return_value = []
         mock_connect.return_value = mock_con
-        
+
         cookies.read_firefox_cookies(Path("/dummy/firefox/profile/cookies.sqlite"), ())
-        
+
         expected_uri = f"file:{urllib.parse.quote(str(special_path))}?mode=ro"
         mock_connect.assert_any_call(expected_uri, uri=True, timeout=1.0)
 
@@ -238,7 +239,7 @@ def test_post_local_json_ssl_relaxed():
         )
         assert status == 200
         assert data == {"status": "ok"}
-        
+
         args, kwargs = mock_urlopen.call_args
         context = kwargs["context"]
         assert context.check_hostname is False
@@ -365,6 +366,38 @@ async def test_cost_summary_timeout_leaves_providers_intact():
     assert res["diagnostics"].get("cost_summary_timeout") is True
     for prov in res["providers"].values():
         assert "_SENTINEL_" not in (prov.get("costSummary") or {})  # apply was skipped on timeout
+
+
+@pytest.mark.asyncio
+async def test_cut_log_scan_reports_a_cost_timeout_not_partial_totals():
+    """A parse-cache walk the deadline cuts raises LogScanIncomplete (after checkpointing).
+    It lands in the same branch as the outer timeout: the banner flag is set and no summary
+    is applied, so understated totals never show as if complete."""
+    from accounting import LogScanIncomplete
+    args = MagicMock()
+    args.no_network = False
+    args.timeout = 1.0
+
+    def cut_compute(deadline=None):
+        raise LogScanIncomplete("log scan of projects ran out of time; progress saved")
+
+    async def fast_ok(func, *a, **k):
+        return {"status": "ok", "limits": []}
+
+    async def benign_rpc(*a, **k):
+        return {"label": "Codex", "status": "not-running", "limits": []}
+
+    with patch("backend.load_config", return_value={}), \
+         patch("backend.load_snapshot", return_value={}), \
+         patch("backend.collect_browser_sessions", return_value=([], {})), \
+         patch("backend.run_threaded_provider", side_effect=fast_ok), \
+         patch("backend.run_codex_rpc", side_effect=benign_rpc), \
+         patch("backend.compute_local_cost_summaries", side_effect=cut_compute):
+        res = await backend.build_snapshot(args)
+
+    assert res["diagnostics"].get("cost_summary_timeout") is True
+    assert "cost_summary_error" not in res["diagnostics"]
+    assert all("costSummary" not in p for p in res["providers"].values())
 
 
 # --- Codex RPC -> cookie fallback selection in build_snapshot ---
@@ -1410,3 +1443,190 @@ def test_owned_by_current_user_real_proc():
     assert providers.antigravity._owned_by_current_user(_os.getpid()) is True
     assert providers.antigravity._owned_by_current_user(1) is (_os.getuid() == 0)   # init: root's
     assert providers.antigravity._owned_by_current_user(2**22 + 12345) is False     # no such pid
+
+
+# --- Grok Bot: network-only, wired through run_threaded_provider ---------------------
+
+async def _grokbot_snapshot(no_network, grok_bot_result=None, cached=None):
+    """build_snapshot with every provider mocked. run_threaded_provider really calls the
+    Grok Bot adapter (so the wiring is exercised) and stubs everything else."""
+    args = MagicMock()
+    args.no_network = no_network
+    args.background = True
+    args.timeout = 1.0
+    scheduled = []
+
+    async def threaded(func, *a, **k):
+        scheduled.append(func.__name__)
+        if func.__name__ == "_run_grok_bot":
+            return func(*a)
+        return {"status": "ok", "limits": []}
+
+    async def benign_rpc(*a, **k):
+        return {"label": "Codex", "status": "not-running", "limits": []}
+
+    grok_bot = MagicMock(return_value=grok_bot_result)
+    with patch("backend.load_config", return_value={}), \
+         patch("backend.load_snapshot", return_value=cached or {}), \
+         patch("backend.collect_browser_sessions", return_value=([], {})), \
+         patch("backend.run_threaded_provider", side_effect=threaded), \
+         patch("backend.run_codex_rpc", side_effect=benign_rpc), \
+         patch("backend.run_grok_bot", grok_bot), \
+         patch("providers.grok_bot._default_http_text", side_effect=AssertionError("network used")), \
+         patch("backend.compute_local_cost_summaries", side_effect=lambda deadline=None: {}):
+        res = await backend.build_snapshot(args)
+    return res, grok_bot, scheduled
+
+
+@pytest.mark.asyncio
+async def test_grok_bot_is_not_scheduled_with_no_network():
+    res, grok_bot, scheduled = await _grokbot_snapshot(no_network=True)
+    grok_bot.assert_not_called()
+    assert "_run_grok_bot" not in scheduled
+    gb = res["providers"]["grokbot"]
+    assert gb["label"] == "Grok Bot" and gb["status"] == "idle"
+    assert "network" in gb["message"].lower()
+    assert gb["accentColor"] == "#e6e6e6"
+
+
+@pytest.mark.asyncio
+async def test_grok_bot_runs_with_the_background_flag():
+    live = {"label": "Grok Bot", "status": "ok", "source": "grok-bot",
+            "limits": [{"label": "Weekly", "percent": 42.0, "windowMinutes": 10080}]}
+    res, grok_bot, scheduled = await _grokbot_snapshot(no_network=False, grok_bot_result=live)
+    grok_bot.assert_called_once_with(1.0, background=True)
+    assert res["providers"]["grokbot"]["limits"][0]["percent"] == 42.0
+
+
+@pytest.mark.asyncio
+async def test_grok_bot_transient_failure_carries_the_last_good_bar():
+    good = [{"label": "Weekly", "percent": 30.0}]
+    cached = _cached_provider("Grok Bot", good, ts_offset=60.0)
+    failing = {"label": "Grok Bot", "status": "api-error", "limits": [], "message": "HTTP 503"}
+    res, _, _ = await _grokbot_snapshot(no_network=False, grok_bot_result=failing, cached=cached)
+    gb = res["providers"]["grokbot"]
+    assert gb["status"] == "ok" and gb["stale"] is True
+    assert gb["limits"][0]["percent"] == 30.0
+
+
+async def _grok_snapshot(no_network):
+    """build_snapshot with every provider mocked; run_threaded_provider really calls the
+    Grok adapter (so the network flag's wiring is exercised) and stubs everything else."""
+    args = MagicMock()
+    args.no_network = no_network
+    args.background = True
+    args.timeout = 1.0
+
+    async def threaded(func, *a, **k):
+        if func.__name__ == "_run_grok":
+            return func(*a)
+        return {"status": "ok", "limits": []}
+
+    async def benign_rpc(*a, **k):
+        return {"label": "Codex", "status": "not-running", "limits": []}
+
+    grok_local = MagicMock(return_value={"label": "Grok", "status": "ok", "source": "grok-billing-api",
+                                         "limits": [{"label": "Weekly", "percent": 8.0}]})
+    with patch("backend.load_config", return_value={}), \
+         patch("backend.load_snapshot", return_value={}), \
+         patch("backend.collect_browser_sessions", return_value=([], {})), \
+         patch("backend.run_threaded_provider", side_effect=threaded), \
+         patch("backend.run_codex_rpc", side_effect=benign_rpc), \
+         patch("backend.run_grok_local", grok_local), \
+         patch("providers.grok._default_http_text", side_effect=AssertionError("network used")), \
+         patch("backend.compute_local_cost_summaries", side_effect=lambda deadline=None: {}):
+        res = await backend.build_snapshot(args)
+    return res, grok_local
+
+
+@pytest.mark.asyncio
+async def test_grok_asks_the_live_endpoint_when_the_network_is_allowed():
+    res, grok_local = await _grok_snapshot(no_network=False)
+    grok_local.assert_called_once_with(1.0, network=True)
+    assert res["providers"]["grok"]["limits"][0]["percent"] == 8.0
+
+
+@pytest.mark.asyncio
+async def test_grok_reads_only_its_log_with_no_network():
+    res, grok_local = await _grok_snapshot(no_network=True)
+    grok_local.assert_called_once_with(1.0, network=False)
+    assert res["providers"]["grok"]["limits"][0]["percent"] == 8.0
+
+
+# --- Enabled-tab migration: a provider added in a release is new, not "turned off" ----
+
+def test_public_config_without_a_saved_list_enables_every_provider():
+    assert backend.public_config({})["providers"] == list(backend.PROVIDER_ORDER)
+    assert "grokbot" in backend.PROVIDER_ORDER
+
+
+def test_public_config_pre_catalog_list_gains_grok_bot_but_keeps_removals():
+    # Saved before Grok Bot existed, with Grok switched off by the user.
+    old = {"providers": ["codex", "claude", "gemini", "antigravity"]}
+    assert backend.public_config(old)["providers"] == ["codex", "claude", "gemini", "antigravity", "grokbot"]
+
+
+def test_public_config_respects_grok_bot_turned_off_after_the_catalog_knew_it():
+    cfg = {"providers": ["codex", "claude"], "providerCatalog": list(backend.PROVIDER_ORDER)}
+    assert backend.public_config(cfg)["providers"] == ["codex", "claude"]
+
+
+def test_update_config_values_settles_the_old_list_before_stamping_the_catalog(tmp_path, monkeypatch):
+    monkeypatch.setattr(backend, "CONFIG_PATH", tmp_path / ".tallybar" / "config.json")
+    backend.CONFIG_PATH.parent.mkdir(parents=True)
+    backend.CONFIG_PATH.write_text(json.dumps({"providers": ["codex", "claude", "gemini", "antigravity"]}))
+    # An unrelated save must not turn Grok Bot (absent from the old list) into "off".
+    out = backend.update_config_values({"notificationsEnabled": False})
+    assert out["providerCatalog"] == list(backend.PROVIDER_ORDER)
+    assert out["providers"] == ["codex", "claude", "gemini", "antigravity", "grokbot"]
+    # Now the user turns Grok Bot off: it stays off.
+    out = backend.update_config_values({"providers": ["codex", "claude", "gemini", "antigravity"]})
+    assert backend.public_config(out)["providers"] == ["codex", "claude", "gemini", "antigravity"]
+    assert backend.public_config(backend.load_config())["providers"] == ["codex", "claude", "gemini", "antigravity"]
+
+
+@pytest.mark.asyncio
+async def test_pre_upgrade_price_cache_is_refetched_at_once():
+    """A pricing cache saved before prompt tiers (no "version") is refused by get_pricing,
+    so build_snapshot refetches the catalog on this refresh instead of waiting for the
+    file to age past the 24h TTL. A fresh current-version cache is left alone."""
+    import time as _time
+    import pricing_data
+    args = MagicMock()
+    args.no_network = False
+    args.timeout = 1.0
+    refreshed = []
+
+    async def fast_ok(func, *a, **k):
+        return {"status": "ok", "limits": []}
+
+    async def fake_codex_rpc(timeout):
+        return {"status": "ok", "limits": []}
+
+    async def fake_codex_cookie(cookies, timeout):
+        return {"status": "ok", "limits": []}
+
+    async def fake_claude(cookies, timeout, prev=None):
+        return {"status": "ok", "limits": []}
+
+    async def record_refresh(*a, **k):
+        refreshed.append(True)
+
+    cache = pricing_data.PRICING_CACHE_PATH
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    for version, expect_refresh in ((None, True), (pricing_data.PRICING_CACHE_VERSION, False)):
+        payload = {"fetchedAt": _time.time(), "pricing": [["m", {"input": 1.0}]]}
+        if version is not None:
+            payload["version"] = version
+        cache.write_text(json.dumps(payload), encoding="utf-8")
+        refreshed.clear()
+        with patch("backend.load_config", return_value={}), \
+             patch("backend.collect_browser_sessions", return_value=([], {})), \
+             patch("backend.run_threaded_provider", side_effect=fast_ok), \
+             patch("backend.run_codex_rpc", side_effect=fake_codex_rpc), \
+             patch("backend.run_openai_cookie_api", side_effect=fake_codex_cookie), \
+             patch("backend.run_claude_api", side_effect=fake_claude), \
+             patch("backend.compute_local_cost_summaries", side_effect=lambda deadline=None: {}), \
+             patch("pricing_data.refresh_pricing", record_refresh):
+            await backend.build_snapshot(args)
+        assert bool(refreshed) is expect_refresh, version

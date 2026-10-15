@@ -663,7 +663,77 @@
             "tokens": 121000000
           }
         ],
-        "breakdown": "Input 14.2M · Output 2.1M · Cached 105M"
+        "modelBreakdown7d": [
+          {
+            "model": "gpt-5.2-codex",
+            "cost": 8.0,
+            "tokens": 33400000
+          }
+        ],
+        "modelBreakdown1d": [
+          {
+            "model": "gpt-5.2-codex",
+            "cost": 1.42,
+            "tokens": 4300000
+          }
+        ],
+        "breakdown": "Input 14.2M · Output 2.1M · Cached 105M",
+        "typeBreakdown": {
+          "today": {
+            "input": {
+              "tokens": 500000,
+              "cost": 0.66
+            },
+            "output": {
+              "tokens": 75000,
+              "cost": 0.48
+            },
+            "cacheRead": {
+              "tokens": 3725000,
+              "cost": 0.28
+            },
+            "cacheWrite": {
+              "tokens": 0,
+              "cost": 0.0
+            }
+          },
+          "7d": {
+            "input": {
+              "tokens": 3900000,
+              "cost": 3.7
+            },
+            "output": {
+              "tokens": 580000,
+              "cost": 2.75
+            },
+            "cacheRead": {
+              "tokens": 28920000,
+              "cost": 1.55
+            },
+            "cacheWrite": {
+              "tokens": 0,
+              "cost": 0.0
+            }
+          },
+          "30d": {
+            "input": {
+              "tokens": 14200000,
+              "cost": 12.4
+            },
+            "output": {
+              "tokens": 2100000,
+              "cost": 9.2
+            },
+            "cacheRead": {
+              "tokens": 104700000,
+              "cost": 5.25
+            },
+            "cacheWrite": {
+              "tokens": 0,
+              "cost": 0.0
+            }
+          }
+        }
       }
     },
     "claude": {
@@ -1836,7 +1906,97 @@
             "tokens": 22000000
           }
         ],
-        "breakdown": "Input 3.1M · Output 9.4M · Cached 299M"
+        "modelBreakdown7d": [
+          {
+            "model": "claude-opus-4-5",
+            "cost": 16.4,
+            "tokens": 37500000
+          },
+          {
+            "model": "claude-sonnet-4-5",
+            "cost": 7.86,
+            "tokens": 40200000
+          },
+          {
+            "model": "claude-haiku-4-5",
+            "cost": 1.82,
+            "tokens": 6400000
+          }
+        ],
+        "modelBreakdown1d": [
+          {
+            "model": "claude-opus-4-5",
+            "cost": 2.71,
+            "tokens": 5200000
+          },
+          {
+            "model": "claude-sonnet-4-5",
+            "cost": 1.18,
+            "tokens": 6900000
+          },
+          {
+            "model": "claude-haiku-4-5",
+            "cost": 0.23,
+            "tokens": 1000000
+          }
+        ],
+        "breakdown": "Input 3.1M · Output 9.4M · Cached 300M",
+        "typeBreakdown": {
+          "today": {
+            "input": {
+              "tokens": 120000,
+              "cost": 0.33
+            },
+            "output": {
+              "tokens": 410000,
+              "cost": 1.89
+            },
+            "cacheRead": {
+              "tokens": 12200000,
+              "cost": 1.23
+            },
+            "cacheWrite": {
+              "tokens": 370000,
+              "cost": 0.67
+            }
+          },
+          "7d": {
+            "input": {
+              "tokens": 800000,
+              "cost": 2.15
+            },
+            "output": {
+              "tokens": 2600000,
+              "cost": 11.94
+            },
+            "cacheRead": {
+              "tokens": 78300000,
+              "cost": 7.79
+            },
+            "cacheWrite": {
+              "tokens": 2400000,
+              "cost": 4.2
+            }
+          },
+          "30d": {
+            "input": {
+              "tokens": 3100000,
+              "cost": 8.2
+            },
+            "output": {
+              "tokens": 9400000,
+              "cost": 44.1
+            },
+            "cacheRead": {
+              "tokens": 290500000,
+              "cost": 30.64
+            },
+            "cacheWrite": {
+              "tokens": 9000000,
+              "cost": 15.5
+            }
+          }
+        }
       }
     },
     "gemini": {
@@ -2549,7 +2709,82 @@
             "tokens": 12300000
           }
         ],
-        "breakdown": "Input 8.9M · Output 1.4M · Cached 53.1M"
+        "modelBreakdown7d": [
+          {
+            "model": "Gemini 3.1 Pro",
+            "cost": 3.55,
+            "tokens": 15400000
+          },
+          {
+            "model": "Claude Opus 4.5",
+            "cost": 1.36,
+            "tokens": 3200000
+          }
+        ],
+        "modelBreakdown1d": [
+          {
+            "model": "Gemini 3.1 Pro",
+            "cost": 0.68,
+            "tokens": 2200000
+          }
+        ],
+        "breakdown": "Input 8.9M · Output 1.4M · Cached 53.1M",
+        "typeBreakdown": {
+          "today": {
+            "input": {
+              "tokens": 310000,
+              "cost": 0.31
+            },
+            "output": {
+              "tokens": 52000,
+              "cost": 0.23
+            },
+            "cacheRead": {
+              "tokens": 1838000,
+              "cost": 0.14
+            },
+            "cacheWrite": {
+              "tokens": 0,
+              "cost": 0.0
+            }
+          },
+          "7d": {
+            "input": {
+              "tokens": 2600000,
+              "cost": 2.31
+            },
+            "output": {
+              "tokens": 410000,
+              "cost": 1.66
+            },
+            "cacheRead": {
+              "tokens": 15590000,
+              "cost": 0.94
+            },
+            "cacheWrite": {
+              "tokens": 0,
+              "cost": 0.0
+            }
+          },
+          "30d": {
+            "input": {
+              "tokens": 8900000,
+              "cost": 8.1
+            },
+            "output": {
+              "tokens": 1400000,
+              "cost": 5.98
+            },
+            "cacheRead": {
+              "tokens": 53100000,
+              "cost": 3.24
+            },
+            "cacheWrite": {
+              "tokens": 0,
+              "cost": 0.0
+            }
+          }
+        }
       }
     },
     "grok": {
@@ -2573,6 +2808,29 @@
       ],
       "tier": "SuperGrok",
       "accentColor": "#d0d0d0"
+    },
+    "grokbot": {
+      "label": "Grok Bot",
+      "status": "ok",
+      "source": "grok-bot",
+      "message": "Grok Bot weekly usage",
+      "limits": [
+        {
+          "label": "Weekly",
+          "percent": 38.0,
+          "reset": "Resets in 3d 4h",
+          "unit": "percent",
+          "windowMinutes": 10080,
+          "isExtraUsage": false,
+          "formattedUsedText": "38% used",
+          "formattedDetailText": "",
+          "formattedDetailLeft": "",
+          "formattedDetailRight": "",
+          "pacePercent": 54.0
+        }
+      ],
+      "tier": "SuperGrok week",
+      "accentColor": "#e6e6e6"
     }
   },
   "diagnostics": {},
@@ -2582,7 +2840,8 @@
       "claude",
       "gemini",
       "antigravity",
-      "grok"
+      "grok",
+      "grokbot"
     ],
     "refreshIntervalMinutes": 5,
     "notificationsEnabled": true,

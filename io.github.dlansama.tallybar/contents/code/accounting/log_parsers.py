@@ -16,19 +16,24 @@ from parsers import as_dict
 from .formatting import parse_timestamp
 from .pricing import (
     DEFAULT_MODEL_FOR_PROVIDER,
+    _get_pricing_fn,
+    has_catalog_price,
     slim_usage,
-    usage_cost_usd,
+    usage_split,
     usage_token_total,
-    usage_token_total_and_breakdown,
 )
 from .buckets import (
     bucket_add,
+    buckets_model_costs,
     empty_hourly_token_buckets,
     empty_monthly_token_buckets,
+    empty_type_split,
     empty_weekly_token_buckets,
     hourly_token_usage,
     monthly_token_usage,
     token_summary,
+    type_split_add,
+    type_split_merge,
     weekly_token_usage,
 )
 
@@ -36,10 +41,21 @@ _UNSET = object()
 
 _PARSE_CACHE_DIR = Path.home() / ".tallybar" / "cache"
 _CACHE_SCHEMA_VERSION = 1          # bump to invalidate ALL parse caches at once
-_CLAUDE_PARSE_VERSION = 3          # bump when _parse_claude_file's output shape changes
+_CLAUDE_PARSE_VERSION = 5          # bump when _parse_claude_file's output shape changes
 _CODEX_PARSE_VERSION = 3           # bump when _parse_codex_file's output shape changes
 _GROK_PARSE_VERSION = 3            # bump when _parse_grok_file's output shape changes
 _GEMINI_PARSE_VERSION = 2          # bump when _parse_gemini_file's output shape changes
+# A deadline-cut walk stops this long BEFORE the deadline so its checkpoint save lands
+# while the process is still alive (the scan runs on a daemon thread that dies with the
+# one-shot backend). A 45 MB Claude cache saves in ~0.2 s; 1.5 s leaves room for a larger
+# cache and for GIL contention with the provider fetches.
+_CHECKPOINT_MARGIN_SECONDS = 1.5
+
+
+class LogScanIncomplete(TimeoutError):
+    """A parse-cache walk ran out of time. Its progress is checkpointed to the cache, but
+    the records are partial, so no summary may be built from them. A TimeoutError, so the
+    cost scan reports ``cost_summary_timeout`` exactly like the outer timeout."""
 
 
 def _load_parse_cache(cache_path: Path, parse_version: int) -> dict[str, dict[str, Any]]:
@@ -151,13 +167,24 @@ def _cached_log_records(root: Path, pattern: str, cache_path: Path | None,
                         parser, parse_version: int, walker=None,
                         deadline: float | None = None,
                         incremental: bool = False) -> list[dict[str, Any]]:
+    """Every record under ``root``, re-parsing only files whose bytes changed since the
+    cached parse.
+
+    A walk cut by ``deadline`` CHECKPOINTS what it parsed and raises LogScanIncomplete. It
+    stops ``_CHECKPOINT_MARGIN_SECONDS`` early so the save lands before the backend exits.
+    Without the checkpoint, a cold cache (first run, or a parse-version bump) whose full
+    parse doesn't fit one refresh would restart from zero every time and never finish. A
+    partial cache is safe because each entry is reused only while its file's mtime and size
+    match, and a file missing from the cache is simply parsed. Partial records are not
+    safe, hence the raise."""
     old_files = _load_parse_cache(cache_path, parse_version) if cache_path is not None else {}
     new_files: dict[str, dict[str, Any]] = {}
     records: list[dict[str, Any]] = []
     changed = False
     complete = True
+    stop_at = None if deadline is None else deadline - _CHECKPOINT_MARGIN_SECONDS
     for path in (walker(root) if walker is not None else root.rglob(pattern)):
-        if deadline is not None and time.time() >= deadline:
+        if stop_at is not None and time.time() >= stop_at:
             complete = False
             break
         try:
@@ -209,6 +236,12 @@ def _cached_log_records(root: Path, pattern: str, cache_path: Path | None,
         records.extend(recs)
     if cache_path is not None and complete and (changed or len(new_files) != len(old_files)):
         _save_parse_cache(cache_path, parse_version, new_files)
+    elif cache_path is not None and not complete and changed:
+        # Unvisited files keep their old (still-valid) entries; a later COMPLETE walk
+        # rebuilds the map from scratch, which prunes deleted files.
+        _save_parse_cache(cache_path, parse_version, {**old_files, **new_files})
+    if not complete:
+        raise LogScanIncomplete(f"log scan of {root.name or root} ran out of time; progress saved")
     return records
 
 
@@ -218,6 +251,32 @@ def _resolve_cache_path(explicit_dir, provided_root, name: str) -> Path | None:
     if explicit_dir is None:
         return None
     return Path(explicit_dir) / name
+
+
+def _visible_output_chars(content: Any) -> int:
+    """Characters of model output a transcript line shows: text blocks plus the compact
+    JSON of each tool_use input. Thinking is excluded (current models log it empty), so
+    this undercounts what the model generated — callers use it only as a lower bound."""
+    if isinstance(content, str):
+        return len(content)
+    if not isinstance(content, list):
+        return 0
+    total = 0
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        kind = block.get("type")
+        if kind == "text":
+            text = block.get("text")
+            if isinstance(text, str):
+                total += len(text)
+        elif kind == "tool_use":
+            try:
+                total += len(json.dumps(block.get("input"), ensure_ascii=False,
+                                        separators=(",", ":")))
+            except (TypeError, ValueError):
+                pass
+    return total
 
 
 def _parse_claude_file(path: Path, start: int = 0,
@@ -234,11 +293,29 @@ def _parse_claude_file(path: Path, start: int = 0,
     opaque cookies from ``tell()``. ``json.loads`` takes bytes directly, and decoding a
     mangled line now raises UnicodeDecodeError, which is skipped alongside JSONDecodeError
     rather than escaping the way it used to in text mode.
+
+    The dedup key ``r`` is the API message id, falling back to ``requestId`` and then the
+    line uuid. Every line of one message (one per content block, each carrying the full
+    usage) shares that id, and so does a copy of the message in another transcript. Some
+    transcripts carry no ``requestId`` on any line (they have no ``version`` field either,
+    and some repeat another session's messages); keying on ``requestId`` first billed each
+    such message once per content-block line, and a repeated message again.
+
+    Subagent transcripts (any file under a ``subagents/`` directory) carry two extra
+    per-line fields for the summarizer's output estimate: ``f`` marks a line that holds
+    final usage (a non-null ``stop_reason`` or ``usage.output_tokens_details``), and a
+    non-final line records its visible output size ``v`` keyed by its line uuid ``i``.
+    Several Claude Code versions log only the start-of-message usage for many subagent
+    turns (over 90% of them in 2.1.258 and 2.1.284), so no line of such a request ever
+    holds the real ``output_tokens`` and the max-output fold has nothing to recover.
+    Main-session lines never carry these fields. The flag derives from the path, which is
+    the parse cache's key, so the cache stays a pure function of each entry's file.
     """
     try:
         handle = path.open("rb")
     except OSError:
         return None
+    subagent = "subagents" in path.parts
     out: list[dict[str, Any]] = []
     with handle:
         if start > 0:
@@ -261,12 +338,22 @@ def _parse_claude_file(path: Path, start: int = 0,
             usage = message.get("usage") or record.get("usage")
             if usage_token_total(usage) <= 0:
                 continue
-            out.append({
+            rec: dict[str, Any] = {
                 "t": record.get("timestamp"),
                 "m": message.get("model") or record.get("model"),
                 "u": slim_usage(usage),
-                "r": str(record.get("requestId") or record.get("uuid") or ""),
-            })
+                "r": str(message.get("id") or record.get("requestId") or record.get("uuid") or ""),
+            }
+            if subagent:
+                if (message.get("stop_reason") is not None
+                        or (isinstance(usage, dict) and "output_tokens_details" in usage)):
+                    rec["f"] = 1
+                else:
+                    visible = _visible_output_chars(message.get("content"))
+                    if visible > 0:
+                        rec["v"] = visible
+                        rec["i"] = str(record.get("uuid") or "")
+            out.append(rec)
     return out
 
 
@@ -290,7 +377,12 @@ def _parse_codex_file(path: Path) -> list[dict[str, Any]] | None:
     rate-limit refresh) — same cumulative total, same ``last_token_usage`` — so an event
     whose total hasn't moved since the previous one is a REPEAT and is skipped (observed:
     100 of 13,809 real events). An event with only the cumulative total contributes its
-    increase over the previous total, never the whole running sum."""
+    increase over the previous total, never the whole running sum.
+
+    Each record is ONE model request (Codex emits a token_count after every response),
+    which is what lets usage_cost_usd pick its prompt-length tier. A cumulative-only delta
+    spans several requests only when Codex skipped events in between; the log then holds
+    nothing to split it by, so it is priced as one request."""
     try:
         handle = path.open("r", encoding="utf-8")
     except OSError:
@@ -506,13 +598,19 @@ def local_claude_token_summary(
     month_tokens = 0
     today_cost = 0.0
     month_cost = 0.0
-    month_in = month_out = month_cached = 0
+    split_today, split_week, split_month = empty_type_split(), empty_type_split(), empty_type_split()
     model_costs: dict[str, dict[str, Any]] = {}
     daily = empty_weekly_token_buckets(current)
     monthly_buckets = empty_monthly_token_buckets(current)
     hourly = empty_hourly_token_buckets(current)
     best: dict[str, dict[str, Any]] = {}
     keyless: list[dict[str, Any]] = []
+    # Subagent output estimate (see _parse_claude_file): requests that have a final-usage
+    # line, and the visible output of the others' non-final lines keyed by line uuid, so a
+    # line seen twice is counted once — the same idempotence the max-output fold has.
+    final_requests: set[str] = set()
+    visible_chars: dict[str, dict[str, int]] = {}
+    estimated_output = 0
 
     def _out_tokens(u: Any) -> int:
         if isinstance(u, dict):
@@ -534,41 +632,72 @@ def local_claude_token_summary(
         if not request_key:
             keyless.append(entry)
             continue
+        if record.get("f"):
+            final_requests.add(request_key)
+        visible = record.get("v")
+        if visible:
+            visible_chars.setdefault(request_key, {})[record.get("i") or ""] = visible
         prev = best.get(request_key)
         if prev is None or entry["out"] > prev["out"]:
             best[request_key] = entry
+
+    # A subagent request with no final-usage line bills max(logged output, visible
+    # characters // 4): a lower bound, since thinking tokens are not visible. Main-session
+    # requests never reach here (they carry no "v"); a final request keeps its logged output.
+    for request_key, chars in visible_chars.items():
+        if request_key in final_requests:
+            continue
+        entry = best[request_key]
+        estimate = sum(chars.values()) // 4
+        if estimate <= entry["out"]:
+            continue
+        if entry["timestamp"] >= thirty_days_ago:
+            estimated_output += estimate - entry["out"]
+        entry["usage"] = {**entry["usage"], "output_tokens": estimate}
+        entry["out"] = estimate
 
     for entry in (*best.values(), *keyless):
         usage = entry["usage"]
         model = entry["model"]
         timestamp = entry["timestamp"]
-        tokens, (bi, bo, bc) = usage_token_total_and_breakdown(usage)
-        cost = usage_cost_usd(usage, model)
+        split = usage_split(usage, model)
+        tokens, cost = split.tokens, split.cost
         day_key = timestamp.date().isoformat()
         if timestamp >= thirty_days_ago:
             month_tokens += tokens
             month_cost += cost
-            month_in += bi
-            month_out += bo
-            month_cached += bc
+            type_split_add(split_month, split)
             slot = model_costs.setdefault(str(model), {"cost": 0.0, "tokens": 0})
             slot["cost"] += cost
             slot["tokens"] += tokens
         if day_key in daily:
             bucket_add(daily[day_key], tokens, cost, model)
+            type_split_add(split_week, split)
         if day_key in monthly_buckets and monthly_buckets[day_key].get("inMonth"):
             bucket_add(monthly_buckets[day_key], tokens, cost, model)
         if timestamp.date() == today:
             today_tokens += tokens
             today_cost += cost
+            type_split_add(split_today, split)
             bucket_add(hourly[timestamp.hour], tokens, cost, model)
 
-    return token_summary(today_tokens, month_tokens, "local-claude-logs", today_cost, month_cost, tier,
-                         breakdown=(month_in, month_out, month_cached),
-                         daily=weekly_token_usage(daily),
-                         monthly=monthly_token_usage(monthly_buckets),
-                         hourly=hourly_token_usage(hourly),
-                         model_costs=model_costs)
+    summary = token_summary(today_tokens, month_tokens, "local-claude-logs", today_cost, month_cost, tier,
+                            now=current,
+                            type_split={"today": split_today, "7d": split_week, "30d": split_month},
+                            daily=weekly_token_usage(daily),
+                            monthly=monthly_token_usage(monthly_buckets),
+                            hourly=hourly_token_usage(hourly),
+                            model_costs=model_costs,
+                            model_costs_7d=buckets_model_costs(daily),
+                            model_costs_1d=daily.get(today.isoformat(), {}).get("models"),
+                            estimated_output_tokens=estimated_output)
+    # A model with no price of its own (one newer than both the live catalog and the
+    # embedded fallback) is billed at the claude-sonnet-4 family default. Name it, so
+    # build_snapshot can surface it as a diagnostic rather than mis-price it silently.
+    unpriced = sorted(m for m in model_costs if not has_catalog_price(m))
+    if summary is not None and unpriced:
+        summary["unpricedModels"] = unpriced
+    return summary
 
 
 def local_codex_token_summary(
@@ -592,7 +721,7 @@ def local_codex_token_summary(
     month_tokens = 0
     today_cost = 0.0
     month_cost = 0.0
-    month_in = month_out = month_cached = 0
+    split_today, split_week, split_month = empty_type_split(), empty_type_split(), empty_type_split()
     model_costs: dict[str, dict[str, Any]] = {}
     daily = empty_weekly_token_buckets(current)
     monthly_buckets = empty_monthly_token_buckets(current)
@@ -604,37 +733,39 @@ def local_codex_token_summary(
         timestamp = parse_timestamp(record["t"])
         if timestamp is None or timestamp < history_start:
             continue
-        usage = record["u"]
-        tokens, (bi, bo, bc) = usage_token_total_and_breakdown(usage)
-        if tokens <= 0:
-            continue
         model = record["m"] or DEFAULT_MODEL_FOR_PROVIDER["codex"]
-        cost = usage_cost_usd(usage, model)
+        split = usage_split(record["u"], model)
+        if split.tokens <= 0:
+            continue
+        tokens, cost = split.tokens, split.cost
         day_key = timestamp.date().isoformat()
         if timestamp >= thirty_days_ago:
             month_tokens += tokens
             month_cost += cost
-            month_in += bi
-            month_out += bo
-            month_cached += bc
+            type_split_add(split_month, split)
             slot = model_costs.setdefault(str(model), {"cost": 0.0, "tokens": 0})
             slot["cost"] += cost
             slot["tokens"] += tokens
         if day_key in daily:
             bucket_add(daily[day_key], tokens, cost, model)
+            type_split_add(split_week, split)
         if day_key in monthly_buckets and monthly_buckets[day_key].get("inMonth"):
             bucket_add(monthly_buckets[day_key], tokens, cost, model)
         if timestamp.date() == today:
             today_tokens += tokens
             today_cost += cost
+            type_split_add(split_today, split)
             bucket_add(hourly[timestamp.hour], tokens, cost, model)
 
     return token_summary(today_tokens, month_tokens, "local-codex-logs", today_cost, month_cost, tier,
-                         breakdown=(month_in, month_out, month_cached),
+                         now=current,
+                         type_split={"today": split_today, "7d": split_week, "30d": split_month},
                          daily=weekly_token_usage(daily),
                          monthly=monthly_token_usage(monthly_buckets),
                          hourly=hourly_token_usage(hourly),
-                         model_costs=model_costs)
+                         model_costs=model_costs,
+                         model_costs_7d=buckets_model_costs(daily),
+                         model_costs_1d=daily.get(today.isoformat(), {}).get("models"))
 
 
 def _load_grok_session_models(sessions_dir: Path | None = None) -> dict[str, str]:
@@ -690,7 +821,7 @@ def local_grok_token_summary(
     month_tokens = 0
     today_cost = 0.0
     month_cost = 0.0
-    month_in = month_out = month_cached = 0
+    split_today, split_week, split_month = empty_type_split(), empty_type_split(), empty_type_split()
     model_costs: dict[str, dict[str, Any]] = {}
     daily = empty_weekly_token_buckets(current)
     monthly_buckets = empty_monthly_token_buckets(current)
@@ -720,48 +851,53 @@ def local_grok_token_summary(
             if request_key in seen:
                 continue
             seen.add(request_key)
-        usage = record["u"]
-        tokens, (bi, bo, bc) = usage_token_total_and_breakdown(usage)
-        if tokens <= 0:
-            continue
         raw_model = record.get("m")
         if not raw_model and request_key:
             sid = request_key.split(":", 1)[0]
             raw_model = session_models.get(sid)
         display_model = _display_grok_model(raw_model)
-        cost = usage_cost_usd(usage, _grok_cli_pricing_model(raw_model or display_model))
+        split = usage_split(record["u"], _grok_cli_pricing_model(raw_model or display_model))
+        if split.tokens <= 0:
+            continue
+        tokens, cost = split.tokens, split.cost
         day_key = timestamp.date().isoformat()
         if timestamp >= thirty_days_ago:
             month_tokens += tokens
             month_cost += cost
-            month_in += bi
-            month_out += bo
-            month_cached += bc
+            type_split_add(split_month, split)
             slot = model_costs.setdefault(str(display_model), {"cost": 0.0, "tokens": 0})
             slot["cost"] += cost
             slot["tokens"] += tokens
         lrec = live_days.setdefault(day_key, {"tokens": 0, "cost": 0.0, "in": 0, "out": 0,
-                                              "cached": 0, "models": {}})
+                                              "cached": 0, "types": empty_type_split(),
+                                              "models": {}})
         lrec["tokens"] += tokens
         lrec["cost"] += cost
-        lrec["in"] += bi
-        lrec["out"] += bo
-        lrec["cached"] += bc
+        lrec["in"] += split.type_tokens[0]
+        lrec["out"] += split.type_tokens[1]
+        lrec["cached"] += split.type_tokens[2] + split.type_tokens[3]
+        type_split_add(lrec["types"], split)
         lslot = lrec["models"].setdefault(str(display_model), {"cost": 0.0, "tokens": 0})
         lslot["cost"] += cost
         lslot["tokens"] += tokens
         if day_key in daily:
             bucket_add(daily[day_key], tokens, cost, display_model)
+            type_split_add(split_week, split)
         if day_key in monthly_buckets and monthly_buckets[day_key].get("inMonth"):
             bucket_add(monthly_buckets[day_key], tokens, cost, display_model)
         if timestamp.date() == today:
             today_tokens += tokens
             today_cost += cost
+            type_split_add(split_today, split)
             bucket_add(hourly[timestamp.hour], tokens, cost, display_model)
         if week_start is not None and timestamp >= week_start and (week_end is None or timestamp < week_end):
             week_tokens_billing += tokens
             week_cost_billing += cost
 
+    # Archived days hold cost already priced per request, at the rates in force when
+    # they were archived, while their lines were in unified.jsonl. A day that has
+    # rotated out keeps that figure: only its per-day total survives, and a total can't
+    # pick a tier.
     fixture_driven = logs_dir is not None or cache_dir is not _UNSET
     if not fixture_driven:
         try:
@@ -777,16 +913,17 @@ def local_grok_token_summary(
                 if d_tokens <= 0 and d_cost <= 0.0:
                     continue
                 models = as_dict(rec.get("models"))
+                day_split = _grok_archive_split(rec, d_tokens, d_cost)
                 if dday >= thirty_days_ago.date():
                     month_tokens += d_tokens
                     month_cost += d_cost
-                    month_in += int(rec.get("in") or 0)
-                    month_out += int(rec.get("out") or 0)
-                    month_cached += int(rec.get("cached") or 0)
+                    type_split_merge(split_month, day_split)
                     for mname, mrec in models.items():
                         slot = model_costs.setdefault(str(mname), {"cost": 0.0, "tokens": 0})
                         slot["cost"] += float(mrec.get("cost") or 0.0)
                         slot["tokens"] += int(mrec.get("tokens") or 0)
+                if day in daily:
+                    type_split_merge(split_week, day_split)
                 for bucket_map in (daily, monthly_buckets):
                     if day not in bucket_map:
                         continue
@@ -800,15 +937,56 @@ def local_grok_token_summary(
             pass
 
     summary = token_summary(today_tokens, month_tokens, "local-grok-logs", today_cost, month_cost, tier,
-                            breakdown=(month_in, month_out, month_cached),
+                            now=current,
+                            type_split={"today": split_today, "7d": split_week, "30d": split_month},
                             daily=weekly_token_usage(daily),
                             monthly=monthly_token_usage(monthly_buckets),
                             hourly=hourly_token_usage(hourly),
-                            model_costs=model_costs)
+                            model_costs=model_costs,
+                            model_costs_7d=buckets_model_costs(daily),
+                            model_costs_1d=daily.get(today.isoformat(), {}).get("models"))
     if summary is not None and week_start is not None:
         summary["billingWeekTokens"] = int(week_tokens_billing)
         summary["billingWeekCost"] = round(float(week_cost_billing), 6)
     return summary
+
+
+def _grok_archive_split(rec: dict[str, Any], tokens: int, cost: float) -> dict[str, dict[str, Any]]:
+    """An archived Grok day's type split (empty_type_split shape), adding up to the
+    day's archived ``tokens`` and ``cost``.
+
+    A day archived since the split existed carries it under "types". An older day kept
+    only its in/out/cached token counts and one cost. Its tokens split exactly (xAI
+    reports no cache writes, so cached is all reads). Its cost can't be re-priced per
+    request once the log has rotated, so it is shared out by each type's cost at
+    grok-build's rates, the rates the CLI's models are priced at; the day's total stays
+    exactly what was archived."""
+    acc = empty_type_split()
+    stored = rec.get("types")
+    if isinstance(stored, dict):
+        type_split_merge(acc, stored)
+        return acc
+    typed = {"input": int(rec.get("in") or 0), "output": int(rec.get("out") or 0),
+             "cacheRead": int(rec.get("cached") or 0)}
+    prices = _get_pricing_fn()(DEFAULT_MODEL_FOR_PROVIDER["grok"])
+    rates = {"input": prices.get("input", 0.0), "output": prices.get("output", 0.0),
+             "cacheRead": prices.get("cache_read", prices.get("input", 0.0))}
+    weights = {key: typed[key] * rates[key] for key in typed}
+    weight_sum = sum(weights.values()) or sum(typed.values())
+    if weight_sum <= 0:
+        weights = {}
+    elif not sum(weights.values()):
+        weights = dict(typed)  # no rates to go by: share the cost by tokens
+    for key, count in typed.items():
+        acc[key]["tokens"] += count
+        if weights:
+            acc[key]["cost"] += cost * weights[key] / weight_sum
+    extra = tokens - sum(typed.values())
+    if extra > 0:
+        acc["unsplit"]["tokens"] += extra
+    if not weights:
+        acc["unsplit"]["cost"] += cost
+    return acc
 
 
 GROK_ARCHIVE_PATH = Path.home() / ".tallybar" / "grok_archive.json"
@@ -933,7 +1111,7 @@ def local_gemini_token_summary(
     month_tokens = 0
     today_cost = 0.0
     month_cost = 0.0
-    month_in = month_out = month_cached = 0
+    split_today, split_week, split_month = empty_type_split(), empty_type_split(), empty_type_split()
     model_costs: dict[str, dict[str, Any]] = {}
     daily = empty_weekly_token_buckets(current)
     monthly_buckets = empty_monthly_token_buckets(current)
@@ -948,35 +1126,37 @@ def local_gemini_token_summary(
         tokens_data = record.get("u")
         if not isinstance(tokens_data, dict):
             continue
-        tokens, (bi, bo, bc) = usage_token_total_and_breakdown(tokens_data)
-        if tokens <= 0:
-            continue
-
         model = record.get("m") or DEFAULT_MODEL_FOR_PROVIDER["gemini"]
-        cost = usage_cost_usd(tokens_data, model)
+        split = usage_split(tokens_data, model)
+        if split.tokens <= 0:
+            continue
+        tokens, cost = split.tokens, split.cost
 
         day_key = timestamp.date().isoformat()
         if timestamp >= thirty_days_ago:
             month_tokens += tokens
             month_cost += cost
-            month_in += bi
-            month_out += bo
-            month_cached += bc
+            type_split_add(split_month, split)
             slot = model_costs.setdefault(str(model), {"cost": 0.0, "tokens": 0})
             slot["cost"] += cost
             slot["tokens"] += tokens
         if day_key in daily:
             bucket_add(daily[day_key], tokens, cost, model)
+            type_split_add(split_week, split)
         if day_key in monthly_buckets and monthly_buckets[day_key].get("inMonth"):
             bucket_add(monthly_buckets[day_key], tokens, cost, model)
         if timestamp.date() == today:
             today_tokens += tokens
             today_cost += cost
+            type_split_add(split_today, split)
             bucket_add(hourly[timestamp.hour], tokens, cost, model)
 
     return token_summary(today_tokens, month_tokens, "local-gemini-logs", today_cost, month_cost, tier,
-                         breakdown=(month_in, month_out, month_cached),
+                         now=current,
+                         type_split={"today": split_today, "7d": split_week, "30d": split_month},
                          daily=weekly_token_usage(daily),
                          monthly=monthly_token_usage(monthly_buckets),
                          hourly=hourly_token_usage(hourly),
-                         model_costs=model_costs)
+                         model_costs=model_costs,
+                         model_costs_7d=buckets_model_costs(daily),
+                         model_costs_1d=daily.get(today.isoformat(), {}).get("models"))

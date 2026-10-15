@@ -56,13 +56,64 @@ def test_fallback_supplements_models_missing_from_live_catalog():
 
 
 def test_embedded_exact_match_claude_sonnet_5_not_sonnet_4():
-    """claude-sonnet-5 must resolve to its own row (3.0/15.0), not fall through to a
-    differently-versioned sonnet-4-x key via substring matching."""
+    """claude-sonnet-5 must resolve to its own row (2.0/10.0), not fall through to a
+    differently-versioned sonnet-4-x key (3.0/15.0) via substring matching."""
     with patch.object(pricing_data, "_load_cache", return_value=None), \
          patch.object(pricing_data, "_load_cache_stale", return_value=None):
         prices = pricing_data.get_pricing("claude-sonnet-5")
-        assert prices["input"] == 3.0
-        assert prices["output"] == 15.0
+        assert prices["input"] == 2.0
+        assert prices["output"] == 10.0
+
+
+# Anthropic's published per-MTok rates (identical to the LiteLLM catalog on 2026-10-07).
+# Note the cache reads: Opus 5.5 reads at 0.05x input and Fable/Mythos 5.1 at 0.025x, so a
+# table that derived reads as 0.1x input would fail here.
+# Haiku 5.5 is priced by prompt length, so its row carries the over-100K tier too.
+_CLAUDE_5_PRICES = {
+    "claude-opus-5-5":   {"input": 4.00, "output": 20.00, "cache_write": 5.00, "cache_write_1h": 8.00, "cache_read": 0.20},
+    "claude-opus-5":     {"input": 5.00, "output": 25.00, "cache_write": 6.25, "cache_write_1h": 10.00, "cache_read": 0.50},
+    "claude-sonnet-5-5": {"input": 2.00, "output": 10.00, "cache_write": 2.50, "cache_write_1h": 4.00, "cache_read": 0.10},
+    "claude-sonnet-5":   {"input": 2.00, "output": 10.00, "cache_write": 2.50, "cache_write_1h": 4.00, "cache_read": 0.20},
+    "claude-fable-5-1":  {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 0.25},
+    "claude-fable-5":    {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 1.00},
+    "claude-mythos-5-1": {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 0.25},
+    "claude-mythos-5":   {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 1.00},
+    "claude-haiku-5-5":  {"input": 0.10, "output": 0.50, "cache_write": 0.125, "cache_write_1h": 0.20, "cache_read": 0.01,
+                          "long_context_threshold": 100_000, "long_input": 0.50, "long_output": 2.50,
+                          "long_cache_write": 0.625, "long_cache_write_1h": 1.00, "long_cache_read": 0.05},
+}
+
+
+def test_offline_fallback_prices_every_current_claude_model_exactly(monkeypatch, tmp_path):
+    """First run / offline / CI: no pricing cache on disk, so get_pricing bills straight
+    off _FALLBACK_PRICING. Every current Claude model must resolve to its exact published
+    rates — not {} (usage_cost_usd then bills the claude-sonnet-4 family default), and
+    not a shorter family key (claude-opus-5-5 -> claude-opus-5, claude-fable-5-1 ->
+    claude-fable-5's 4x cache-read rate)."""
+    monkeypatch.setattr(pricing_data, "PRICING_CACHE_PATH", tmp_path / "missing" / "pricing_cache.json")
+    for model, expected in _CLAUDE_5_PRICES.items():
+        assert pricing_data.get_pricing(model) == expected, model
+    assert pricing_data._active_pricing == list(pricing_data._FALLBACK_PRICING)
+    for key, prices in pricing_data._FALLBACK_PRICING:
+        if key.startswith("claude-"):
+            assert pricing_data.get_pricing(key), key
+            assert {"input", "output", "cache_write", "cache_write_1h", "cache_read"} <= prices.keys(), key
+
+
+def test_offline_fallback_prices_gemini_at_the_published_rates(monkeypatch, tmp_path):
+    """ai.google.dev/gemini-api/docs/pricing, 2026-10-14 (standard tier). Gemini 4 Argon
+    has no prompt-length tier; its row was first a copy of 3.1 Pro's ($12 out, $0.20 cache
+    read, a 200K tier)."""
+    monkeypatch.setattr(pricing_data, "PRICING_CACHE_PATH", tmp_path / "missing" / "pricing_cache.json")
+    flash = {"input": 0.75, "output": 3.75, "cache_read": 0.075}
+    expected = {
+        "gemini-4-argon": {"input": 2.00, "output": 10.00, "cache_read": 0.10},
+        "gemini-3.6-flash": flash,
+        "gemini-3.8-flash": flash,
+        "gemini-3.5-flash-lite": {"input": 0.30, "output": 2.50, "cache_read": 0.03},
+    }
+    for model, prices in expected.items():
+        assert pricing_data.get_pricing(model) == pytest.approx(prices), model
 
 
 def test_embedded_exact_match_grok_46_not_grok_4():
@@ -113,12 +164,12 @@ def test_embedded_fallback_when_no_cache_at_all():
 # ---------------------------------------------------------------------------
 
 def test_embedded_exact_match_gpt5_not_gpt55():
-    """gpt-5 must resolve to the gpt-5 row (2.5/15.0), NOT gpt-5.5 (5.0/30.0) — the 2x-overbill bug."""
+    """gpt-5 must resolve to the gpt-5 row (1.25/10.0), NOT gpt-5.5 (5.0/30.0) — the 2x-overbill bug."""
     with patch.object(pricing_data, "_load_cache", return_value=None), \
          patch.object(pricing_data, "_load_cache_stale", return_value=None):
         prices = pricing_data.get_pricing("gpt-5")
-        assert prices["input"] == 2.5
-        assert prices["output"] == 15.0
+        assert prices["input"] == 1.25
+        assert prices["output"] == 10.0
 
 
 def test_embedded_exact_match_o3_not_o3_mini():
@@ -141,12 +192,12 @@ def test_embedded_exact_match_gemini_flash_not_lite():
 
 def test_embedded_family_match_gpt5_codex():
     """gpt-5-codex has no exact row, so it must fall to the longest 'pattern in name'
-    family key (gpt-5 → 2.5/15.0), not a shorter unrelated key."""
+    family key (gpt-5 → 1.25/10.0), not a shorter unrelated key."""
     with patch.object(pricing_data, "_load_cache", return_value=None), \
          patch.object(pricing_data, "_load_cache_stale", return_value=None):
         prices = pricing_data.get_pricing("gpt-5-codex")
-        assert prices["input"] == 2.5
-        assert prices["output"] == 15.0
+        assert prices["input"] == 1.25
+        assert prices["output"] == 10.0
 
 
 def test_empty_and_none_model_return_empty_dict():
@@ -210,6 +261,85 @@ def test_litellm_synthesizes_5m_cache_write_when_absent():
     assert prices["cache_write_1h"] == pytest.approx(8.0)    # 2x input
 
 
+def test_litellm_reads_the_combined_1h_write_tier_field():
+    """The combined cache_creation_input_token_cost_above_1hr_above_<N>k_tokens field is the
+    long 1h write rate. It is read as given — not scaled from the base 1h rate by the input
+    ratio, which would give 1.0 here — so a catalog that prices it differently wins."""
+    raw = {"claude-haiku-5-5": {
+        "litellm_provider": "anthropic", "mode": "chat",
+        "input_cost_per_token": 1e-07, "output_cost_per_token": 5e-07,
+        "cache_read_input_token_cost": 1e-08,
+        "cache_creation_input_token_cost": 1.25e-07,
+        "cache_creation_input_token_cost_above_1hr": 2e-07,
+        "input_cost_per_token_above_100k_tokens": 5e-07,
+        "output_cost_per_token_above_100k_tokens": 2.5e-06,
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1.5e-06,
+    }}
+    prices = dict(pricing_data._litellm_to_tallybar(raw))["claude-haiku-5-5"]
+    assert prices["long_cache_write_1h"] == pytest.approx(1.50)
+
+
+def test_litellm_converts_anthropic_long_context_tier():
+    """Claude Haiku 5.5 bills 5x once a prompt passes 100K tokens. LiteLLM carries that
+    tier as *_above_100k_tokens fields; the converter keeps it (and ignores the _batches
+    variants) so usage_cost_usd can bill a long prompt at the tier rates."""
+    raw = {
+        "claude-haiku-5-5": {
+            "litellm_provider": "anthropic", "mode": "chat",
+            "input_cost_per_token": 1e-07, "output_cost_per_token": 5e-07,
+            "cache_read_input_token_cost": 1e-08,
+            "cache_creation_input_token_cost": 1.25e-07,
+            "cache_creation_input_token_cost_above_1hr": 2e-07,
+            "input_cost_per_token_above_100k_tokens": 5e-07,
+            "output_cost_per_token_above_100k_tokens": 2.5e-06,
+            "cache_creation_input_token_cost_above_100k_tokens": 6.25e-07,
+            "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1e-06,
+            "cache_read_input_token_cost_above_100k_tokens": 5e-08,
+            "input_cost_per_token_above_100k_tokens_batches": 2.5e-07,
+        }
+    }
+    prices = dict(pricing_data._litellm_to_tallybar(raw))["claude-haiku-5-5"]
+    assert prices["input"] == pytest.approx(0.10)
+    assert prices["long_context_threshold"] == 100_000
+    assert prices["long_input"] == pytest.approx(0.50)
+    assert prices["long_output"] == pytest.approx(2.50)
+    assert prices["long_cache_write"] == pytest.approx(0.625)
+    assert prices["long_cache_write_1h"] == pytest.approx(1.00)
+    assert prices["long_cache_read"] == pytest.approx(0.05)
+
+
+def test_litellm_long_context_tier_scales_missing_cache_rates():
+    raw = {
+        "claude-new-long": {
+            "litellm_provider": "anthropic", "mode": "chat",
+            "input_cost_per_token": 1e-06, "output_cost_per_token": 5e-06,
+            "cache_read_input_token_cost": 1e-07,
+            "input_cost_per_token_above_200k_tokens": 2e-06,
+            "output_cost_per_token_above_200k_tokens": 7.5e-06,
+        },
+        "gemini/gemini-2.5-pro": {
+            "litellm_provider": "gemini", "mode": "chat",
+            "input_cost_per_token": 1.25e-06, "output_cost_per_token": 1e-05,
+            "input_cost_per_token_above_200k_tokens": 2.5e-06,
+            "output_cost_per_token_above_200k_tokens": 1.5e-05,
+        },
+    }
+    out = dict(pricing_data._litellm_to_tallybar(raw))
+    claude = out["claude-new-long"]
+    assert claude["long_context_threshold"] == 200_000
+    assert claude["long_input"] == pytest.approx(2.0)
+    assert claude["long_output"] == pytest.approx(7.5)
+    # No cache fields above the threshold: each base cache rate scales with input (2x),
+    # including the synthesized 1.25x / 2x write rates.
+    assert claude["long_cache_read"] == pytest.approx(0.2)
+    assert claude["long_cache_write"] == pytest.approx(2.5)
+    assert claude["long_cache_write_1h"] == pytest.approx(4.0)
+    # Every provider's tier is read; this Gemini entry has no cache rate to scale.
+    assert out["gemini-2.5-pro"]["long_context_threshold"] == 200_000
+    assert out["gemini-2.5-pro"]["long_input"] == pytest.approx(2.5)
+    assert out["gemini-2.5-pro"]["long_output"] == pytest.approx(15.0)
+
+
 def test_embedded_fallback_anthropic_has_1h_write_at_2x_input():
     """Every embedded Anthropic entry must carry cache_write_1h == 2x input, so the
     1h premium still applies when fully offline."""
@@ -234,10 +364,10 @@ def test_embedded_fallback_anthropic_has_1h_write_at_2x_input():
 
 def test_litellm_prefixed_model_id_resolves_to_live_price_not_fallback():
     raw = {
-        "gemini/gemini-3.5-flash": {
+        "gemini/gemini-3.5-flash": {  # deliberately != the embedded fallback row
             "litellm_provider": "gemini", "mode": "chat",
-            "input_cost_per_token": 1.5e-06, "output_cost_per_token": 9.0e-06,
-            "cache_read_input_token_cost": 1.5e-07,
+            "input_cost_per_token": 1.25e-06, "output_cost_per_token": 8.0e-06,
+            "cache_read_input_token_cost": 1.25e-07,
         },
         "xai/grok-4": {
             "litellm_provider": "xai", "mode": "chat",
@@ -249,9 +379,9 @@ def test_litellm_prefixed_model_id_resolves_to_live_price_not_fallback():
     with patch.object(pricing_data, "_load_cache", return_value=active):
         # Bare (un-prefixed) query form -> live rate, not the embedded fallback.
         gemini_prices = pricing_data.get_pricing("gemini-3.5-flash")
-        assert gemini_prices["input"] == pytest.approx(1.5)
-        assert gemini_prices["output"] == pytest.approx(9.0)
-        assert gemini_prices["cache_read"] == pytest.approx(0.15)
+        assert gemini_prices["input"] == pytest.approx(1.25)
+        assert gemini_prices["output"] == pytest.approx(8.0)
+        assert gemini_prices["cache_read"] == pytest.approx(0.125)
         fallback = dict(pricing_data._FALLBACK_PRICING)
         assert gemini_prices != fallback["gemini-3.5-flash"]
 
@@ -290,8 +420,11 @@ import time as _time  # noqa: E402
 import pytest  # noqa: E402
 
 
-def _write_cache(path, fetched_at, pricing):
-    path.write_text(_json.dumps({"fetchedAt": fetched_at, "pricing": pricing}), encoding="utf-8")
+def _write_cache(path, fetched_at, pricing, version=pricing_data.PRICING_CACHE_VERSION):
+    payload = {"fetchedAt": fetched_at, "pricing": pricing}
+    if version is not None:  # None: a cache saved before the format was versioned
+        payload["version"] = version
+    path.write_text(_json.dumps(payload), encoding="utf-8")
 
 
 def test_load_cache_ttl_boundary(tmp_path, monkeypatch):
@@ -360,3 +493,163 @@ def test_memo_written_when_catalog_unchanged():
     pricing_data._resolve_memo.clear()
     assert pricing_data.get_pricing("steady-model")["input"] == 2.0
     assert "steady-model" in pricing_data._resolve_memo
+
+
+# Google's published per-MTok rates (ai.google.dev/gemini-api/docs/pricing, 2026-10-01;
+# 3.6-3.8 Flash at the introductory rate that runs through 2026-12-31).
+_GEMINI_FLASH_PRICES = {
+    "gemini-3.8-flash":      {"input": 0.75, "output": 3.75, "cache_read": 0.075},
+    "gemini-3.7-flash":      {"input": 0.75, "output": 3.75, "cache_read": 0.075},
+    "gemini-3.6-flash":      {"input": 0.75, "output": 3.75, "cache_read": 0.075},
+    "gemini-3.5-flash":      {"input": 1.50, "output": 9.00, "cache_read": 0.15},
+    "gemini-3.5-flash-lite": {"input": 0.30, "output": 2.50, "cache_read": 0.03},
+    "gemini-3.1-flash-lite": {"input": 0.25, "output": 1.50, "cache_read": 0.025},
+}
+
+
+def test_offline_fallback_prices_current_gemini_flash_models_exactly(monkeypatch, tmp_path):
+    """Antigravity usage is mostly Gemini Flash. Offline, 3.6-3.8 Flash resolved to {} (so
+    the Antigravity summary billed them at the Pro default), and the 3.5 Flash row held
+    3.5 Flash-Lite's rate."""
+    monkeypatch.setattr(pricing_data, "PRICING_CACHE_PATH", tmp_path / "missing" / "pricing_cache.json")
+    for model, expected in _GEMINI_FLASH_PRICES.items():
+        assert pricing_data.get_pricing(model) == expected, model
+
+
+# --- Prompt-length tiers for every provider, and the versioned disk cache --------------
+
+def test_litellm_converts_prompt_tiers_for_every_provider():
+    """Every provider TallyBar prices has models billed by prompt length. The converter
+    keeps each tier, skips the _batches/_flex/_priority/_ultrafast service-tier variants,
+    drops all-zero tiers, and stores the largest prompt still on the base rates: N*1000
+    for OpenAI / Google ("over N K"), N*1000 - 1 for xAI ("at or above 200K")."""
+    raw = {
+        "gpt-5.5": {
+            "litellm_provider": "openai", "mode": "chat",
+            "input_cost_per_token": 5e-06, "output_cost_per_token": 3e-05,
+            "cache_read_input_token_cost": 5e-07,
+            "input_cost_per_token_above_272k_tokens": 1e-05,
+            "output_cost_per_token_above_272k_tokens": 4.5e-05,
+            "cache_read_input_token_cost_above_272k_tokens": 1e-06,
+            "input_cost_per_token_above_272k_tokens_priority": 2e-05,
+            "output_cost_per_token_above_272k_tokens_flex": 2e-05,
+            "cache_read_input_token_cost_above_272k_tokens_batches": 5e-07,
+            "input_cost_per_token_above_272k_tokens_ultrafast": 9e-05,
+        },
+        "gemini/gemini-2.5-pro": {
+            "litellm_provider": "gemini", "mode": "chat",
+            "input_cost_per_token": 1.25e-06, "output_cost_per_token": 1e-05,
+            "cache_read_input_token_cost": 1.25e-07,
+            "input_cost_per_token_above_200k_tokens": 2.5e-06,
+            "output_cost_per_token_above_200k_tokens": 1.5e-05,
+            "cache_read_input_token_cost_above_200k_tokens": 2.5e-07,
+            "input_cost_per_token_above_200k_tokens_priority": 4.5e-06,
+        },
+        "xai/grok-4.6": {
+            "litellm_provider": "xai", "mode": "chat",
+            "input_cost_per_token": 2e-06, "output_cost_per_token": 6e-06,
+            "cache_read_input_token_cost": 5e-07,
+            "input_cost_per_token_above_200k_tokens": 4e-06,
+            "output_cost_per_token_above_200k_tokens": 1.2e-05,
+            "cache_read_input_token_cost_above_200k_tokens": 1e-06,
+            "input_cost_per_token_above_200k_tokens_batches": 2e-06,
+        },
+        "gemini/gemini-exp-1206": {
+            "litellm_provider": "gemini", "mode": "chat",
+            "input_cost_per_token": 0, "output_cost_per_token": 0,
+            "input_cost_per_token_above_128k_tokens": 0,
+            "output_cost_per_token_above_128k_tokens": 0,
+        },
+    }
+    out = dict(pricing_data._litellm_to_tallybar(raw))
+    assert out["gpt-5.5"] == pytest.approx({
+        "input": 5.0, "output": 30.0, "cache_read": 0.5, "long_context_threshold": 272_000,
+        "long_input": 10.0, "long_output": 45.0, "long_cache_read": 1.0})
+    assert out["gemini-2.5-pro"] == pytest.approx({
+        "input": 1.25, "output": 10.0, "cache_read": 0.125, "long_context_threshold": 200_000,
+        "long_input": 2.5, "long_output": 15.0, "long_cache_read": 0.25})
+    assert out["grok-4.6"] == pytest.approx({
+        "input": 2.0, "output": 6.0, "cache_read": 0.5, "long_context_threshold": 199_999,
+        "long_input": 4.0, "long_output": 12.0, "long_cache_read": 1.0})
+    assert not any(key.startswith("long_") for key in out["gemini-exp-1206"])
+
+
+# Long-prompt tiers the embedded table carries beyond Claude's (LiteLLM catalog,
+# 2026-10-07). xAI's "at or above 200K" is stored as 199_999 (see _long_context_tier).
+_TIERED_FALLBACK = {
+    "gpt-5.5":        (272_000, {"long_input": 10.00, "long_output": 45.00, "long_cache_read": 1.00}),
+    "gpt-5.4":        (272_000, {"long_input":  5.00, "long_output": 22.50, "long_cache_read": 0.50}),
+    "gemini-3.1-pro": (200_000, {"long_input":  4.00, "long_output": 18.00, "long_cache_read": 0.40}),
+    "gemini-2.5-pro": (200_000, {"long_input":  2.50, "long_output": 15.00, "long_cache_read": 0.25}),
+    "grok-4.6":       (199_999, {"long_input":  4.00, "long_output": 12.00, "long_cache_read": 1.00}),
+    "grok-build-0.1": (199_999, {"long_input":  2.00, "long_output":  4.00, "long_cache_read": 0.40}),
+    "grok-build":     (199_999, {"long_input":  2.00, "long_output":  4.00, "long_cache_read": 0.40}),
+    "grok-composer":  (199_999, {"long_input":  2.00, "long_output":  4.00, "long_cache_read": 0.40}),
+    "grok-composer-2.5-fast": (199_999, {"long_input": 2.00, "long_output": 4.00, "long_cache_read": 0.40}),
+    "grok-code-fast": (199_999, {"long_input":  2.00, "long_output":  4.00, "long_cache_read": 0.40}),
+    "grok-code-fast-1": (199_999, {"long_input": 2.00, "long_output": 4.00, "long_cache_read": 0.40}),
+    "grok-4.5":       (199_999, {"input": 2.00, "output": 6.00, "cache_read": 0.30,
+                                 "long_input": 4.00, "long_output": 12.00, "long_cache_read": 0.60}),
+    "grok-4.3":       (199_999, {"input": 1.25, "output": 2.50, "cache_read": 0.20,
+                                 "long_input": 2.50, "long_output": 5.00, "long_cache_read": 0.40}),
+    "grok-4.20":      (199_999, {"input": 1.25, "output": 2.50, "cache_read": 0.20,
+                                 "long_input": 2.50, "long_output": 5.00, "long_cache_read": 0.40}),
+}
+
+
+def test_offline_fallback_carries_every_provider_prompt_tier(monkeypatch, tmp_path):
+    """First run / offline: the embedded rows of tiered OpenAI, Gemini and xAI models carry
+    the catalog's tier, and every tiered row has a long rate for each base rate it lists."""
+    monkeypatch.setattr(pricing_data, "PRICING_CACHE_PATH", tmp_path / "missing" / "pricing_cache.json")
+    for model, (threshold, rates) in _TIERED_FALLBACK.items():
+        prices = pricing_data.get_pricing(model)
+        assert prices["long_context_threshold"] == threshold, model
+        for key, rate in rates.items():
+            assert prices[key] == pytest.approx(rate), (model, key)
+    for key, prices in pricing_data._FALLBACK_PRICING:
+        if "long_context_threshold" in prices:
+            for base in ("input", "output", "cache_read", "cache_write", "cache_write_1h"):
+                assert (base in prices) == ("long_" + base in prices), (key, base)
+
+
+def test_pricing_cache_round_trips_prompt_tiers(tmp_path, monkeypatch):
+    """A cache saved by this converter carries its version and reloads with the tiers
+    intact, fresh and stale alike, and get_pricing serves the tier from it."""
+    monkeypatch.setattr(pricing_data, "PRICING_CACHE_PATH", tmp_path / "pricing_cache.json")
+    raw = {"claude-tier-roundtrip-test": {
+        "litellm_provider": "anthropic", "mode": "chat",
+        "input_cost_per_token": 1e-07, "output_cost_per_token": 5e-07,
+        "cache_read_input_token_cost": 1e-08,
+        "input_cost_per_token_above_100k_tokens": 5e-07,
+        "output_cost_per_token_above_100k_tokens": 2.5e-06,
+        "cache_read_input_token_cost_above_100k_tokens": 5e-08}}
+    converted = pricing_data._litellm_to_tallybar(raw)
+    pricing_data._save_cache(converted)
+    saved = _json.loads((tmp_path / "pricing_cache.json").read_text(encoding="utf-8"))
+    assert saved["version"] == pricing_data.PRICING_CACHE_VERSION
+    assert pricing_data._load_cache() == converted
+    assert pricing_data._load_cache_stale() == converted
+    assert pricing_data.cache_is_current()
+    prices = pricing_data.get_pricing("claude-tier-roundtrip-test")
+    assert prices["long_context_threshold"] == 100_000
+    assert prices["long_input"] == pytest.approx(0.50)
+    assert prices["long_cache_read"] == pytest.approx(0.05)
+
+
+def test_pre_tier_price_cache_is_never_served(tmp_path, monkeypatch):
+    """A cache saved before prompt tiers existed (no "version") holds entries with no
+    tiers. Neither loader serves it — not even as the stale fallback — so get_pricing
+    bills from the embedded table (which has the tier) and cache_is_current() is False,
+    which makes build_snapshot refetch."""
+    cache = tmp_path / "pricing_cache.json"
+    monkeypatch.setattr(pricing_data, "PRICING_CACHE_PATH", cache)
+    _write_cache(cache, _time.time(), [["claude-haiku-5-5", {"input": 0.1, "output": 0.5}]], version=None)
+    assert pricing_data._load_cache() is None
+    assert pricing_data._load_cache_stale() is None
+    assert not pricing_data.cache_is_current()
+    assert pricing_data.get_pricing("claude-haiku-5-5") == dict(pricing_data._FALLBACK_PRICING)["claude-haiku-5-5"]
+    # Expired or missing caches are not current either.
+    _write_cache(cache, _time.time() - pricing_data.PRICING_CACHE_TTL - 10, [["m", {"input": 1.0}]])
+    assert not pricing_data.cache_is_current()
+    cache.unlink()
+    assert not pricing_data.cache_is_current()

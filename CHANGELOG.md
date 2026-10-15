@@ -6,7 +6,93 @@ Notable changes to TallyBar. Format follows
 
 ## [Unreleased]
 
+### Added
+- A Grok Bot tab: the weekly usage bar from the Grok Bot desktop app's sign-in, plus
+  an on-demand spend line when the account has a spend limit. It sits beside the Grok
+  tab, which still reads the Grok Build CLI; the two are different products with
+  different meters. Reading the sign-in needs KWallet. There is no Grok Bot cost
+  history yet.
+- Existing setups get the new tab without touching Settings. A provider tab you had
+  turned off stays off.
+- Cost now shows what the tokens went on: uncached input, output, cache reads and
+  cache writes, each in tokens and dollars, for Codex, Claude, Gemini, Grok and
+  Antigravity. Hover the Today, Last 7 days or Last 30 days line in a tab's cost section
+  for that window's split. The cost popout lists it under "By type" for the window the
+  Day / Week / Month switch shows. Codex, Gemini and Grok count prompt tokens served
+  from cache as cache reads, so their input line is the uncached part only. Antigravity
+  reports no cache writes. `backend.py --cost` carries the split as `typeBreakdown`.
+
+### Changed
+- The cost popout's "Top models" list now follows the Day / Week / Month switch: Day
+  lists today's models, Week the last 7 days, Month the last 30. It always showed 30
+  days before.
+- The Grok tab's weekly bar is now read live from xAI's billing service, signed in
+  with the `grok` CLI's own sign-in, so it is current between CLI sessions instead
+  of only as fresh as the CLI's last start. When that sign-in has expired (the CLI
+  renews it, TallyBar does not) or the network is off, the bar falls back to the
+  reading in the CLI's log, as before.
+
 ### Fixed
+- A cost-popout bar's tooltip no longer fails to appear when the pointer moves straight
+  from one bar onto the next. It happened most in the Day view, whose bars sit 2 px
+  apart: the tooltip stayed hidden until the pointer left the bar and came back.
+- Antigravity's newer models (Gemini 4 Argon, Gemini 3.5 Flash Lite, Claude Opus 5.5
+  and Sonnet 5.5, and the Gemini 3.8 Flash it runs subagents on) are named and priced
+  on a fresh install. They used to show as "Model M…" and bill at Gemini 3.1 Pro rates
+  until Antigravity had been open once while TallyBar refreshed. Gemini 4 Argon bills
+  at Google's current rate, $2 / $10 per million tokens ($0.10 cached).
+- "Cost scan timed out" no longer sticks after an update that changes how logs are
+  read. With a large Claude history the first full re-read could take longer than one
+  refresh allows, and because none of that work was kept, every refresh started over.
+  Progress is now saved as it goes, so the re-read finishes over the next few refreshes.
+- The provider chips in Settings no longer run past the right edge of the card.
+- Antigravity CLI 1.2 and later: TallyBar can read usage and plan status from a
+  running `agy` session again. `agy` now requires a security token on its local API,
+  which it shares only with the commands it runs; TallyBar picks it up the first time
+  it sees one running and remembers it for that session. No setup needed.
+- Antigravity cost was overstated for models newer than TallyBar's built-in list
+  (Gemini 3.7 and 3.8 Flash among them): generations read from the conversation
+  databases were billed at Gemini 3.1 Pro rates even though the breakdown showed the
+  right model. They now bill at the model's own rate (about 31% lower 30-day
+  Antigravity cost on a real ledger). Past months already archived keep their
+  recorded figures. Without a pricing cache (first run, offline), Gemini 3.5 Flash
+  was billed at 3.5 Flash-Lite's rate and 3.6-3.8 Flash at Gemini 3.1 Pro's; the
+  built-in table now carries Google's published rates for them.
+- Claude Haiku 5.5 is priced correctly. Haiku 5.5 costs five times as much once a
+  prompt passes 100,000 tokens, and TallyBar now bills those requests at that rate;
+  before, every Haiku 5.5 request used the lower one. Without a pricing cache (first
+  run, offline) Haiku 5.5 was billed at Claude Sonnet 4 rates, about 30 times too high.
+  Claude Sonnet 4.5 requests over 200,000 tokens now use its long-context rate too.
+- Long prompts are now priced at their long-prompt rate for every provider, not only
+  Claude: GPT-5.5 and GPT-5.4 past 272,000 tokens, Gemini 2.5 Pro and 3.1 Pro past
+  200,000 (Antigravity's Gemini 3.1 Pro included), and Grok 4.x and Grok Build from
+  200,000. Each request is priced by its own prompt size. Antigravity CLI sessions known
+  only from their status-line total stay at the base rate, since no single request's
+  size is recorded. An Antigravity entry that sums several requests is billed at the
+  base rate, since no single request's size is known. Antigravity steps rows that
+  repeated one request's usage twice are no longer counted twice (entries already
+  recorded age out within 35 days). A price list saved by an earlier version is fetched again on the
+  next refresh rather than used for up to another day without these rates.
+- Without a pricing cache (first run, offline), Gemini 2.5 Pro cache reads are billed at
+  $0.125 per million tokens instead of $0.31, and Grok 4.5, 4.3 and 4.20 at the rates
+  in LiteLLM's catalog.
+- Claude cost on a first run or offline (no pricing cache yet) now uses the right
+  rates for Claude Opus 5.5, Opus 5, Sonnet 5.5, Sonnet 5, Fable 5.1 and Mythos 5 / 5.1.
+  The built-in price table predated these models, so they were billed at older Sonnet
+  rates or the wrong cache-read rate (about 16% too high over 30 days on a real log).
+  Online pricing was already correct.
+- Claude subagent messages that Claude Code logged without their final token usage
+  are no longer counted at a near-zero output figure. Several Claude Code versions do
+  this for many subagent turns (among them 2.1.258, 2.1.270 and 2.1.284). Their output
+  is now estimated from the visible text and tool input they produced, and hovering
+  the cost section says how many output tokens were estimated. Main-session messages
+  are unaffected.
+- Claude messages logged without a request id are counted once. Some Claude Code
+  transcripts carry no request id on any line, so each of their messages was billed
+  once per content block (two to three times), and a message repeated from another
+  session was billed again (about 2% of 30-day Claude cost on a real log).
+- The snapshot's `diagnostics.unpriced_models` names any Claude model in the logs that
+  has no price of its own and is billed at the family default rate.
 - Antigravity CLI cost was understated: cache reads captured from the CLI's
   conversation databases were collapsed to each conversation's peak instead of
   billed per call, while the same calls captured live were billed in full. Every

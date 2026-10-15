@@ -37,8 +37,9 @@ def _dominant_enum(found: list[dict[int, int]]) -> int:
     share a single field-1 enum, so this equals ``found[0]``'s enum today. Picking the
     max-token record (rather than first-parsed) is a self-correcting guard: IF a future
     blob ever mixed models, the whole summed entry is attributed to its dominant model
-    instead of whichever happened to parse first. Keeping ONE entry per idx preserves every
-    key invariant (the ``:``/``@``/``#`` namespaces, RPC-purge prefixes, memo/prune).
+    instead of whichever happened to parse first. Keeping ONE entry per steps idx (one per
+    generation for gen_metadata) preserves every key invariant (the ``:``/``@``/``#``
+    namespaces, RPC-purge prefixes, memo/prune).
     """
     if not found:
         return 0

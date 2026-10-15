@@ -230,6 +230,12 @@ PlasmaCore.PopupPlasmaWindow {
                     // pin: the tip still follows hover and hides on exit — leaving the
                     // bucket (or clicking it again) collapses back to the two base lines.
                     property string expandedKey: ""
+                    // The bucket the pointer is in (same keys). When the pointer jumps straight
+                    // from one bar into the next, past the gap between them, Qt delivers the new
+                    // bar's enter BEFORE the old bar's exit — so an exit only tears the tip down
+                    // while its bucket still owns it, else it stops the timer the new bar just
+                    // started and the tip never shows. Entering a bucket starts it collapsed.
+                    property string hoverKey: ""
 
                     Timer {
                         id: chartTipTimer
@@ -275,7 +281,7 @@ PlasmaCore.PopupPlasmaWindow {
                                 id: dayColumn
 
                                 required property var modelData
-                                property int tokens: Number(modelData.tokens || 0)
+                                property real tokens: Number(modelData.tokens || 0)
                                 property real usageRatio: tokens > 0 ? Math.max(0, Math.min(1, tokens / root.maxWeekTokens())) : 0
                                 property real barRatio: Math.max(0.025, usageRatio)
 
@@ -372,9 +378,9 @@ epsilon: 0.01
                                         if (chartArea.tipShown)
                                             chartArea.tipText = chartArea.pendingTip;
                                     }
-                                    onEntered: { updateTip(); chartTipHideTimer.stop(); chartTipTimer.restart(); }
+                                    onEntered: { chartArea.hoverKey = tipKey(); chartArea.expandedKey = ""; updateTip(); chartTipHideTimer.stop(); chartTipTimer.restart(); }
                                     onPositionChanged: updateTip()
-                                    onExited: { chartArea.expandedKey = ""; chartTipTimer.stop(); chartTipHideTimer.restart(); }
+                                    onExited: { if (chartArea.hoverKey !== tipKey()) return; chartArea.hoverKey = ""; chartArea.expandedKey = ""; chartTipTimer.stop(); chartTipHideTimer.restart(); }
                                     onClicked: (mouse) => {
                                         if (mouse.button === Qt.RightButton) {
                                             // Copy the full breakdown (date + total + per-model rows).
@@ -418,7 +424,7 @@ epsilon: 0.01
                                 id: hourColumn
 
                                 required property var modelData
-                                property int tokens: Number(modelData.tokens || 0)
+                                property real tokens: Number(modelData.tokens || 0)
                                 property int hour: Number(modelData.hour || 0)
                                 property real usageRatio: tokens > 0 ? Math.max(0, Math.min(1, tokens / root.maxHourTokens())) : 0
                                 property real barRatio: Math.max(0.02, usageRatio)
@@ -497,9 +503,9 @@ epsilon: 0.01
                                         if (chartArea.tipShown)
                                             chartArea.tipText = chartArea.pendingTip;
                                     }
-                                    onEntered: { updateTip(); chartTipHideTimer.stop(); chartTipTimer.restart(); }
+                                    onEntered: { chartArea.hoverKey = tipKey(); chartArea.expandedKey = ""; updateTip(); chartTipHideTimer.stop(); chartTipTimer.restart(); }
                                     onPositionChanged: updateTip()
-                                    onExited: { chartArea.expandedKey = ""; chartTipTimer.stop(); chartTipHideTimer.restart(); }
+                                    onExited: { if (chartArea.hoverKey !== tipKey()) return; chartArea.hoverKey = ""; chartArea.expandedKey = ""; chartTipTimer.stop(); chartTipHideTimer.restart(); }
                                     onClicked: (mouse) => {
                                         if (mouse.button === Qt.RightButton) {
                                             const base = root.hourTooltipText(hourColumn.modelData);
@@ -598,9 +604,9 @@ epsilon: 0.01
                                                 if (chartArea.tipShown)
                                                     chartArea.tipText = chartArea.pendingTip;
                                             }
-                                            onEntered: { updateTip(); chartTipHideTimer.stop(); chartTipTimer.restart(); }
+                                            onEntered: { chartArea.hoverKey = tipKey(); chartArea.expandedKey = ""; updateTip(); chartTipHideTimer.stop(); chartTipTimer.restart(); }
                                             onPositionChanged: updateTip()
-                                            onExited: { chartArea.expandedKey = ""; chartTipTimer.stop(); chartTipHideTimer.restart(); }
+                                            onExited: { if (chartArea.hoverKey !== tipKey()) return; chartArea.hoverKey = ""; chartArea.expandedKey = ""; chartTipTimer.stop(); chartTipHideTimer.restart(); }
                                             onClicked: (mouse) => {
                                                 if (mouse.button === Qt.RightButton) {
                                                     const base = root.monthCellTooltipText(modelData);
@@ -817,7 +823,64 @@ epsilon: 0.01
 
                 }
 
-                // Per-model cost attribution (top models by 30-day spend).
+                // Usage by type (uncached input, output, cache reads, cache writes) for the
+                // window the Day / Week / Month switch shows.
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.topMargin: 3
+                    Layout.preferredHeight: 1
+                    color: root.separatorColor(0.1)
+                    visible: root.costTypeRows(root.costTypePeriod()).length > 0
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    color: root.mutedTextColor(0.55)
+                    font.family: root.uiFont
+                    font.pixelSize: 10
+                    font.weight: Font.DemiBold
+                    textFormat: Text.PlainText
+                    text: root.costTypePeriod() === "today"
+                        ? i18n("BY TYPE · TODAY")
+                        : (root.costTypePeriod() === "7d"
+                            ? i18n("BY TYPE · 7 DAYS")
+                            : i18n("BY TYPE · 30 DAYS"))
+                    visible: root.costTypeRows(root.costTypePeriod()).length > 0
+                }
+
+                Repeater {
+                    model: root.costTypeRows(root.costTypePeriod())
+
+                    delegate: RowLayout {
+                        required property var modelData
+
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: root.costTypeRowHeight  // mirrored in drawerHeightFor()
+                        spacing: 10
+
+                        Text {
+                            Layout.fillWidth: true
+                            color: root.primaryTextColor(0.86)
+                            elide: Text.ElideRight
+                            font.family: root.uiFont
+                            font.pixelSize: 11
+                            textFormat: Text.PlainText
+                            text: root.costTypeLabel(modelData.kind)
+                        }
+
+                        Text {
+                            color: root.mutedTextColor(0.72)
+                            font.family: root.uiFont
+                            font.pixelSize: 11
+                            horizontalAlignment: Text.AlignRight
+                            textFormat: Text.PlainText
+                            text: root.compactUsd(Number(modelData.cost || 0)) + " · "
+                                + i18n("%1 tok", Fmt.compactCount(Number(modelData.tokens || 0)))
+                        }
+                    }
+                }
+
+                // Per-model cost attribution (top models by Today / 7-day / 30-day spend).
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.topMargin: 3
@@ -832,7 +895,12 @@ epsilon: 0.01
                     font.family: root.uiFont
                     font.pixelSize: 10
                     font.weight: Font.DemiBold
-                    text: i18n("TOP MODELS · 30 DAYS")
+                    textFormat: Text.PlainText
+                    text: root.costModelBreakdownPeriod() === "day"
+                        ? i18n("TOP MODELS · TODAY")
+                        : (root.costModelBreakdownPeriod() === "week"
+                            ? i18n("TOP MODELS · 7 DAYS")
+                            : i18n("TOP MODELS · 30 DAYS"))
                     visible: root.costModelBreakdown().length > 0
                 }
 

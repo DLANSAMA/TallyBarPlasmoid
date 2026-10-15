@@ -28,6 +28,10 @@ as a month heat grid. Clicking any bar or day expands it into a per-model breakd
   <img src="docs/screenshots/cost-month.png" alt="Cost flyout, Month tab: a calendar heat grid of daily spend for the current month" width="230">
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/cost-demo.gif" alt="A pointer rests on the busiest bar of each cost flyout tab until its tooltip shows, then clicks it open to the per-model breakdown" width="312">
+</p>
+
 ## What it shows
 
 | Provider        | Quota / limits                                    | Where that comes from                                                  |
@@ -36,7 +40,8 @@ as a month heat grid. Clicking any bar or day expands it into a per-model breakd
 | **Claude**      | session window, weekly window, per-model windows  | claude.ai, using your browser's existing session; plan read from disk   |
 | **Gemini**      | daily usage, Google One AI credit pool            | gemini.google.com, using your browser's existing session                |
 | **Antigravity** | Gemini window, Claude/GPT window, plan            | the local Antigravity language server, plus Google's Cloud Code API     |
-| **Grok**        | weekly window                                     | the `grok` CLI's local session and log files                            |
+| **Grok**        | weekly window                                     | xAI's billing service via the `grok` CLI's sign-in; else the CLI's log  |
+| **Grok Bot**    | weekly window; on-demand spend when capped        | the Grok Bot desktop app's sign-in, against Cursor's dashboard service  |
 
 Cost is computed separately, from **local log files only** — the transcripts
 each CLI already writes to `~/.claude`, `~/.codex`, `~/.gemini`, `~/.grok` and
@@ -44,6 +49,11 @@ Antigravity's trajectory databases. Tokens are priced against the
 [LiteLLM](https://github.com/BerriAI/litellm) model catalog (fetched once and
 cached on disk), which is why the heading reads *"Cost (if pay-per-use)"* — it
 is what your usage *would* have cost on the API, not what you were charged.
+Each request is priced on its own, so a model that costs more for long prompts
+(Claude Haiku 5.5 past 100K tokens, GPT-5.5 past 272K, Gemini 2.5 and 3.1 Pro past
+200K, Grok 4.x from 200K) is billed at the higher rate only for the requests whose
+prompt crosses that size.
+Grok Bot has no local cost history yet: its tab shows the weekly bar only.
 
 Clicking the cost row opens a separate chart window with a 7-day bar chart, a
 month grid, a 24-hour histogram, and a per-model breakdown you can expand by
@@ -100,14 +110,20 @@ immediately on cold start, so it is never blank while a fetch is in flight.
 
 Each provider connects itself:
 
-- **Codex** and **Grok** work as soon as their CLI has been used once — they are
-  read straight off disk and the local app-server.
+- **Codex** works as soon as its CLI has been used once — it is read from the
+  local app-server.
+- **Grok** works as soon as the `grok` CLI has been signed in and used once. The
+  bar is read live with the CLI's sign-in; when that has expired, or the network
+  is off, it comes from the CLI's own log files instead.
 - **Antigravity** is read from its language server, which runs while Antigravity
   (or `agy`) is open. Plan and quota keep working from a cached token afterwards.
 - **Claude** and **Gemini** use the session cookies already in your browser
   (Chrome, Chromium, Brave, Edge or Firefox). If you are signed in to claude.ai
   or gemini.google.com in one of those, there is nothing to configure; if you
   are not, the widget shows a **Sign in** button that opens the right page.
+- **Grok Bot** uses the sign-in the Grok Bot desktop app keeps: open the app and
+  sign in once. That sign-in is encrypted with the Chromium Safe Storage key, so
+  reading it needs KWallet, like the browser cookies.
 
 On a machine with none of these installed, the widget still starts and shows one
 status line per provider (`No matching browser cookies`, `Grok Build data dir
@@ -183,7 +199,7 @@ with them:
   parent — temp file, `fsync`, `os.replace` — and the files that matter carry a
   `.bak` mirror with corruption quarantine on load.
 - **Credentialed requests refuse redirects.** CPython's redirect handler copies
-  the `Authorization` header cross-origin; the Google endpoints that receive a
+  the `Authorization` header cross-origin; the Google and xAI endpoints that receive a
   bearer token never legitimately redirect, so a `3xx` from one is treated as an
   attack and raised instead of followed.
 - **Refreshes stop while the screen is locked**, and do not overwrite the cached
@@ -198,7 +214,8 @@ make test         # 530 tests
 make lint         # pyflakes (what CI runs)
 make check        # flake8 + Qt6 qmllint (fails on QML errors) + mypy
 make preview      # load a UI component in a standalone window, no Plasma needed
-make screenshots  # re-render docs/screenshots/ offscreen from a mock fixture
+make screenshots  # re-render docs/screenshots/ (PNGs + demo GIF) offscreen from this machine's live usage
+make render-baselines  # re-render the mock-fixture PNGs the render tests compare against
 make build        # package io.github.dlansama.tallybar.plasmoid
 ```
 
@@ -233,15 +250,19 @@ pushing a `v*` tag builds the `.plasmoid`, stamps the version into
 ## Known limitations
 
 - **Linux/KDE only.** It is a Plasma 6 applet; there is no port to anything else.
-- **The Claude and Gemini readings depend on unofficial endpoints** — the same
-  ones their web UIs call, with your own session. They are not public APIs and
+- **The Claude, Gemini and Grok Bot readings depend on unofficial endpoints** — the
+  same ones their own apps call, with your own session. They are not public APIs and
   can change without notice. When one does, that provider degrades to a status
   message and the others keep working.
-- **Grok's weekly bar is only as fresh as the CLI's last run.** xAI's own
-  credit reading reaches the local log when the `grok` CLI starts; between runs
-  the widget shows the last reading and marks it "(cached)" past an hour.
+- **Grok's live bar lasts as long as the CLI's sign-in.** TallyBar uses the access
+  token the `grok` CLI keeps in `~/.grok/auth.json` and never renews it; it lapses
+  about six hours after the CLI last did. After that the bar shows xAI's last reading
+  from the CLI's log, which only updates when the CLI starts, and marks it "(cached)"
+  past an hour. Running `grok` renews its sign-in.
 - **Costs are estimates.** They are list prices applied to locally logged token
-  counts. Treat them as a sense of scale, not a bill.
+  counts. Treat them as a sense of scale, not a bill. An Antigravity CLI session
+  known only from its status-line total is billed at the base rate, since no single
+  request's prompt size survives.
 
 ## Prior art
 

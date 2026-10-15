@@ -1,8 +1,9 @@
-"""Grok (xAI) / Grok Build local telemetry.
+"""Grok (xAI) / Grok Build telemetry.
 
-Live bars come from Grok Build's ``billing: fetched credits config`` lines in
-``~/.grok/logs/unified.jsonl`` (weekly SuperGrok credit pool + tier). No
-browser cookies or network required.
+The weekly SuperGrok credit-pool bar comes live from the billing endpoint the
+grok CLI calls, signed in with the CLI's own access token, when the network is
+allowed; otherwise, or when that fails, from the newest ``billing: fetched
+credits config`` line in ``~/.grok/logs/unified.jsonl``. No browser cookies.
 
 Cost history is handled separately by ``accounting.local_grok_token_summary``
 (also reads the unified log).
@@ -11,10 +12,13 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import threading
+from http.cookiejar import CookieJar
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from accounting import default_provider, now_iso
+from http_helpers import http_text as _default_http_text
 from parsers import parse_grok_billing_config, relative_reset
 
 GROK_HOME = Path.home() / ".grok"
@@ -34,6 +38,14 @@ _BILLING_CHUNK_BYTES = 256 * 1024
 # thresholds would tag a perfectly good reading on every quiet afternoon.
 _BILLING_STALE_AFTER_SECONDS = 3600
 _BILLING_MSG = "billing: fetched credits config"
+# The live reading: the endpoint the grok CLI itself calls at session start, with the
+# CLI's OIDC access token from ~/.grok/auth.json. The token lives about 6h and only
+# the CLI renews it (TallyBar never reads the refresh token), so the live bar works
+# until the token lapses and the log reading covers the rest.
+_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
+_LIVE_SOURCE = "grok-billing-api"
+# A token this close to expiry is left alone: it could lapse in flight.
+_TOKEN_EXPIRY_MARGIN_SECONDS = 60
 
 
 def _parse_billing_line(line: str) -> dict[str, Any] | None:
@@ -224,29 +236,134 @@ def grok_billing_period(log_path: Path | None = None,
 
 def _billing_event_age_seconds(ts_iso: str) -> float | None:
     """Age in seconds of a billing event's own timestamp, or None if unusable."""
-    if not ts_iso:
+    stamp = _parse_period_ts(ts_iso)
+    if stamp is None:
         return None
-    try:
-        stamp = dt.datetime.fromisoformat(ts_iso.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if stamp.tzinfo is None:
-        stamp = stamp.replace(tzinfo=dt.timezone.utc)
     return (dt.datetime.now(dt.timezone.utc) - stamp).total_seconds()
 
 
+def _grok_access_token(home: Path) -> str | None:
+    """The grok CLI's unexpired grok.com access token from ``auth.json``, or None.
+
+    ``auth.json`` maps ``<issuer>::<id>`` to a sign-in record; the latest-expiring
+    record with a ``key`` wins. A record without a parseable ``expires_at`` is
+    skipped, and so is one within ``_TOKEN_EXPIRY_MARGIN_SECONDS`` of expiry.
+    ``refresh_token`` is never read: only the CLI renews the sign-in.
+    """
+    try:
+        data = json.loads((home / "auth.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    cutoff = dt.datetime.now(dt.timezone.utc) + dt.timedelta(
+        seconds=_TOKEN_EXPIRY_MARGIN_SECONDS
+    )
+    best: tuple[dt.datetime, str] | None = None
+    for record in data.values():
+        if not isinstance(record, dict):
+            continue
+        key = record.get("key")
+        expires = _parse_period_ts(record.get("expires_at"))
+        if not isinstance(key, str) or not key or expires is None or expires <= cutoff:
+            continue
+        if best is None or expires > best[0]:
+            best = (expires, key)
+    return best[1] if best else None
+
+
+def _live_billing_event(
+    home: Path,
+    timeout: float,
+    http: Callable[..., tuple[int, str]],
+    log_event: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """The billing endpoint's reading shaped like a log event, or None to fall back.
+
+    Every failure (no usable token, a network error, a stall past ``timeout``, a
+    non-200 reply, an unreadable body, a period that is unreadable or already over)
+    returns None and the caller keeps the log reading; nothing from the request
+    reaches a message, so the token can't either. The endpoint omits the plan name,
+    so the tier comes from the log reading's event when there is one.
+    """
+    token = _grok_access_token(home)
+    if token is None:
+        return None
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    reply = _call_within(
+        timeout, lambda: http(_BILLING_URL, CookieJar(), timeout, "GET", None, headers)
+    )
+    try:
+        status, body = reply
+        payload = json.loads(body) if status == 200 else None
+    except (TypeError, ValueError):
+        return None
+    config = payload.get("config") if isinstance(payload, dict) else None
+    if not isinstance(config, dict):
+        return None
+    ctx: dict[str, Any] = {"config": config}
+    log_ctx = log_event.get("ctx") if isinstance(log_event, dict) else None
+    tier = log_ctx.get("subscriptionTier") if isinstance(log_ctx, dict) else None
+    if isinstance(tier, str) and tier:
+        ctx["subscriptionTier"] = tier
+    event = {"ts": now_iso(), "ctx": ctx}
+    parsed = parse_grok_billing_config(event)
+    if parsed is None:
+        return None
+    period = parsed.get("period") or {}
+    if "end" in period:
+        end = _parse_period_ts(period["end"])
+        if end is None or end <= dt.datetime.now(dt.timezone.utc):
+            return None
+    if not parsed.get("percentExplicit") and log_event is not None:
+        # The same rule as _latest_billing_event: a reading without a percent is 0%
+        # only when it opens a NEW period; mid-period it would hide the last real one.
+        logged = parse_grok_billing_config(log_event)
+        log_start = _period_start_iso(log_event)
+        if (logged or {}).get("percentExplicit") and not (
+            log_start and _period_start_iso(event) > log_start
+        ):
+            return None
+    return event
+
+
+def _call_within(budget: float, func: Callable[[], Any]) -> Any:
+    """``func()`` on a daemon thread, or None if it raises or outlasts ``budget`` seconds.
+
+    urllib's timeout bounds each socket operation, not the whole request, and not the
+    DNS lookup at all, so a stalled request could outlast the provider's deadline and
+    lose the log reading with it. The abandoned thread is a daemon: it can't hold up
+    the one-shot backend's exit.
+    """
+    box: list[Any] = []
+
+    def run() -> None:
+        try:
+            box.append(func())
+        except Exception:
+            pass
+
+    worker = threading.Thread(target=run, name="tallybar-grok-billing", daemon=True)
+    worker.start()
+    worker.join(budget)
+    return box[0] if box else None
+
+
 def run_grok_local(
-    timeout: float = 12.0,  # noqa: ARG001 — signature parity with other local providers
+    timeout: float = 12.0,
     log_path: Path | None = None,
     grok_home: Path | None = None,
     now: dt.datetime | None = None,
+    network: bool = False,
+    http: Callable[..., tuple[int, str]] | None = None,
 ) -> dict[str, Any]:
-    """Build a Grok provider dict from local Grok Build state.
+    """Build a Grok provider dict from Grok Build's billing reading.
 
-    The bars come from the ``billing: fetched credits config`` events in
-    ``~/.grok/logs/unified.jsonl`` — the weekly SuperGrok credit-pool bar
-    (``creditUsagePercent``, tier, period). ``log_path`` / ``grok_home``
-    override the defaults for tests.
+    The bar is the weekly SuperGrok credit pool (``creditUsagePercent``, tier,
+    period). With ``network`` it is read live from the billing endpoint using the
+    CLI's unexpired access token; otherwise, or when that fails, it comes from the
+    newest ``billing: fetched credits config`` event in ``~/.grok/logs/unified.jsonl``.
+    ``log_path`` / ``grok_home`` / ``http`` override the defaults for tests.
 
     Statuses:
       - ``not-running`` when ``~/.grok`` is absent or unauthenticated
@@ -271,6 +388,13 @@ def run_grok_local(
         return result
 
     event = _latest_billing_event(path)
+    source = "local-grok-build"
+    if network:
+        live = _live_billing_event(
+            home, max(1.0, min(8.0, timeout / 2)), http or _default_http_text, event
+        )
+        if live is not None:
+            event, source = live, _LIVE_SOURCE
     if event is None:
         # Auth present but no billing lines yet — still a useful degraded state.
         auth = home / "auth.json"
@@ -288,13 +412,14 @@ def run_grok_local(
         result["message"] = "Billing event present but unparseable"
         return result
 
-    # fetchedAt is when the NUMBER was captured (by the CLI, into the log), not when
-    # we read the file — stamping now_iso() here claimed a freshness we never had.
+    # fetchedAt is when the NUMBER was captured (by the CLI into the log, or by our live
+    # request), not when we read the file — stamping now_iso() on a log reading claimed
+    # a freshness we never had.
     captured_at = str(event.get("ts") or "").strip()
     result.update(
         status="ok",
         message="Grok Build usage",
-        source="local-grok-build",
+        source=source,
         limits=parsed.get("limits") or [],
         fetchedAt=captured_at or now_iso(),
     )

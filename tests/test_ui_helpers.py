@@ -45,12 +45,15 @@ def test_tab_label():
     assert _run_js_fn("tabLabel", "codex") == "Codex"
     assert _run_js_fn("tabLabel", "claude") == "Claude"
     assert _run_js_fn("tabLabel", "grok") == "Grok"
+    assert _run_js_fn("tabLabel", "grokbot") == "Grok Bot"
     assert _run_js_fn("tabLabel", "unknown") == "Codex"
 
 
 def test_provider_short_label():
     assert _run_js_fn("providerShortLabel", "antigravity") == "Antigr."
     assert _run_js_fn("providerShortLabel", "codex") == "Codex"
+    # "Bot": the settings chips split a fixed width six ways and "Grok" is the next chip.
+    assert _run_js_fn("providerShortLabel", "grokbot") == "Bot"
     assert _run_js_fn("providerShortLabel", "custom") == "custom"
 
 
@@ -58,11 +61,16 @@ def test_provider_login_site_and_url():
     assert _run_js_fn("providerLoginSite", "claude") == "claude.ai"
     assert _run_js_fn("providerLoginUrl", "claude") == "https://claude.ai/login"
     assert _run_js_fn("providerLoginUrl", "antigravity") == ""
+    # Grok Bot signs in through its desktop app, not a browser: no sign-in button.
+    assert _run_js_fn("providerLoginUrl", "grokbot") == ""
 
 
 def test_dashboard_and_status_urls():
     assert _run_js_fn("dashboardUrl", "claude") == "https://claude.ai/settings/usage"
     assert _run_js_fn("statusUrl", "claude") == "https://status.claude.com/"
+    assert _run_js_fn("dashboardUrl", "grokbot") == "https://cursor.com/dashboard?tab=billing"
+    assert _run_js_fn("statusUrl", "grokbot") == "https://status.x.ai/"
+    assert _run_js_fn("dashboardUrl", "grok") == "https://grok.com/?_s=usage"   # Grok Build unchanged
 
 
 def test_status_is_bad():

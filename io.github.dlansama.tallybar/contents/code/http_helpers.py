@@ -104,6 +104,16 @@ def http_json(url: str, jar: CookieJar, timeout: float, method: str = "GET", bod
         return int(exc.code), data
 
 
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """Never follow a 3xx. CPython's redirect handler copies every request header —
+    ``Authorization`` included — onto the redirect target, with no same-origin check and no
+    https check (``_require_https`` only sees the first URL). Refusing makes urllib raise the
+    3xx as an HTTPError, which the caller already turns into an error status."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def http_text(
     url: str,
     jar: CookieJar,
@@ -113,7 +123,12 @@ def http_text(
     headers: dict[str, str] | None = None,
 ) -> tuple[int, str]:
     _require_https(url)
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    handlers: list[Any] = [urllib.request.HTTPCookieProcessor(jar)]
+    # A bearer-carrying request must not follow redirects (cookie-only callers still do:
+    # the jar scopes cookies to their own domain on every hop).
+    if any(k.lower() == "authorization" for k in (headers or {})):
+        handlers.append(_RefuseRedirects())
+    opener = urllib.request.build_opener(*handlers)
     request_headers = {
         "Accept": "*/*",
         "User-Agent": "Mozilla/5.0 TallyBar Plasma/0.1",
