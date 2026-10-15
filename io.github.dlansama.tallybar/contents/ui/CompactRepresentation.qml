@@ -7,7 +7,6 @@ Item {
     id: root
 
     signal toggleRequested()
-    property var tabs: []
     signal cycleModeRequested(int direction)
     // Accumulate wheel deltas so a high-resolution touchpad doesn't machine-gun the cycle;
     // one notch (Qt reports 120 per detent) = one provider step.

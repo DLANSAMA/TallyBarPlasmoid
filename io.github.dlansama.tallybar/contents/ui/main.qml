@@ -536,7 +536,6 @@ PlasmoidItem {
         vertical: Plasmoid.formFactor === PlasmaCore.Types.Vertical
         selectedProvider: root.selectedProvider
         telemetry: root.telemetry
-        tabs: root.activeProviders
         onToggleRequested: () => {
             root.expanded = !root.expanded;
         }
