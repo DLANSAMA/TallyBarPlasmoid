@@ -214,8 +214,7 @@ _active_pricing: list[tuple[str, dict[str, float]]] | None = None
 _last_fetch_time: float = 0.0
 # Resolution memo: get_pricing is called once per usage record by the local-log cost
 # summarizers, so an un-memoized lookup is O(records × catalog) substring scans per
-# refresh. Keyed by lowercased model name; MUST be cleared wherever _active_pricing is
-# (re)built, or a stale catalog's resolution survives a refresh.
+# refresh. Keyed by lowercased model name; only _install_catalog resets it.
 _resolve_memo: dict[str, dict[str, float]] = {}
 # Bumped (under _pricing_lock) every time _active_pricing is (re)built. get_pricing scans
 # the catalog OUTSIDE the lock — it runs once per usage record — and only memoizes its
@@ -434,11 +433,21 @@ def _with_fallback_supplement(entries: list[tuple[str, dict[str, float]]]) -> li
     return list(entries) + supplement
 
 
+def _install_catalog(
+    entries: list[tuple[str, dict[str, float]]] | None, fetched_at: float
+) -> None:
+    """Swap in a catalog (None = unloaded), dropping memoized resolutions and bumping the
+    generation. The caller holds _pricing_lock."""
+    global _active_pricing, _last_fetch_time, _catalog_generation
+    _active_pricing = entries
+    _last_fetch_time = fetched_at
+    _resolve_memo.clear()
+    _catalog_generation += 1
+
+
 async def refresh_pricing(timeout: float = 10.0) -> bool:
     """Fetch latest pricing from LiteLLM and update the in-memory + disk cache.
     Returns True if successful, False if the fetch failed (stale data retained)."""
-    global _active_pricing, _last_fetch_time, _catalog_generation
-
     raw = await to_daemon_thread(_fetch_litellm_pricing, timeout)
     if raw is None:
         return False
@@ -448,10 +457,7 @@ async def refresh_pricing(timeout: float = 10.0) -> bool:
         return False
 
     with _pricing_lock:
-        _active_pricing = _with_fallback_supplement(converted)
-        _resolve_memo.clear()
-        _catalog_generation += 1
-        _last_fetch_time = time.time()
+        _install_catalog(_with_fallback_supplement(converted), time.time())
     _save_cache(converted)  # disk cache stays pure fetched data
     return True
 
@@ -462,28 +468,22 @@ def get_pricing(model: str | None) -> dict[str, float]:
 
     ONLY does fast in-memory or stale disk-cache reads, and never calls
     refresh_pricing synchronously."""
-    global _active_pricing, _last_fetch_time, _catalog_generation
-
     if _active_pricing is None:
         with _pricing_lock:
             if _active_pricing is None:
-                _resolve_memo.clear()
-                _catalog_generation += 1
                 cached = _load_cache()
                 if cached:
-                    _active_pricing = _with_fallback_supplement(cached)
-                    _last_fetch_time = time.time()
+                    _install_catalog(_with_fallback_supplement(cached), time.time())
                 else:
                     stale = _load_cache_stale()
                     if stale:
-                        _active_pricing = _with_fallback_supplement(stale)
                         try:
-                            _last_fetch_time = os.path.getmtime(PRICING_CACHE_PATH)
+                            fetched_at = os.path.getmtime(PRICING_CACHE_PATH)
                         except Exception:
-                            _last_fetch_time = 0.0
+                            fetched_at = 0.0
+                        _install_catalog(_with_fallback_supplement(stale), fetched_at)
                     else:
-                        _active_pricing = list(_FALLBACK_PRICING)
-                        _last_fetch_time = 0.0
+                        _install_catalog(list(_FALLBACK_PRICING), 0.0)
 
     name = (model or "").lower()
     if not name:
@@ -495,25 +495,25 @@ def get_pricing(model: str | None) -> dict[str, float]:
         catalog = _active_pricing or []
         generation = _catalog_generation
     result: dict[str, float] = {}
-    family = None        # pattern in name  (catalog key ⊂ query) — most specific family
-    family_len = -1
-    loose = None         # name in pattern  (query ⊂ longer catalog key) — last resort
-    loose_len = -1
+    key_in_name = None
+    key_in_name_len = -1
+    name_in_key = None
+    name_in_key_len = -1
     for pattern, prices in catalog:
         if pattern == name:
             result = prices
             break
         if pattern in name:
-            if len(pattern) > family_len:
-                family, family_len = prices, len(pattern)
+            if len(pattern) > key_in_name_len:
+                key_in_name, key_in_name_len = prices, len(pattern)
         elif name in pattern:
-            if len(pattern) > loose_len:
-                loose, loose_len = prices, len(pattern)
+            if len(pattern) > name_in_key_len:
+                name_in_key, name_in_key_len = prices, len(pattern)
     else:
-        if family is not None:
-            result = family
-        elif loose is not None:
-            result = loose
+        if key_in_name is not None:
+            result = key_in_name
+        elif name_in_key is not None:
+            result = name_in_key
     with _pricing_lock:
         if generation == _catalog_generation:
             _resolve_memo[name] = result
@@ -522,12 +522,8 @@ def get_pricing(model: str | None) -> dict[str, float]:
 
 def invalidate_cache() -> None:
     """Clear in-memory pricing so the next get_pricing() call re-bootstraps."""
-    global _active_pricing, _last_fetch_time, _catalog_generation
     with _pricing_lock:
-        _active_pricing = None
-        _last_fetch_time = 0.0
-        _resolve_memo.clear()
-        _catalog_generation += 1
+        _install_catalog(None, 0.0)
 
 
 def cache_is_current() -> bool:
