@@ -1,6 +1,5 @@
-"""Tests for the TallyBar-parity features: per-model breakdown + burn-rate
-(accounting.token_summary), threshold notifications + config setter + cost export
-(backend). These guard the new productivity surfaces against regression."""
+"""Tests for per-model breakdown + burn-rate (accounting.token_summary), threshold
+notifications, the config setter and cost export (backend)."""
 
 import json
 import sys
@@ -14,24 +13,22 @@ import accounting  # noqa: E402
 import backend  # noqa: E402
 
 
-# --- F3: per-model breakdown + burn-rate in token_summary -------------------
-
 def test_model_breakdown_rows_sorted_and_capped():
     mc = {
         "a": {"cost": 1.0, "tokens": 10},
         "b": {"cost": 9.0, "tokens": 20},
-        "c": {"cost": 0.0, "tokens": 0},  # dropped (no cost/tokens)
+        "c": {"cost": 0.0, "tokens": 0},
         "d": {"cost": 3.0, "tokens": 5},
     }
     rows = accounting.model_breakdown_rows(mc)
-    assert [r["model"] for r in rows] == ["b", "d", "a"]  # cost desc, zero-row dropped
+    assert [r["model"] for r in rows] == ["b", "d", "a"]
     assert accounting.model_breakdown_rows(None) == []
     assert len(accounting.model_breakdown_rows(mc, limit=2)) == 2
 
 
 def test_token_summary_emits_raw_fields_and_burn_rate():
     import datetime as _dt
-    daily = [{"date": f"2026-05-{d:02d}", "tokens": 1000, "cost": 7.0} for d in range(24, 31)]  # 7 days × $7
+    daily = [{"date": f"2026-05-{d:02d}", "tokens": 1000, "cost": 7.0} for d in range(24, 31)]
     s = accounting.token_summary(
         today_tokens=1000, month_tokens=30000, source="t",
         today_cost=7.0, month_cost=210.0, daily=daily,
@@ -40,7 +37,7 @@ def test_token_summary_emits_raw_fields_and_burn_rate():
         model_costs_1d={"haiku": {"cost": 7.0, "tokens": 1000}},
     )
     assert s["costToday"] == 7.0
-    assert s["cost7d"] == 49.0          # 7 × $7
+    assert s["cost7d"] == 49.0
     assert s["cost30d"] == 210.0
     # burn_rate = 49 / (6 + elapsed_fraction_of_today); denominator is in [6, 7].
     _now = _dt.datetime.now()
@@ -53,15 +50,12 @@ def test_token_summary_emits_raw_fields_and_burn_rate():
     assert [(m["model"], m["cost"]) for m in s["modelBreakdown1d"]] == [("haiku", 7.0)]
 
 
-# --- F4: cost export projection ---------------------------------------------
-
 def test_cost_export_projects_and_totals():
     snapshot = {
         "timestamp": "2026-05-31T00:00:00Z",
         "providers": {
             # Every provider carries its cost under "costSummary" — the only key the backend
-            # ever attaches. (There is no top-level "cost" provider key; the old export
-            # fallback that read one was dead code and was removed.)
+            # ever attaches.
             "claude": {"costSummary": {
                 "cost30d": 100.0, "cost7d": 21.0, "costToday": 3.0,
                 "burnRatePerDay": 3.0, "today": "Today: $3",
@@ -70,19 +64,19 @@ def test_cost_export_projects_and_totals():
                 "modelBreakdown1d": [{"model": "haiku", "cost": 3.0, "tokens": 1}],
             }},
             "codex": {"costSummary": {"cost30d": 50.0, "burnRatePerDay": 2.0}},
-            "gemini": {"status": "ok"},  # no cost -> skipped
+            "gemini": {"status": "ok"},
         },
     }
     out = backend.cost_export(snapshot)
     assert out["generatedAt"] == "2026-05-31T00:00:00Z"
     assert set(out["providers"].keys()) == {"claude", "codex"}
-    assert "today" not in out["providers"]["claude"]  # display strings excluded
+    assert "today" not in out["providers"]["claude"]
     assert out["providers"]["claude"]["modelBreakdown"][0]["model"] == "opus"
     assert out["providers"]["claude"]["modelBreakdown7d"][0]["model"] == "opus"
     assert out["providers"]["claude"]["modelBreakdown1d"][0]["model"] == "haiku"
     assert out["totals"]["cost30d"] == 150.0
     assert out["totals"]["burnRatePerDay"] == 5.0
-    assert out["totals"]["projectedMonthlyCost"] == 150.0  # 5 × 30
+    assert out["totals"]["projectedMonthlyCost"] == 150.0
     assert "degraded" not in out  # healthy scan -> no degraded flag
 
 
@@ -92,7 +86,7 @@ def test_cost_export_flags_degraded_cost_scan():
     # must surface as out["degraded"] so a --cost consumer can tell the two apart.
     snapshot = {
         "timestamp": "2026-05-31T00:00:00Z",
-        "providers": {"claude": {"status": "ok"}},  # cost scan never populated costSummary
+        "providers": {"claude": {"status": "ok"}},
         "diagnostics": {"cost_summary_timeout": True},
     }
     out = backend.cost_export(snapshot)
@@ -102,14 +96,12 @@ def test_cost_export_flags_degraded_cost_scan():
     assert out["degradedReason"] == "cost_summary_timeout"
 
 
-# --- F1: threshold notifications --------------------------------------------
-
 def _providers(claude_session=94, codex_session=100):
     return {
         "claude": {"label": "Claude", "limits": [
             {"label": "Session", "percent": claude_session},
             {"label": "Weekly", "percent": 50},
-            {"label": "Credits", "percent": 0, "isExtraUsage": True},  # must be skipped
+            {"label": "Credits", "percent": 0, "isExtraUsage": True},
         ]},
         "codex": {"label": "Codex", "limits": [{"label": "Session", "percent": codex_session}]},
     }
@@ -121,16 +113,14 @@ def test_notifications_fire_dedupe_and_rearm(tmp_path, monkeypatch):
 
     first = backend.compute_notifications(_providers(), cfg)
     keys = {(n["provider"], n["label"], n["threshold"]) for n in first}
-    assert ("claude", "Session", 90) in keys      # highest crossed for 94%
+    assert ("claude", "Session", 90) in keys
     assert ("codex", "Session", 100) in keys       # limit reached
     assert ("claude", "Weekly", 90) not in keys    # 50% — below threshold
     assert all(n["label"] != "Credits" for n in first)  # isExtraUsage skipped
     assert any(n["urgency"] == "critical" for n in first)  # codex at 100
 
-    # Same state -> nothing new (de-duped).
     assert backend.compute_notifications(_providers(), cfg) == []
 
-    # Drop below 90 (re-arm), then cross again -> re-fires.
     backend.compute_notifications(_providers(claude_session=40), cfg)
     again = backend.compute_notifications(_providers(claude_session=92), cfg)
     assert ("claude", "Session", 90) in {(n["provider"], n["label"], n["threshold"]) for n in again}
@@ -163,9 +153,9 @@ def test_notifications_rolling_window_dip_does_not_refire(tmp_path, monkeypatch)
     cfg = {"notificationsEnabled": True, "notificationThresholds": [90, 100]}
 
     first = backend.compute_notifications(_limit_provider(100), cfg)
-    assert [n["threshold"] for n in first] == [100]  # fires once at 100
+    assert [n["threshold"] for n in first] == [100]
 
-    assert backend.compute_notifications(_limit_provider(95), cfg) == []   # dip: held, no re-arm
+    assert backend.compute_notifications(_limit_provider(95), cfg) == []
     assert backend.compute_notifications(_limit_provider(100), cfg) == []  # back to 100: no re-fire
 
 
@@ -176,10 +166,10 @@ def test_notifications_gap_rearms_100_not_90(tmp_path, monkeypatch):
     cfg = {"notificationsEnabled": True, "notificationThresholds": [90, 100]}
 
     assert [n["threshold"] for n in backend.compute_notifications(_limit_provider(100), cfg)] == [100]
-    assert backend.compute_notifications(_limit_provider(85), cfg) == []  # re-arms 100, holds 90
+    assert backend.compute_notifications(_limit_provider(85), cfg) == []
 
     again = backend.compute_notifications(_limit_provider(100), cfg)
-    assert [n["threshold"] for n in again] == [100]  # 100 re-fires; 90 stayed armed (no 90 alert)
+    assert [n["threshold"] for n in again] == [100]
 
 
 def test_notifications_genuine_reset_rearms_both(tmp_path, monkeypatch):
@@ -189,13 +179,11 @@ def test_notifications_genuine_reset_rearms_both(tmp_path, monkeypatch):
     cfg = {"notificationsEnabled": True, "notificationThresholds": [90, 100]}
 
     assert [n["threshold"] for n in backend.compute_notifications(_limit_provider(100), cfg)] == [100]
-    assert backend.compute_notifications(_limit_provider(2), cfg) == []  # reset: re-arms 90 AND 100
+    assert backend.compute_notifications(_limit_provider(2), cfg) == []
 
     again = backend.compute_notifications(_limit_provider(100), cfg)
-    assert [n["threshold"] for n in again] == [100]  # re-fires after the reset
+    assert [n["threshold"] for n in again] == [100]
 
-
-# --- F2 + config setter: update_config_values -------------------------------
 
 def test_update_config_values_whitelist_and_validate(tmp_path, monkeypatch):
     cfg_path = tmp_path / ".tallybar" / "config.json"
@@ -204,7 +192,7 @@ def test_update_config_values_whitelist_and_validate(tmp_path, monkeypatch):
     out = backend.update_config_values({
         "notificationsEnabled": False,
         "panelDisplayMode": "cost",
-        "notificationThresholds": [95, 80, 80],  # dedup + sort
+        "notificationThresholds": [95, 80, 80],
         "bogusKey": "ignored",
     })
     assert out["notificationsEnabled"] is False
@@ -220,7 +208,7 @@ def test_update_config_values_whitelist_and_validate(tmp_path, monkeypatch):
     out3 = backend.update_config_values({"providers": ["claude", "codex", "bogus"]})
     assert out3["providers"] == ["codex", "claude"]
     out4 = backend.update_config_values({"providers": []})
-    assert out4["providers"] == ["codex", "claude"]  # empty kept prior
+    assert out4["providers"] == ["codex", "claude"]
 
     # public_config surfaces the new keys with defaults when absent.
     pub = backend.public_config({})
@@ -233,8 +221,7 @@ def test_main_saves_snapshot_before_attaching_notifications(tmp_path, monkeypatc
     # The cached snapshot must NEVER carry 'notifications' (else the cold-start cacheLoader
     # would replay stale alerts). This exercises the REAL main() ordering by driving main()
     # end-to-end: save_snapshot must be called with a snapshot that has no 'notifications'
-    # key, which is only attached afterward for the live stdout. (The old test asserted on a
-    # dict it built inline and never called main(), so it couldn't catch an ordering swap.)
+    # key, which is only attached afterward for the live stdout.
     monkeypatch.setattr(backend, "NOTIFY_STATE_PATH", tmp_path / "n.json")
 
     live = {
@@ -271,7 +258,7 @@ def test_compute_notifications_no_rearm_on_transient_provider_failure(tmp_path, 
     # A crossing that already fired must NOT re-fire just because the provider transiently
     # fails (its fallback dict carries limits:[]). The armed-set is seeded from the persisted
     # state, so an unobserved limit keeps its armed key and the alert isn't replayed on
-    # recovery. (Regression guard for the re-arm-on-timeout bug.)
+    # recovery.
     monkeypatch.setattr(backend, "NOTIFY_STATE_PATH", tmp_path / "n.json")
     cfg = {"notificationsEnabled": True, "notificationThresholds": [90]}
 
@@ -296,7 +283,7 @@ def test_compute_notifications_skips_redundant_state_write(tmp_path, monkeypatch
     monkeypatch.setattr(backend, "NOTIFY_STATE_PATH", tmp_path / "n.json")
     cfg = {"notificationsEnabled": True, "notificationThresholds": [90]}
 
-    backend.compute_notifications(_providers(claude_session=95), cfg)  # first write (state changes)
+    backend.compute_notifications(_providers(claude_session=95), cfg)
     calls = {"n": 0}
     real_save = backend._save_notify_state
 
@@ -305,13 +292,12 @@ def test_compute_notifications_skips_redundant_state_write(tmp_path, monkeypatch
         return real_save(fired)
 
     monkeypatch.setattr(backend, "_save_notify_state", counting_save)
-    # Same state twice -> no further writes.
     backend.compute_notifications(_providers(claude_session=95), cfg)
     backend.compute_notifications(_providers(claude_session=95), cfg)
     assert calls["n"] == 0
 
 
-# --- Status-transition notifications (error-UX cluster) ---------------------
+# --- Status-transition notifications ---------------------
 
 def _status_providers(claude_status="ok", codex_status="ok"):
     """Providers carrying only a status (no limit crossings) so the returned notifications
@@ -326,7 +312,6 @@ def test_status_notification_fires_once_on_ok_to_bad(tmp_path, monkeypatch):
     monkeypatch.setattr(backend, "NOTIFY_STATE_PATH", tmp_path / "n.json")
     cfg = {"notificationsEnabled": True}
 
-    # Healthy baseline arms nothing.
     assert backend.compute_notifications(_status_providers(claude_status="ok"), cfg) == []
 
     # ok -> missing-cookies: exactly one status alert for Claude, with a usable payload.
@@ -342,7 +327,6 @@ def test_status_notification_no_refire_while_bad(tmp_path, monkeypatch):
     cfg = {"notificationsEnabled": True}
 
     assert len(backend.compute_notifications(_status_providers(claude_status="unauthorized"), cfg)) == 1
-    # Still bad next refresh -> no repeat (de-duped per outage episode).
     assert backend.compute_notifications(_status_providers(claude_status="unauthorized"), cfg) == []
     # A DIFFERENT bad status with no intervening recovery is still the same episode -> no refire.
     assert backend.compute_notifications(_status_providers(claude_status="api-error"), cfg) == []
@@ -397,7 +381,7 @@ def test_status_keys_disjoint_from_usage_keys(tmp_path, monkeypatch):
     cfg = {"notificationsEnabled": True, "notificationThresholds": [90]}
     providers = {
         "claude": {"label": "Claude", "status": "ok",
-                   "limits": [{"label": "Session", "percent": 95}]},        # usage crossing
+                   "limits": [{"label": "Session", "percent": 95}]},
         "codex": {"label": "Codex", "status": "unauthorized", "limits": []},  # status transition
     }
     out = backend.compute_notifications(providers, cfg)
@@ -425,12 +409,12 @@ def test_all_ai_mtd_sums_inmonth_buckets_only_not_cost30d():
         "claude": {"costSummary": {
             "monthlyTokenUsage": [
                 {"inMonth": True, "cost": 5.0}, {"inMonth": True, "cost": 3.0},
-                {"inMonth": False, "cost": 99.0},  # prior-month leading blank -> excluded
+                {"inMonth": False, "cost": 99.0},
             ],
             "cost30d": 1000.0,  # must NOT leak into the month-to-date figure
         }},
         "codex": {"costSummary": {"monthlyTokenUsage": [{"inMonth": True, "cost": 2.0}]}},
-        "gemini": {"status": "ok"},  # no costSummary -> contributes 0, no raise
+        "gemini": {"status": "ok"},
     }
     assert backend.all_ai_month_to_date_cost(providers) == 10.0
     assert backend.all_ai_month_to_date_cost({}) == 0.0
@@ -450,7 +434,6 @@ def test_budget_alert_fires_dedupes_rearms(tmp_path, monkeypatch):
     assert len(first) == 1 and first[0]["threshold"] == 80 and first[0]["urgency"] == "normal"
     assert first[0]["label"] == "Monthly budget"
 
-    # Same state -> de-duped (no replay).
     assert [n for n in backend.compute_notifications(p85, cfg) if n["provider"] == "all"] == []
 
     # Over budget -> 100 fires critical (highest crossed only, not 80 again).
@@ -482,7 +465,7 @@ def test_budget_keys_disjoint_from_usage_keys(tmp_path, monkeypatch):
     cfg = {"notificationsEnabled": True, "notificationThresholds": [90], "monthlyBudget": 100.0}
     out = backend.compute_notifications(providers, cfg)
     provs = {n["provider"] for n in out}
-    assert "claude" in provs and "all" in provs  # both surfaced from one run
+    assert "claude" in provs and "all" in provs
 
 
 def test_projected_month_cost_calendar_pace():
@@ -543,15 +526,14 @@ def test_budget_projected_tracks_while_disabled(tmp_path, monkeypatch):
     monkeypatch.setattr(backend, "all_ai_projected_month_cost", lambda *a, **k: 150.0)
     p = _cost_providers([{"inMonth": True, "cost": 50.0}])
     off = {"notificationsEnabled": False, "notificationThresholds": [100], "monthlyBudget": 100.0}
-    assert backend.compute_notifications(p, off) == []  # nothing emitted while off
+    assert backend.compute_notifications(p, off) == []
     on = {"notificationsEnabled": True, "notificationThresholds": [100], "monthlyBudget": 100.0}
-    # Now enabled, but the crossing was already armed -> not replayed.
     assert not any("on pace" in n["title"] for n in backend.compute_notifications(p, on))
 
 
 def test_update_config_values_monthly_budget(tmp_path, monkeypatch):
     monkeypatch.setattr(backend, "CONFIG_PATH", tmp_path / ".tallybar" / "config.json")
-    assert backend.public_config({})["monthlyBudget"] == 0           # default surfaced
+    assert backend.public_config({})["monthlyBudget"] == 0
     assert backend.update_config_values({"monthlyBudget": 150.0})["monthlyBudget"] == 150.0
     assert backend.update_config_values({"monthlyBudget": "nonsense"})["monthlyBudget"] == 150.0  # garbage ignored
     assert backend.update_config_values({"monthlyBudget": -5})["monthlyBudget"] == 150.0          # out-of-range ignored
@@ -569,7 +551,7 @@ def test_update_config_values_custom_thresholds_roundtrip(tmp_path, monkeypatch)
     assert out["notificationThresholds"] == [55, 73, 99]  # dedup+sort; 120 and 0 out of (0,100]
 
 
-# --- QoL batch 2026-07: weekly-80 alert, muted providers, actionUrl ----------
+# --- Weekly-80 alert, muted providers, actionUrl ----------
 
 def test_weekly_alert_fires_once_and_rearms_on_reset(tmp_path, monkeypatch):
     """A weekly window crossing 80% fires ONE notification, de-duped per
@@ -605,10 +587,8 @@ def test_weekly_alert_fires_once_and_rearms_on_reset(tmp_path, monkeypatch):
 
 
 def test_weekly_alert_migrates_old_resetat_keys(tmp_path, monkeypatch):
-    """An armed-set persisted by the old resetAt-keyed scheme neither replays the alert
-    (the limit is still over 80 -> new key arms silently... it WOULD fire once since the
-    new key isn't in previously_fired; verify exactly-once, then silence) nor leaks the
-    stale timestamp keys forever."""
+    """Old resetAt-keyed armed-set entries are pruned (not leaked forever), the
+    alert may fire once for the new key, and later refreshes are silent."""
     state = tmp_path / "notify_state.json"
     monkeypatch.setattr(backend, "NOTIFY_STATE_PATH", state)
     state.write_text(json.dumps({"fired": ["weekly80|claude|2026-07-09T19:59:59.573816+00:00"]}))
@@ -616,9 +596,9 @@ def test_weekly_alert_migrates_old_resetat_keys(tmp_path, monkeypatch):
     provs = {"claude": {"label": "Claude", "limits": [
         {"label": "Weekly", "percent": 85, "resetAt": "2026-07-09T20:00:00Z", "windowMinutes": 10080},
     ]}}
-    backend.compute_notifications(provs, cfg)  # migration run (may fire once for the new key)
+    backend.compute_notifications(provs, cfg)
     fired = set(json.loads(state.read_text())["fired"])
-    assert fired == {"weekly80|claude|Weekly"}  # old timestamp key pruned
+    assert fired == {"weekly80|claude|Weekly"}
     # Subsequent refreshes: silent.
     assert [n for n in backend.compute_notifications(provs, cfg) if n["threshold"] == 80] == []
 
@@ -640,9 +620,7 @@ def test_muted_provider_raises_no_notifications(tmp_path, monkeypatch):
 def test_update_config_values_muted_providers_whitelist(tmp_path, monkeypatch):
     monkeypatch.setattr(backend, "CONFIG_PATH", tmp_path / ".tallybar" / "config.json")
     out = backend.update_config_values({"mutedProviders": ["gemini", "bogus", "claude"]})
-    # Canonical order, unknowns dropped.
     assert out["mutedProviders"] == ["claude", "gemini"]
-    # Public config surfaces it.
     assert backend.public_config(out)["mutedProviders"] == ["claude", "gemini"]
 
 
@@ -675,18 +653,18 @@ def test_gemini_unauthorized_carries_action_url():
 
 def test_budget_alert_not_replayed_after_cost_scan_timeout(tmp_path, monkeypatch):
     """A timed-out cost scan leaves no costSummary, which reads as $0 month-to-date.
-    Evaluating the budget against that re-armed every crossing, so the next good refresh
-    replayed "monthly budget reached". The budget armed-state must HOLD instead."""
+    The budget armed-state must HOLD rather than re-arm against that $0, or the
+    next good refresh would replay "monthly budget reached"."""
     monkeypatch.setattr(backend, "NOTIFY_STATE_PATH", tmp_path / "n.json")
     monkeypatch.setattr(backend, "all_ai_projected_month_cost", lambda *a, **k: 0.0)
     cfg = {"notificationsEnabled": True, "notificationThresholds": [100], "monthlyBudget": 100.0}
     over = _cost_providers([{"inMonth": True, "cost": 120.0}])
-    no_cost = {"p0": {"label": "P0", "limits": []}}  # what a timed-out scan leaves behind
+    no_cost = {"p0": {"label": "P0", "limits": []}}
 
     def budget_alerts(providers, **kw):
         return [n for n in backend.compute_notifications(providers, cfg, **kw) if n["provider"] == "all"]
 
-    assert len(budget_alerts(over)) == 1                    # first crossing fires
+    assert len(budget_alerts(over)) == 1
     assert budget_alerts(no_cost) == []                     # scan timed out: nothing, and no re-arm
     assert budget_alerts(over) == []                        # next good run: NOT replayed
     # Same with the explicit flag main() passes when diagnostics report a timeout, even if

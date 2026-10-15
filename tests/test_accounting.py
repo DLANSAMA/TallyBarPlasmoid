@@ -8,7 +8,6 @@ from pathlib import Path
 import sys
 from unittest.mock import patch
 
-# Adjust sys.path to find backend modules
 sys.path.insert(0, str(Path(__file__).parent.parent / "io.github.dlansama.tallybar" / "contents" / "code"))
 
 import accounting
@@ -26,12 +25,10 @@ def test_compact_token_count():
 
 def test_compact_token_count_fixed_point_at_1e12_does_not_recurse():
     """999_500_000_000 rounds to n=1000 at the "B" tier, the largest unit — there's no
-    bigger tier to carry into, so the old code recursed into compact_token_count(1e12),
-    which round-trips to the SAME value (a true numeric fixed point) and blew the stack
-    (RecursionError). Must format directly against "B" instead."""
+    bigger tier to carry into. Recursing into compact_token_count(1e12) round-trips to the
+    SAME value (a numeric fixed point), so it must format directly against "B" instead."""
     assert accounting.compact_token_count(999_500_000_000) == "1000B"
     assert accounting.compact_token_count(10**12) == "1000B"
-    # A comfortably larger value in the same regime must not recurse/crash either.
     assert accounting.compact_token_count(5_000_000_000_000) == "5000B"
 
 def test_exact_usd():
@@ -63,15 +60,13 @@ def test_usage_cost_usd_anthropic():
         # cache_read_input_tokens as SEPARATE, additive buckets (input_tokens
         # already EXCLUDES the cache tokens), so each is billed at its own rate:
         #   100000*3.00 + 5000*15.00 + 20000*3.75 + 50000*0.30 = 465000 -> $0.465.
-        # (Subtracting cache_creation off input_tokens — the old behavior — under-billed.)
         assert pytest.approx(cost, 1e-6) == 0.465
 
 def test_usage_cost_usd_anthropic_1h_cache_write():
     # Anthropic bills 1-HOUR cache writes at 2x input ($10/MTok for Opus 4.8) and
     # 5-minute writes at 1.25x ($6.25). The flat cache_creation_input_tokens count is
     # split by the nested cache_creation.ephemeral_1h/5m breakdown and each portion
-    # billed at its own rate. Billing ALL of it at the 5m rate (the old behavior)
-    # under-billed cache-heavy Claude use by ~8.7% on real data.
+    # billed at its own rate.
     with patch("accounting.model_pricing") as mock_pricing:
         mock_pricing.return_value = {"input": 5.00, "output": 25.00,
                                      "cache_write": 6.25, "cache_write_1h": 10.00, "cache_read": 0.50}
@@ -85,7 +80,6 @@ def test_usage_cost_usd_anthropic_1h_cache_write():
         cost = accounting.usage_cost_usd(usage, "claude-opus-4-8")
         # 10000*5 + 2000*25 + 18000*10 + 12000*6.25 + 40000*0.50
         #  = 50000 + 50000 + 180000 + 75000 + 20000 = 375000 -> $0.375.
-        # Old (all 30000 @ 6.25): 50000+50000+187500+20000 = 307500 -> $0.3075.
         assert pytest.approx(cost, 1e-6) == 0.375
 
 def test_usage_cost_usd_cache_write_flat_without_breakdown():
@@ -101,8 +95,6 @@ def test_usage_cost_usd_cache_write_flat_without_breakdown():
         assert pytest.approx(cost, 1e-6) == 0.2875
 
 def test_usage_cost_usd_1h_breakdown_clamped_to_cache_create():
-    # A malformed breakdown whose 1h count exceeds cache_creation_input_tokens must
-    # NOT over-bill: the 1h portion is clamped to cache_create, the remainder is 0.
     with patch("accounting.model_pricing") as mock_pricing:
         mock_pricing.return_value = {"input": 5.00, "output": 25.00,
                                      "cache_write": 6.25, "cache_write_1h": 10.00, "cache_read": 0.50}
@@ -201,7 +193,7 @@ def test_usage_token_total_and_breakdown():
     assert cached == 70000     # cached_input_tokens(40000) + cache_creation(10000) + cache_read(20000)
 
     total = accounting.usage_token_total(usage)
-    assert total == 136000     # 60000 + 6000 + 70000 (no explicit total key)
+    assert total == 136000
 
 def test_usage_cost_and_breakdown_with_tool_tokens():
     with patch("accounting.model_pricing") as mock_pricing:
@@ -229,7 +221,7 @@ def test_usage_cost_and_breakdown_with_tool_tokens():
         assert pytest.approx(cost, 1e-6) == 0.206
 
         total = accounting.usage_token_total(usage)
-        assert total == 110000     # 75000 + 5000 + 30000
+        assert total == 110000
 
 def test_usage_token_total_and_breakdown_helper_matches_separate_calls():
     # The combined helper must be behaviour-identical to calling usage_token_total()
@@ -251,11 +243,10 @@ def test_usage_token_total_and_breakdown_helper_matches_separate_calls():
     no_total = {"input_tokens": 100000, "output_tokens": 5000, "cache_read_input_tokens": 20000}
     total, breakdown = accounting.usage_token_total_and_breakdown(no_total)
     assert breakdown == (100000, 5000, 20000)
-    assert total == 125000                     # 100000 + 5000 + 20000
+    assert total == 125000
     assert total == accounting.usage_token_total(no_total)
     assert breakdown == accounting.usage_token_breakdown(no_total)
 
-    # Non-dict degrades to (0, (0, 0, 0)), matching the individual functions.
     assert accounting.usage_token_total_and_breakdown(None) == (0, (0, 0, 0))
     assert accounting.usage_token_total(None) == 0
     assert accounting.usage_token_breakdown(None) == (0, 0, 0)
@@ -405,12 +396,8 @@ def test_enrich_ui_formatting():
     assert limits[1]["formattedUsedText"] == "10% used"
 
 
-# ---------------------------------------------------------------------------
-# Local per-provider token-summary readers. These exercise the real
-# file-discovery / parsing / dedup / bucketing paths AND the corrected cost math
-# end-to-end. Pricing is patched to a flat $10/MTok so each expected dollar value
-# is a regression guard for a specific per-provider accounting rule.
-# ---------------------------------------------------------------------------
+# Pricing is patched to a flat $10/MTok so each expected dollar value pins one
+# per-provider accounting rule.
 
 _FLAT_PRICES = {"input": 10.0, "output": 10.0, "cache_write": 10.0, "cache_read": 10.0}
 _NOW = dt.datetime(2026, 5, 28, 12, 0, 0, tzinfo=dt.timezone.utc)
@@ -436,8 +423,7 @@ def test_local_claude_token_summary(tmp_path):
 
     assert summary is not None
     assert summary["source"] == "local-claude-logs"
-    # (100000 + 5000 + 20000 + 50000) * 10 / 1e6 = $1.75. With the old bug
-    # (cache_creation subtracted from input_tokens) it would be $1.55.
+    # (100000 + 5000 + 20000 + 50000) * 10 / 1e6 = $1.75.
     assert "Today: $1.75" in summary["today"]
     assert "175K tok" in summary["today"]
     # The single record is today, so "Last 7 days" (sum of the daily buckets) matches it.
@@ -471,7 +457,6 @@ def test_local_claude_summary_uses_final_streamed_output(tmp_path):
     assert summary is not None
     # Final output 5000 billed (input/cache counted once):
     #   (100000 + 5000 + 20000 + 50000) * 10 / 1e6 = $1.75 ; 175K tok.
-    # First-wins (the old bug) would bill output 5 -> $1.70 and 170K tok.
     assert "Today: $1.75" in summary["today"]
     assert "175K tok" in summary["today"]
 
@@ -584,9 +569,8 @@ def _fork_line(msg_id, uuid, cache_read, out, request_id=None):
 
 def test_requestid_less_messages_and_their_copies_count_once(tmp_path):
     """Some transcripts carry no requestId on any line, and some of them repeat another
-    session's messages. Keyed on requestId-then-uuid, each requestId-less message was
-    billed once per content-block line, and a repeated one again. Every one of those lines
-    shares the message id, so each message must count exactly once."""
+    session's messages. Every content-block line of a
+    message shares the message id, so each message must count exactly once."""
     proj = tmp_path / "proj"
     proj.mkdir()
     # Parent: message A, two content-block lines, with requestId.
@@ -601,7 +585,6 @@ def test_requestid_less_messages_and_their_copies_count_once(tmp_path):
     with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
         summary = accounting.local_claude_token_summary(projects_dir=tmp_path, now=_NOW, cache_dir=None)
     # A: 10 + 1000 + 40 = 1050 once; B: 10 + 2000 + 60 = 2070 once.
-    # requestId-then-uuid keying gave 3 x 1050 + 3 x 2070 = 9360.
     assert summary["tokens30d"] == 1050 + 2070
     assert summary["cost30d"] == pytest.approx((1050 + 2070) * 10 / 1e6)
 
@@ -660,7 +643,7 @@ def test_local_gemini_token_summary(tmp_path):
     assert summary["source"] == "local-gemini-logs"
     # (70000 uncached input + (4000+1000) output + 5000 tool + 30000 cached) * 10 / 1e6
     # = $1.10. thoughts billed as output (not subtracted/clamped); tool added at input
-    # rate. With the old "output - thoughts" clamp it would be $1.09.
+    # rate.
     assert "Today: $1.10" in summary["today"]
     assert "110K tok" in summary["today"]
 
@@ -965,9 +948,7 @@ def test_parse_cache_rebuilds_on_corruption_and_version_bump(tmp_path):
 
 
 def test_burn_rate_is_measured_from_the_summary_now_not_the_wall_clock(tmp_path):
-    # The burn rate's partial day comes from the summary's own `now`. It used to read the
-    # real clock, so two summaries for one fixed moment differed whenever the calls
-    # straddled a second boundary (the parse-cache tests above flaked on projectedMonthlyCost).
+    # The burn rate's partial day comes from the summary's own `now`.
     proj = tmp_path / "proj"
     proj.mkdir()
     (proj / "s.jsonl").write_text(json.dumps(_claude_rec("r1", 5000)) + "\n", encoding="utf-8")
@@ -1121,13 +1102,10 @@ def test_local_summary_includes_hourly(tmp_path):
     assert sum(1 for b in hourly if b["tokens"] > 0) == 1
 
 
-# ---------------------------------------------------------------------------
-# codex_credit_balance selects the first PRESENT key, not first truthy
-# ---------------------------------------------------------------------------
 
 def test_codex_credit_balance_zero_balance_not_dropped():
-    """A real exhausted balance of 0.0 must survive — the old `or` chain treated
-    0.0 as falsy and skipped to a later field (or None)."""
+    """A real exhausted balance of 0.0 must survive; the first PRESENT key wins,
+    not the first truthy one."""
     res = accounting.codex_credit_balance(
         {"credits": {"balance": 0.0, "currency": "credits"}}
     )
@@ -1144,9 +1122,6 @@ def test_codex_credit_balance_no_numeric_key_returns_none():
     assert res is None
 
 
-# ---------------------------------------------------------------------------
-# provider-family fallback pricing for unknown-but-non-empty models
-# ---------------------------------------------------------------------------
 
 def test_provider_family_for_model_mapping():
     """An unrecognised-but-non-empty model name maps to its provider family so
@@ -1201,9 +1176,6 @@ def test_usage_cost_usd_none_model_is_zero():
     assert cost == 0.0
 
 
-# ---------------------------------------------------------------------------
-# Grok billing-week window (main-tree unique)
-# ---------------------------------------------------------------------------
 
 def test_local_grok_billing_week_window(tmp_path):
     """Billing-week window uses exact timestamps — a record on the start DAY but BEFORE the
@@ -1419,7 +1391,7 @@ def test_grok_cli_pricing_maps_bare_versions_to_the_build_row():
     and summary.json both record the bare "grok-4.6". The bare string misses
     _grok_pricing_model's "build" branch, so CLI turns were priced on xAI's API row.
     """
-    # Bare versions -> build row (the fix).
+    # Bare versions -> build row.
     assert accounting._grok_cli_pricing_model("grok-4.6") == "grok-build-0.1"
     assert accounting._grok_cli_pricing_model("Grok 4.6") == "grok-build-0.1"
     assert accounting._grok_cli_pricing_model("grok-4.5") == "grok-build-0.1"
@@ -1476,9 +1448,7 @@ def test_codex_lane_label_follows_window_length_not_position():
     """A free account's primary lane is a 30-day window, not a 5-hour session.
 
     account/rateLimits/read returns lanes positionally, but the durations vary by
-    plan. Labelling by position alone rendered a free account's 43200-minute
-    primary as "Session - Resets in 29d 23h" (verified against a live
-    planType:"free" response, 2026-09-11).
+    plan, so a free account's 43200-minute primary must not read as a session.
     """
     plus = {
         "primary": {"usedPercent": 68, "windowDurationMins": 300, "resetsAt": 0},
@@ -1517,11 +1487,8 @@ def test_per_model_weekly_lane_gets_the_same_pace_line_as_weekly():
     """A per-model cap (Anthropic's seven_day_<model>) is a weekly WINDOW lane.
 
     parse_claude_usage discovers these from the payload, so the label is the model
-    name ("Fable"), not "Weekly". The label-only predicate matched neither
-    session nor weekly, so the lane skipped the polished pace line AND escaped the
-    left/right blanking — leaking internal phrasing ("3% in deficit") to the UI,
-    which reads as *behind* when it means ahead. Verified against a live
-    subscriber account with per-model caps.
+    name ("Fable"), not "Weekly". It must still get the polished pace line and the
+    left/right blanking, so internal phrasing ("3% in deficit") never reaches the UI.
     """
     def lane(label, pct, pace):
         return {"label": label, "percent": pct, "unit": "%", "windowMinutes": 10080,
@@ -1583,7 +1550,7 @@ _USAGE_CORPUS = [
     # OpenAI/Codex: subsets, plus an explicit total and reasoning already inside output.
     {"input_tokens": 12000, "cached_input_tokens": 9000, "output_tokens": 640,
      "reasoning_output_tokens": 512, "total_tokens": 12640},
-    # Gemini: thoughts + tool are additive (a 2026-05-28 audit wrongly called tool a dupe).
+    # Gemini: thoughts + tool are additive.
     {"input": 5000, "output": 300, "cached": 1200, "thoughts": 450, "tool": 90, "total": 5840},
     # Grok: already minimal — slimming must be a no-op on the values that matter.
     {"input_tokens": 700, "cached_input_tokens": 200, "output_tokens": 90},
@@ -1634,7 +1601,6 @@ def test_slim_usage_covers_every_key_the_readers_consume():
     source = "".join(inspect.getsource(fn) for fn in
                      (pricing.usage_cost_usd, pricing.usage_token_breakdown,
                       pricing._explicit_total))
-    # Every string literal fetched out of the usage dict inside those three readers.
     consumed = set(re.findall(r'(?:get|usage\.get)\(\s*"([a-zA-Z_][\w]*)"', source))
     consumed |= set(re.findall(r'"([a-zA-Z_][\w]*)"(?=\s*,\s*")', source))
     missing = {k for k in consumed if k.endswith(("tokens", "Tokens", "Count", "_input_tokens"))
@@ -1890,9 +1856,8 @@ def test_codex_total_only_events_contribute_their_increase(tmp_path):
 
 
 # --- A deadline-cut walk checkpoints, so a cold cache converges across refreshes ---------
-# A parse-version bump empties the cache; if the full re-parse didn't fit one refresh and a
-# cut walk saved nothing, every refresh restarted from zero and the scan never finished
-# (the "Cost scan timed out" banner stuck for good on a large history).
+# A parse-version bump empties the cache; a cut walk must save its progress so the full
+# re-parse finishes across refreshes.
 
 class _FakeClock:
     """Stands in for log_parsers.time: the walk's deadline check is its only clock read."""
@@ -1949,8 +1914,8 @@ def test_cut_walk_checkpoints_and_the_next_walk_resumes(tmp_path, monkeypatch):
 
 
 def test_cold_cache_converges_even_when_no_refresh_fits_a_full_parse(tmp_path, monkeypatch):
-    """Each refresh has time for ONE file. The old all-or-nothing save never finished;
-    with checkpoints the third refresh completes."""
+    """Each refresh has time for ONE file; checkpoints let the third
+    refresh complete."""
     root, walker = _three_files(tmp_path)
     cache = tmp_path / "cache" / "x_logs.json"
     clock = _FakeClock()
