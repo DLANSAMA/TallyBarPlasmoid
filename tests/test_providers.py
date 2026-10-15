@@ -2132,3 +2132,19 @@ def test_grok_bot_decrypts_with_the_chromium_safe_storage_password(tmp_path):
 def test_grok_bot_store_path_lives_under_config():
     # conftest rehomes it per test; the shape is what the app uses (Electron userData).
     assert grok_bot.GROK_BOT_SECRETS_PATH.parts[-3:] == (".config", "Grok Bot", "sand-secrets.json")
+
+
+@pytest.mark.parametrize("limits", [[{"label": "Session", "percent": 12.0, "unit": "%"}], []])
+def test_gemini_web_result_never_carries_a_tier(monkeypatch, limits):
+    """gemini.google.com never reports the subscription tier; it arrives only through
+    apply_local_cost_summaries' propagation from Antigravity's GetUserStatus."""
+    monkeypatch.setattr(providers.gemini, "_load_gemini_tokens", lambda: ("AT", "BL", "SID"))
+    monkeypatch.setattr(providers.gemini, "_save_gemini_tokens", lambda *a: None)
+    with patch("providers.gemini.http_text", return_value=(200, "<html></html>")), \
+         patch("providers.gemini.extract_embedded_config_value", return_value="X"), \
+         patch("providers.gemini.post_gemini_batchexecute", return_value=(200, "payload")), \
+         patch("providers.gemini.parse_batchexecute_payload", return_value={"tier": "Ultra", "_": 1}), \
+         patch("providers.gemini.parse_gemini_usage_info", return_value=limits):
+        res = providers.gemini.run_gemini_web([_cookie("gemini.google.com")], timeout=1.0)
+    assert res["status"] == ("ok" if limits else "api-empty")
+    assert "tier" not in res

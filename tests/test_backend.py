@@ -1626,3 +1626,48 @@ async def test_pre_upgrade_price_cache_is_refetched_at_once():
              patch("pricing_data.refresh_pricing", record_refresh):
             await backend.build_snapshot(args)
         assert bool(refreshed) is expect_refresh, version
+
+
+@pytest.mark.asyncio
+async def test_build_snapshot_starts_the_cost_scan_before_the_provider_fetches():
+    """The overlap contract: the cost scan is launched at the top of build_snapshot, so it is
+    already running when the first provider fetch begins (a scan launched after the provider
+    group, or only after the awaits, would serialize the two)."""
+    import threading
+    cost_started = threading.Event()
+    seen = {}
+
+    def spy_compute(deadline=None):
+        cost_started.set()
+        return {}
+
+    async def fast_threaded(func, *a, **k):
+        return {"status": "ok", "limits": []}
+
+    async def fake_codex_rpc(timeout):
+        # First provider fetch: the scan must get going without waiting for this to finish.
+        for _ in range(100):
+            if cost_started.is_set():
+                break
+            await asyncio.sleep(0.01)
+        seen["started_before_provider_done"] = cost_started.is_set()
+        return {"status": "ok", "label": "Codex", "limits": []}
+
+    async def fake_claude(cookies, timeout, prev=None):
+        return {"status": "ok", "limits": []}
+
+    async def noop_pricing(*a, **k):
+        return
+
+    args = MagicMock()
+    args.no_network = False
+    args.timeout = 0.5
+    with patch("backend.load_config", return_value={}), \
+         patch("backend.collect_browser_sessions", return_value=([], {})), \
+         patch("backend.run_threaded_provider", side_effect=fast_threaded), \
+         patch("backend.run_codex_rpc", side_effect=fake_codex_rpc), \
+         patch("backend.run_claude_api", side_effect=fake_claude), \
+         patch("backend.compute_local_cost_summaries", side_effect=spy_compute), \
+         patch("pricing_data.refresh_pricing", noop_pricing):
+        await backend.build_snapshot(args)
+    assert seen.get("started_before_provider_done") is True

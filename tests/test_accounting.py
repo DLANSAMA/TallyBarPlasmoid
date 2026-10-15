@@ -2174,3 +2174,20 @@ def test_parse_cache_versions_track_output_shape(tmp_path):
             f"{name} parser output (or its version) changed: now {got[name]}, pinned {pin}. "
             f"If the record shape changed, bump _{name.upper()}_PARSE_VERSION in "
             f"accounting/log_parsers.py, then repin _PARSE_PINS['{name}'] to the new pair.")
+
+
+@pytest.mark.parametrize("period_type", ["USAGE_PERIOD_TYPE_WEEKLY", "USAGE_PERIOD_TYPE_MONTHLY", ""])
+def test_grok_billing_label_is_never_flagged_as_extra_usage(period_type):
+    """parse_grok_billing_config avoids "credits"/"monthly"/"extra" in its labels because
+    enrich_ui_formatting turns those words into isExtraUsage (the on-demand dollar slot)."""
+    import parsers
+    event = {"ctx": {"config": {
+        "creditUsagePercent": 40.0,
+        "currentPeriod": {"type": period_type or None, "start": "2026-07-04T13:20:44+00:00",
+                          "end": "2026-07-11T13:20:44+00:00"}}}}
+    parsed = parsers.parse_grok_billing_config(event)
+    providers = {"grok": {"limits": parsed["limits"]}}
+    accounting.enrich_ui_formatting(providers)
+    row = providers["grok"]["limits"][0]
+    assert row["isExtraUsage"] is False, f"label {row['label']!r} reads as extra usage"
+    assert "formattedExtraUsageDetail" not in providers["grok"]

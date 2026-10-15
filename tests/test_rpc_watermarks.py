@@ -442,3 +442,38 @@ def test_wrong_typed_watermarks_treated_as_empty(monkeypatch, tmp_path, bad_valu
     costmod.update_antigravity_token_ledger()  # must not raise
 
     assert received_known == {}
+
+
+# --- Per-generation keys are stable across polls ------------------------------------------
+# A ledger entry is keyed `<cascadeId>#<stepKey>`: stepIndices[0] when present, else
+# `g<position in the generator list>` (never the position among usage-bearing records, which
+# shifts between polls and would double-count or silently drop a generation).
+
+def _gen_no_step(tokens: int = 100) -> dict:
+    g = _gen(0, tokens)
+    del g["stepIndices"]
+    return g
+
+
+def _step_keys(generations: list) -> list[str]:
+    cid = "eeee-keys"
+    fake_post = _make_rpc_stubs(summaries={cid: _LMT_A}, metadata_payloads={cid: generations})
+    with patch.object(agmod, "find_antigravity_processes", return_value=_fake_processes()), \
+         patch.object(agmod, "antigravity_ports", side_effect=_fake_ports), \
+         patch.object(agmod, "_post_local_rpc", side_effect=fake_post):
+        usage, _ = _harvest(3.0)
+    return [r["stepKey"] for r in usage[cid]]
+
+
+def test_generation_keys_are_stable_when_a_usageless_generation_appears():
+    base = [_gen(7), _gen_no_step(), _gen(9)]
+    with_extra = base + [{"stepIndices": [11], "chatModel": {}}]      # no usage: skipped
+    assert _step_keys(base) == ["7", "g1", "9"]
+    assert _step_keys(with_extra) == _step_keys(base)
+
+
+def test_step_index_keys_ignore_list_position_and_never_collide_with_g_keys():
+    shifted = [{"stepIndices": [3], "chatModel": {}}, _gen(7), _gen_no_step()]
+    # stepIndices[0] survives a shift; the stepless one is keyed by its list position (g2).
+    assert _step_keys(shifted) == ["7", "g2"]
+    assert _step_keys([_gen(1), _gen_no_step(), _gen_no_step()]) == ["1", "g1", "g2"]
