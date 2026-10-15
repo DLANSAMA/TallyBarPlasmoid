@@ -2083,3 +2083,94 @@ def test_codex_summary_tiers_each_request_not_the_day(tmp_path):
     assert summary_for(150_000, 150_000)["costToday"] == pytest.approx(1.56)
     # 300_000*10 + 1_000*45 = 3_045_000 -> $3.045
     assert summary_for(300_000)["costToday"] == pytest.approx(3.045)
+
+
+# --- Parse-cache version discipline ---------------------------------------------------
+# The parse caches are keyed by *_PARSE_VERSION; an output-shape change without a bump
+# serves stale records forever. Each parser's output on a fixed fixture is hashed and pinned
+# next to its version.
+
+def _fingerprint(obj):
+    import hashlib
+    return hashlib.sha256(json.dumps(obj, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def _fixture_claude(tmp_path):
+    usage = {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 7,
+             "cache_creation_input_tokens": 3,
+             "cache_creation": {"ephemeral_5m_input_tokens": 1, "ephemeral_1h_input_tokens": 2}}
+    lines = [
+        {"type": "assistant", "timestamp": "2026-01-02T03:04:05Z", "uuid": "u1",
+         "requestId": "req1", "message": {"id": "msg1", "model": "claude-opus-4-8",
+                                          "stop_reason": "end_turn", "usage": usage,
+                                          "content": [{"type": "text", "text": "hello"}]}},
+        {"type": "assistant", "timestamp": "2026-01-02T03:04:06Z", "uuid": "u2",
+         "message": {"model": "claude-haiku-5-5", "usage": {"input_tokens": 4, "output_tokens": 1},
+                     "content": [{"type": "tool_use", "input": {"a": "bcdefgh"}}]}},
+        {"type": "user", "timestamp": "2026-01-02T03:04:07Z"},
+    ]
+    text = "\n".join(json.dumps(x) for x in lines) + "\n"
+    main = tmp_path / "p" / "s.jsonl"
+    sub = tmp_path / "p" / "s" / "subagents" / "a.jsonl"
+    for f in (main, sub):
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text, encoding="utf-8")
+    return main, sub
+
+
+def _fixture_codex(tmp_path):
+    t1 = {"input_tokens": 1000, "cached_input_tokens": 200, "output_tokens": 100,
+          "reasoning_output_tokens": 30, "total_tokens": 1100}
+    t2 = {"input_tokens": 3000, "cached_input_tokens": 500, "output_tokens": 300,
+          "reasoning_output_tokens": 50, "total_tokens": 3300}
+    lines = [json.dumps({"timestamp": "2026-01-02T03:04:05Z", "payload": {"model": "gpt-5-codex"}}),
+             _codex_tc(last=t1, total=t1), _codex_tc(last=t1, total=t1), _codex_tc(total=t2)]
+    f = tmp_path / "rollout.jsonl"
+    f.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return f
+
+
+def _fixture_grok(tmp_path):
+    ts = dt.datetime(2026, 1, 2, 3, 4, 5, tzinfo=dt.timezone.utc)
+    lines = [json.dumps({"ts": ts.isoformat(), "msg": "model changed", "sid": "s1",
+                         "ctx": {"model": "grok-build"}}),
+             _grok_done(ts, "s1", 5000, 1200, 400, reasoning=100)]
+    f = tmp_path / "unified.jsonl"
+    f.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return f
+
+
+def _fixture_gemini(tmp_path):
+    session = {"messages": [
+        {"type": "gemini", "timestamp": "2026-01-02T03:04:05Z", "model": "gemini-2.5-pro",
+         "tokens": {"input": 100, "output": 20, "cached": 10, "thoughts": 5, "tool": 3, "total": 138}},
+        {"type": "user", "timestamp": "2026-01-02T03:04:04Z"}]}
+    f = tmp_path / "session.json"
+    f.write_text(json.dumps(session), encoding="utf-8")
+    return f
+
+
+# (version, fingerprint of the parser's output on the fixture above)
+_PARSE_PINS = {
+    "claude": (5, "07501fee7c53456a"),
+    "codex": (3, "c78d70d4941f28c1"),
+    "grok": (3, "610763b0f302ac40"),
+    "gemini": (2, "08a92be3066fcd9c"),
+}
+
+
+def test_parse_cache_versions_track_output_shape(tmp_path):
+    from accounting import log_parsers as lp
+    main, sub = _fixture_claude(tmp_path)
+    got = {
+        "claude": (lp._CLAUDE_PARSE_VERSION,
+                   _fingerprint([lp._parse_claude_file(main), lp._parse_claude_file(sub)])),
+        "codex": (lp._CODEX_PARSE_VERSION, _fingerprint(lp._parse_codex_file(_fixture_codex(tmp_path)))),
+        "grok": (lp._GROK_PARSE_VERSION, _fingerprint(lp._parse_grok_file(_fixture_grok(tmp_path)))),
+        "gemini": (lp._GEMINI_PARSE_VERSION, _fingerprint(lp._parse_gemini_file(_fixture_gemini(tmp_path)))),
+    }
+    for name, pin in _PARSE_PINS.items():
+        assert got[name] == pin, (
+            f"{name} parser output (or its version) changed: now {got[name]}, pinned {pin}. "
+            f"If the record shape changed, bump _{name.upper()}_PARSE_VERSION in "
+            f"accounting/log_parsers.py, then repin _PARSE_PINS['{name}'] to the new pair.")

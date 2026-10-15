@@ -644,3 +644,54 @@ def test_pre_tier_price_cache_is_never_served(tmp_path, monkeypatch):
     assert not pricing_data.cache_is_current()
     cache.unlink()
     assert not pricing_data.cache_is_current()
+
+
+# --- Price-cache version discipline ---------------------------------------------------
+# pricing_cache.json is keyed by PRICING_CACHE_VERSION; a change to what
+# _litellm_to_tallybar emits without a bump serves old-shaped prices from disk.
+
+_CATALOG_FIXTURE = {
+    "claude-opus-4-8": {
+        "litellm_provider": "anthropic", "mode": "chat",
+        "input_cost_per_token": 5e-06, "output_cost_per_token": 2.5e-05,
+        "cache_read_input_token_cost": 5e-07, "cache_creation_input_token_cost": 6.25e-06,
+        "cache_creation_input_token_cost_above_1hr": 1e-05},
+    "claude-haiku-5-5": {
+        "litellm_provider": "anthropic", "mode": "chat",
+        "input_cost_per_token": 1e-06, "output_cost_per_token": 5e-06,
+        "input_cost_per_token_above_100k_tokens": 5e-06,
+        "output_cost_per_token_above_100k_tokens": 2.5e-05},
+    "claude-new-model": {
+        "litellm_provider": "anthropic", "mode": "chat",
+        "input_cost_per_token": 4e-06, "output_cost_per_token": 1.6e-05},
+    "gpt-5": {
+        "litellm_provider": "openai", "mode": "chat",
+        "input_cost_per_token": 2.5e-06, "output_cost_per_token": 1.5e-05,
+        "cache_read_input_token_cost": 2.5e-07,
+        "input_cost_per_token_above_272k_tokens": 5e-06,
+        "output_cost_per_token_above_272k_tokens": 2.25e-05},
+    "gemini-2.5-pro": {
+        "litellm_provider": "gemini", "mode": "chat",
+        "input_cost_per_token": 1.25e-06, "output_cost_per_token": 1e-05,
+        "cache_read_input_token_cost": 1.25e-07,
+        "input_cost_per_token_above_200k_tokens": 2.5e-06,
+        "output_cost_per_token_above_200k_tokens": 1.5e-05},
+    "xai/grok-4": {
+        "litellm_provider": "xai", "mode": "chat",
+        "input_cost_per_token": 3e-06, "output_cost_per_token": 1.5e-05,
+        "input_cost_per_token_above_200k_tokens": 6e-06,
+        "output_cost_per_token_above_200k_tokens": 3e-05},
+}
+
+_CATALOG_PIN = (2, "a6119f95c10e49bc")
+
+
+def test_pricing_cache_version_tracks_converter_output():
+    import hashlib
+    import json
+    out = json.dumps(pricing_data._litellm_to_tallybar(_CATALOG_FIXTURE), sort_keys=True)
+    got = (pricing_data.PRICING_CACHE_VERSION, hashlib.sha256(out.encode()).hexdigest()[:16])
+    assert got == _CATALOG_PIN, (
+        f"_litellm_to_tallybar output (or PRICING_CACHE_VERSION) changed: now {got}, pinned "
+        f"{_CATALOG_PIN}. If the output changed, bump PRICING_CACHE_VERSION in pricing_data.py, "
+        f"then repin _CATALOG_PIN.")
