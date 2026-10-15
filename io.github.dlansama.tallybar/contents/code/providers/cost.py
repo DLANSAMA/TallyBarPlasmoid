@@ -44,7 +44,12 @@ from accounting import (
     type_split_add,
     weekly_token_usage,
 )
-from io_helpers import atomic_write_text, deadline_passed, flock_with_timeout
+from io_helpers import (
+    deadline_passed,
+    flock_with_timeout,
+    load_json_with_backup,
+    save_json_with_backup,
+)
 
 
 ANTIGRAVITY_CONVERSATION_DIRS = (
@@ -118,23 +123,11 @@ def _load_antigravity_ledger() -> dict[str, Any]:
     missing or corrupt we recover from it — and quarantine the corrupt main as ``.corrupt``
     for forensics — rather than returning an empty ledger.
     """
-    main = ANTIGRAVITY_LEDGER_PATH
-    bak = main.with_name(main.name + ".bak")
-    for idx, path in enumerate((main, bak)):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and isinstance(data.get("entries"), dict):
-                return data
-        except (OSError, json.JSONDecodeError):
-            pass
-        if idx == 0:
-            # Main was unreadable/invalid: set it aside (best-effort) so the next save
-            # doesn't overwrite the evidence, then try to recover from the backup.
-            try:
-                main.replace(main.with_name(main.name + ".corrupt"))
-            except OSError:
-                pass
-    return {"trackingStarted": None, "entries": {}}
+    return load_json_with_backup(
+        ANTIGRAVITY_LEDGER_PATH,
+        lambda data: isinstance(data, dict) and isinstance(data.get("entries"), dict),
+        {"trackingStarted": None, "entries": {}},
+    )
 
 
 def _load_usage_file(path: Path) -> dict[str, Any]:
@@ -153,17 +146,7 @@ def _load_usage_file(path: Path) -> dict[str, Any]:
 
 
 def _save_antigravity_ledger(ledger: dict[str, Any]) -> None:
-    # The same payload is mirrored to a ``.bak`` so a later corruption of the main file is
-    # recoverable (see _load_antigravity_ledger).
-    payload = json.dumps(ledger)
-    try:
-        atomic_write_text(ANTIGRAVITY_LEDGER_PATH, payload)
-    except OSError:
-        return
-    try:
-        atomic_write_text(ANTIGRAVITY_LEDGER_PATH.with_name(ANTIGRAVITY_LEDGER_PATH.name + ".bak"), payload)
-    except OSError:
-        pass
+    save_json_with_backup(ANTIGRAVITY_LEDGER_PATH, ledger)
 
 
 def _lock_budget(deadline: float | None) -> float:
@@ -1023,35 +1006,16 @@ def _load_cost_archive() -> dict[str, Any]:
     """Load the append-only cost archive, recovering from ``.bak`` on failure and
     quarantining a corrupt main as ``.corrupt`` — the same never-load-into-empty discipline
     as the Antigravity ledger. A transient failure must not silently drop frozen history."""
-    main = COST_ARCHIVE_PATH
-    bak = main.with_name(main.name + ".bak")
-    for idx, path in enumerate((main, bak)):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and isinstance(data.get("months"), dict):
-                return data
-        except (OSError, json.JSONDecodeError):
-            pass
-        if idx == 0:
-            try:
-                main.replace(main.with_name(main.name + ".corrupt"))
-            except OSError:
-                pass
-    return {"version": 1, "months": {}}
+    return load_json_with_backup(
+        COST_ARCHIVE_PATH,
+        lambda data: isinstance(data, dict) and isinstance(data.get("months"), dict),
+        {"version": 1, "months": {}},
+    )
 
 
 def _save_cost_archive(archive: dict[str, Any]) -> None:
-    """Atomic 0600 write + ``.bak`` mirror via the shared io_helpers recipe (mirrors
-    ``_save_antigravity_ledger``)."""
-    payload = json.dumps(archive)
-    try:
-        atomic_write_text(COST_ARCHIVE_PATH, payload)
-    except OSError:
-        return
-    try:
-        atomic_write_text(COST_ARCHIVE_PATH.with_name(COST_ARCHIVE_PATH.name + ".bak"), payload)
-    except OSError:
-        pass
+    """Atomic 0600 write + ``.bak`` mirror (see ``save_json_with_backup``)."""
+    save_json_with_backup(COST_ARCHIVE_PATH, archive)
 
 
 def _summary_month_totals(summary: Any) -> dict[str, Any] | None:

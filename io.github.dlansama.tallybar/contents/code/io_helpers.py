@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import json
 import os
 import re
 import stat
@@ -157,6 +158,46 @@ def atomic_write_text(path: Path | str, text: str, mode: int = 0o600) -> None:
         except OSError:
             pass
         raise
+
+
+def save_json_with_backup(path: Path | str, data: Any) -> None:
+    """Atomic 0600 write of ``data`` as JSON to ``path``, mirrored to ``<path>.bak`` so a later
+    corruption of the main file is recoverable (see ``load_json_with_backup``). Best-effort:
+    a failed main write skips the mirror (the last good pair stays intact); a failed mirror
+    is ignored."""
+    path = Path(path)
+    payload = json.dumps(data)
+    try:
+        atomic_write_text(path, payload)
+    except OSError:
+        return
+    try:
+        atomic_write_text(path.with_name(path.name + ".bak"), payload)
+    except OSError:
+        pass
+
+
+def load_json_with_backup(path: Path | str, valid: Any, empty: Any) -> Any:
+    """Load the JSON at ``path`` if ``valid(data)``, else the ``.bak`` mirror, else ``empty``.
+
+    A main file that is missing or fails to parse/validate is set aside as ``<path>.corrupt``
+    (best-effort, for forensics) before the backup is tried, so the next save can't overwrite
+    the evidence. Never falls through to an empty result while a good backup exists: a transient
+    failure that reset the data would re-stamp history from scratch."""
+    main = Path(path)
+    for idx, candidate in enumerate((main, main.with_name(main.name + ".bak"))):
+        try:
+            data = json.loads(candidate.read_text(encoding="utf-8"))
+            if valid(data):
+                return data
+        except (OSError, json.JSONDecodeError):
+            pass
+        if idx == 0:
+            try:
+                main.replace(main.with_name(main.name + ".corrupt"))
+            except OSError:
+                pass
+    return empty
 
 
 def to_daemon_thread(func: Any, *args: Any) -> asyncio.Future[Any]:

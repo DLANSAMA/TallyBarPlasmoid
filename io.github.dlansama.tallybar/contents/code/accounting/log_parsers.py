@@ -11,7 +11,7 @@ import zlib
 from pathlib import Path
 from typing import Any
 
-from io_helpers import atomic_write_text
+from io_helpers import atomic_write_text, load_json_with_backup, save_json_with_backup
 from parsers import as_dict
 from . import pricing as _pricing
 from .formatting import parse_timestamp
@@ -998,34 +998,15 @@ def _get_grok_archive_path() -> Path:
 
 
 def _load_grok_archive() -> dict[str, Any]:
-    main = _get_grok_archive_path()
-    bak = main.with_name(main.name + ".bak")
-    for idx, path in enumerate((main, bak)):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and isinstance(data.get("days"), dict):
-                return data
-        except (OSError, json.JSONDecodeError):
-            pass
-        if idx == 0:
-            try:
-                main.replace(main.with_name(main.name + ".corrupt"))
-            except OSError:
-                pass
-    return {"version": 1, "days": {}}
+    return load_json_with_backup(
+        _get_grok_archive_path(),
+        lambda data: isinstance(data, dict) and isinstance(data.get("days"), dict),
+        {"version": 1, "days": {}},
+    )
 
 
 def _save_grok_archive(archive: dict[str, Any]) -> None:
-    main = _get_grok_archive_path()
-    payload = json.dumps(archive)
-    try:
-        atomic_write_text(main, payload)
-    except OSError:
-        return
-    try:
-        atomic_write_text(main.with_name(main.name + ".bak"), payload)
-    except OSError:
-        pass
+    save_json_with_backup(_get_grok_archive_path(), archive)
 
 
 def merge_grok_archive(live_days: dict[str, dict[str, Any]],
