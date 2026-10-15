@@ -730,32 +730,34 @@ _MODEL_ENUM_NAMES: dict[int, str] = {
 }
 
 
-def _resolve_model_display(e: dict[str, Any], learned: "dict[int, str] | None" = None) -> str:
-    """Best-effort DISPLAY name for a ledger entry (pricing is resolved separately
-    by _prices_for and is unaffected by this).
+def _resolve_model_key(e: dict[str, Any], learned: "dict[int, str] | None" = None) -> str | None:
+    """The model name a ledger entry resolves to, shared by display and pricing so the
+    breakdown never names one model while the cost is computed for another.
 
-    Resolution order: the static, hand-curated ``_MODEL_ENUM_NAMES`` table first;
-    then ``learned`` (names auto-captured live from GetAvailableModels and persisted
-    as the ledger's ``learnedModelNames`` — see ``update_antigravity_token_ledger``);
-    then a live-captured display-name string already stored on the entry itself
-    (CLI/RPC entries carry one). If none of those resolve but "me" still fits the
-    MODEL_PLACEHOLDER_M<N> convention (enum = 1000 + N) this codebase uses
-    everywhere else, return a self-documenting "Model M<N>" placeholder instead of
-    an opaque "Other" — so a model Antigravity has started using ahead of both the
-    static table AND a live-learned name is still identifiable rather than silently
-    disappearing into the generic bucket. Only a genuinely unresolvable entry (no
-    "me", or an "me" outside that convention — e.g. a legacy pre-2026-06 raw
-    protobuf enum) falls all the way to "Unknown".
+    Order: the static, hand-curated ``_MODEL_ENUM_NAMES`` (freshest knowledge: an RPC entry
+    whose placeholder was unknown at capture stores a family-fallback ``model`` plus the raw
+    ``me``, and heals once the enum is mapped); then ``learned`` (names captured live from
+    GetAvailableModels, persisted as the ledger's ``learnedModelNames``); then the entry's
+    own ``model`` string (CLI/RPC entries carry one). ``None`` when none resolve. Both tables
+    are int-keyed, so a non-int ``me`` simply misses them.
     """
     me = e.get("me")
-    # Both tables are int-keyed, so a non-int "me" simply misses both.
-    me_key = me if isinstance(me, int) else None
     name = None
-    if me_key is not None:
-        name = _MODEL_ENUM_NAMES.get(me_key) or (learned or {}).get(me_key)
-    name = name or e.get("model")
+    if isinstance(me, int):
+        name = _MODEL_ENUM_NAMES.get(me) or (learned or {}).get(me)
+    return name or e.get("model") or None
+
+
+def _resolve_model_display(e: dict[str, Any], learned: "dict[int, str] | None" = None) -> str:
+    """DISPLAY name for a ledger entry: ``_resolve_model_key``, else a self-documenting
+    "Model M<N>" when ``me`` fits the MODEL_PLACEHOLDER_M<N> convention (enum = 1000 + N) —
+    a model used ahead of both the static table and a live-learned name stays identifiable
+    instead of vanishing into a generic bucket — else "Unknown" (no ``me``, or one outside
+    that convention, e.g. a legacy pre-2026-06 raw protobuf enum)."""
+    name = _resolve_model_key(e, learned)
     if name:
         return name
+    me = e.get("me")
     if isinstance(me, int) and me >= 1000:
         return f"Model M{me - 1000}"
     return "Unknown"
@@ -855,17 +857,7 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
     _price_cache: dict[str, dict[str, Any]] = {}
 
     def _prices_for(e: dict[str, Any]) -> dict[str, Any]:
-        # Enum map FIRST: it's the freshest knowledge. An RPC entry whose placeholder was
-        # unknown at capture stores a family-fallback "model" string plus the raw "me"
-        # enum — once the enum gets mapped, pricing/attribution heal retroactively.
-        # Same static → learned → entry-string chain as _resolve_model_display, so the
-        # breakdown never names one model while the cost is computed for another.
-        me_key = e.get("me")
-        m = None
-        if isinstance(me_key, int):
-            m = _MODEL_ENUM_NAMES.get(me_key) or learned_names.get(me_key)
-        if not m:
-            m = e.get("model")  # CLI entries carry a display-name string
+        m = _resolve_model_key(e, learned_names)
         if not m:
             return default_prices
         key = _normalize_model_name(m)
