@@ -119,6 +119,16 @@ def _iter_billing_events_reverse(log_path: Path) -> Iterator[dict[str, Any]]:
         return
 
 
+def _opens_new_period(percentless: dict[str, Any], explicit: dict[str, Any]) -> bool:
+    """True when the percent-less event's period starts strictly after the explicit-percent
+    event's, i.e. 0% is real rather than a gap in the log."""
+    new_start = _period_start_iso(percentless)
+    old_start = _period_start_iso(explicit)
+    # ISO-8601 timestamps with a fixed offset compare lexicographically in chronological
+    # order; real Grok logs use +00:00 throughout.
+    return bool(new_start and old_start and new_start > old_start)
+
+
 def _latest_billing_event(log_path: Path) -> dict[str, Any] | None:
     """Return the billing event that best represents current weekly usage.
 
@@ -140,23 +150,17 @@ def _latest_billing_event(log_path: Path) -> dict[str, Any] | None:
         return None
 
     pending_period_only: dict[str, Any] | None = None
-    pending_start = ""
 
     for event in _iter_billing_events_reverse(log_path):
         parsed = parse_grok_billing_config(event)
         if parsed is None:
             continue
         if parsed.get("percentExplicit"):
-            if pending_period_only is not None and pending_start:
-                older_start = _period_start_iso(event)
-                # ISO-8601 timestamps with a fixed offset compare lexicographically
-                # in chronological order — real Grok logs use +00:00 throughout.
-                if older_start and pending_start > older_start:
-                    return pending_period_only
+            if pending_period_only is not None and _opens_new_period(pending_period_only, event):
+                return pending_period_only
             return event
         if pending_period_only is None:
             pending_period_only = event
-            pending_start = _period_start_iso(event)
 
     return pending_period_only
 
@@ -304,13 +308,8 @@ def _live_billing_event(
         if end is None or end <= dt.datetime.now(dt.timezone.utc):
             return None
     if not parsed.get("percentExplicit") and log_event is not None:
-        # The same rule as _latest_billing_event: a reading without a percent is 0%
-        # only when it opens a NEW period; mid-period it would hide the last real one.
         logged = parse_grok_billing_config(log_event)
-        log_start = _period_start_iso(log_event)
-        if (logged or {}).get("percentExplicit") and not (
-            log_start and _period_start_iso(event) > log_start
-        ):
+        if (logged or {}).get("percentExplicit") and not _opens_new_period(event, log_event):
             return None
     return event
 
