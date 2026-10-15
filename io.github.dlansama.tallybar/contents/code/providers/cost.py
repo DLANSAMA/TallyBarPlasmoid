@@ -155,6 +155,18 @@ def _lock_budget(deadline: float | None) -> float:
     return max(0.0, min((deadline - time.time()) if deadline is not None else 2.0, 5.0))
 
 
+def _read_rows(db_path: Path, sql: str, params: Any = ()) -> list[Any]:
+    """Run one read-only query and return every row, closing the connection BEFORE the caller
+    parses anything (CLAUDE.md "SQLite scans": a held read lock blocks the live agent's WAL
+    checkpoint with SQLITE_BUSY). Raises ``sqlite3.Error`` on any failure."""
+    con = sqlite3.connect(f"file:{urllib.parse.quote(str(db_path))}?mode=ro", uri=True)
+    try:
+        con.execute("PRAGMA busy_timeout = 3000")
+        return con.execute(sql, params).fetchall()
+    finally:
+        con.close()
+
+
 def _db_signature(db_path: Path) -> str | None:
     """Content signature for the per-DB scan memo: main-file mtime_ns+size PLUS the
     ``-wal`` companion's (SQLite WAL appends land in the -wal without touching the
@@ -386,22 +398,14 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                         steps_date = today_iso
                     if steps_date < cutoff:
                         continue  # whole-DB backlog already past the prune horizon (see above)
-                # SQLite read-lock discipline (CLAUDE.md "SQLite scans"): the widget polls DBs live
-                # agents are writing, and a held read lock blocks their WAL checkpoint with
-                # SQLITE_BUSY. Read indices only, drop seen keys, fetch ONLY unseen blobs, close
-                # BEFORE parsing.
+                # Read indices only, drop seen keys, fetch ONLY unseen blobs (see _read_rows).
                 new_idx = []
                 try:
-                    con = sqlite3.connect(f"file:{urllib.parse.quote(str(db_path))}?mode=ro", uri=True)
-                    con.execute("PRAGMA busy_timeout = 3000")
-                    new_idx = [i for (i,) in con.execute(
-                        "SELECT idx FROM steps WHERE metadata IS NOT NULL")
+                    new_idx = [i for (i,) in _read_rows(
+                        db_path, "SELECT idx FROM steps WHERE metadata IS NOT NULL")
                         if f"{stem}:{i}" not in entries]
                 except sqlite3.Error:
                     db_ok = False
-                finally:
-                    try: con.close()
-                    except Exception: pass
 
                 for j in range(0, len(new_idx), 400):  # chunk to stay under SQLite's variable limit
                     if deadline_passed(deadline):
@@ -410,16 +414,10 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                     placeholders = ",".join("?" * len(chunk))
                     chunk_rows = []
                     try:
-                        con = sqlite3.connect(f"file:{urllib.parse.quote(str(db_path))}?mode=ro", uri=True)
-                        con.execute("PRAGMA busy_timeout = 3000")
-                        chunk_rows = con.execute(
-                            f"SELECT idx, metadata FROM steps WHERE idx IN ({placeholders})", chunk
-                        ).fetchall()
+                        chunk_rows = _read_rows(
+                            db_path, f"SELECT idx, metadata FROM steps WHERE idx IN ({placeholders})", chunk)
                     except sqlite3.Error:
                         db_ok = False  # couldn't read -> never memo a possibly-partial scan
-                    finally:
-                        try: con.close()
-                        except Exception: pass
 
                     for idx, blob in chunk_rows:
                         if not isinstance(blob, (bytes, bytearray)):
@@ -455,25 +453,20 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                 # live ONLY here (after 2.0 the steps rows carry no usage); the 24-marked records
                 # that also appear here duplicate the steps scan above, so we gate strictly on
                 # marker 26. Keys "<stem>@<idx>.<gi>" (idx.generation-index) are disjoint from steps
-                # "<stem>:<idx>" and RPC "<stem>#…". Same lock-window discipline: read indices first,
-                # drop seen, fetch only unseen blobs, close BEFORE parsing, busy_timeout, deadline
-                # checks per chunk.
+                # "<stem>:<idx>" and RPC "<stem>#…". Same discipline: indices first, then only unseen blobs.
                 # Dating: uses EMBEDDED protobuf timestamps (via _pb_generations) so re-scanning a
                 # file never re-stamps old generations as "today". Generations missing a timestamp
                 # fall back to DB file mtime (old pre-2.0 blobs, expected to be rare).
                 gnew_idx = []
+                stem_prefix = f"{stem}@"
+                seen_gen_idx = {
+                    k[len(stem_prefix):].split(".", 1)[0]
+                    for k in entries
+                    if k.startswith(stem_prefix)
+                }
                 try:
-                    con = sqlite3.connect(f"file:{urllib.parse.quote(str(db_path))}?mode=ro", uri=True)
-                    con.execute("PRAGMA busy_timeout = 3000")
-                    stem_prefix = f"{stem}@"
-                    stem_prefix_len = len(stem_prefix)
-                    seen_gen_idx = {
-                        k[stem_prefix_len:].split(".", 1)[0]
-                        for k in entries
-                        if k.startswith(stem_prefix)
-                    }
-                    gnew_idx = [i for (i,) in con.execute(
-                        "SELECT idx FROM gen_metadata WHERE data IS NOT NULL")
+                    gnew_idx = [i for (i,) in _read_rows(
+                        db_path, "SELECT idx FROM gen_metadata WHERE data IS NOT NULL")
                         if str(i) not in seen_gen_idx]
                 except sqlite3.Error as err:
                     # Table absent on pre-2.0 DBs -> nothing to ingest here (a stable
@@ -481,9 +474,6 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                     # SQLITE_BUSY) means a possibly-partial read -> block the memo.
                     if "no such table" not in str(err):
                         db_ok = False
-                finally:
-                    try: con.close()
-                    except Exception: pass
 
                 try:
                     mtime_fallback_date = dt.date.fromtimestamp(db_path.stat().st_mtime).isoformat()
@@ -497,16 +487,10 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                     placeholders = ",".join("?" * len(chunk))
                     chunk_rows = []
                     try:
-                        con = sqlite3.connect(f"file:{urllib.parse.quote(str(db_path))}?mode=ro", uri=True)
-                        con.execute("PRAGMA busy_timeout = 3000")
-                        chunk_rows = con.execute(
-                            f"SELECT idx, data FROM gen_metadata WHERE idx IN ({placeholders})", chunk
-                        ).fetchall()
+                        chunk_rows = _read_rows(
+                            db_path, f"SELECT idx, data FROM gen_metadata WHERE idx IN ({placeholders})", chunk)
                     except sqlite3.Error:
                         db_ok = False
-                    finally:
-                        try: con.close()
-                        except Exception: pass
 
                     for idx, blob in chunk_rows:
                         if not isinstance(blob, (bytes, bytearray)):
