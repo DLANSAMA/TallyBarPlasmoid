@@ -1,13 +1,13 @@
 """Shared low-level filesystem durability helpers.
 
-Imported flat (``from io_helpers import fsync_dir``) by backend.py, pricing_data.py
-and providers/cost.py — they all live under contents/code/ which is on sys.path both
+Imported flat (``from io_helpers import fsync_dir``): contents/code/ is on sys.path both
 at runtime (Plasma runs the script from that dir) and in tests. Stdlib only.
 """
 from __future__ import annotations
 
 import asyncio
 import fcntl
+import json
 import os
 import re
 import stat
@@ -40,15 +40,14 @@ def sweep_stale_temp_files(dirs, max_age_seconds: int = 86400, only_prefix: str 
     regular-file, strict 24h age, non-recursive, never-raise) are unchanged.
 
     A crashed atomic write (interpreter kill between mkstemp and os.replace) leaves these temps
-    behind — over months they accumulate (observed: six July tmp* files plus a 101 MB
-    ``claude_logs.json.<rand>.tmp``). Called early in the --once refresh to keep ~/.tallybar tidy."""
+    behind. Called early in the --once refresh to keep ~/.tallybar tidy."""
     removed = 0
     cutoff = time.time() - max_age_seconds
     for d in dirs:
         try:
             entries = os.scandir(str(d))
         except OSError:
-            continue  # nonexistent / unreadable dir is harmless
+            continue
         try:
             for entry in entries:
                 try:
@@ -58,9 +57,9 @@ def sweep_stale_temp_files(dirs, max_age_seconds: int = 86400, only_prefix: str 
                             continue
                     elif not (_MKSTEMP_ORPHAN_RE.fullmatch(name) or name.endswith(".tmp")):
                         continue
-                    st = os.lstat(entry.path)  # do NOT follow symlinks
+                    st = os.lstat(entry.path)
                     if not stat.S_ISREG(st.st_mode):
-                        continue  # skip symlinks, dirs, sockets, …
+                        continue
                     if st.st_mtime >= cutoff:
                         continue  # too fresh — may be an in-flight write
                     os.unlink(entry.path)
@@ -70,6 +69,22 @@ def sweep_stale_temp_files(dirs, max_age_seconds: int = 86400, only_prefix: str 
         finally:
             entries.close()
     return removed
+
+
+def deadline_passed(deadline: float | None, inclusive: bool = False) -> bool:
+    """True once the wall-clock ``time.time()`` ``deadline`` has passed; ``None`` never expires.
+    ``inclusive`` also counts the exact deadline instant as passed."""
+    if deadline is None:
+        return False
+    now = time.time()
+    return now >= deadline if inclusive else now > deadline
+
+
+def clamp_to_deadline(seconds: float, deadline: float | None, floor: float = 0.1) -> float:
+    """``seconds`` shortened to what is left before ``deadline`` (never below ``floor``)."""
+    if deadline is None:
+        return seconds
+    return max(floor, min(seconds, deadline - time.time()))
 
 
 def flock_with_timeout(lock_fd: int, timeout: float, poll: float = 0.05) -> bool:
@@ -145,6 +160,46 @@ def atomic_write_text(path: Path | str, text: str, mode: int = 0o600) -> None:
         raise
 
 
+def save_json_with_backup(path: Path | str, data: Any) -> None:
+    """Atomic 0600 write of ``data`` as JSON to ``path``, mirrored to ``<path>.bak`` so a later
+    corruption of the main file is recoverable (see ``load_json_with_backup``). Best-effort:
+    a failed main write skips the mirror (the last good pair stays intact); a failed mirror
+    is ignored."""
+    path = Path(path)
+    payload = json.dumps(data)
+    try:
+        atomic_write_text(path, payload)
+    except OSError:
+        return
+    try:
+        atomic_write_text(path.with_name(path.name + ".bak"), payload)
+    except OSError:
+        pass
+
+
+def load_json_with_backup(path: Path | str, valid: Any, empty: Any) -> Any:
+    """Load the JSON at ``path`` if ``valid(data)``, else the ``.bak`` mirror, else ``empty``.
+
+    A main file that is missing or fails to parse/validate is set aside as ``<path>.corrupt``
+    (best-effort, for forensics) before the backup is tried, so the next save can't overwrite
+    the evidence. Never falls through to an empty result while a good backup exists: a transient
+    failure that reset the data would re-stamp history from scratch."""
+    main = Path(path)
+    for idx, candidate in enumerate((main, main.with_name(main.name + ".bak"))):
+        try:
+            data = json.loads(candidate.read_text(encoding="utf-8"))
+            if valid(data):
+                return data
+        except (OSError, json.JSONDecodeError):
+            pass
+        if idx == 0:
+            try:
+                main.replace(main.with_name(main.name + ".corrupt"))
+            except OSError:
+                pass
+    return empty
+
+
 def to_daemon_thread(func: Any, *args: Any) -> asyncio.Future[Any]:
     """Run blocking ``func(*args)`` in a DAEMON thread; return an awaitable Future.
 
@@ -186,7 +241,7 @@ def to_daemon_thread(func: Any, *args: Any) -> asyncio.Future[Any]:
         exc: BaseException | None
         try:
             result, exc = func(*args), None
-        except BaseException as err:  # propagate ANY failure back, like asyncio.to_thread
+        except BaseException as err:
             result, exc = None, err
         try:
             loop.call_soon_threadsafe(_deliver, result, exc)

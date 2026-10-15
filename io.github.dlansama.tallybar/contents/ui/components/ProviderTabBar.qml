@@ -15,9 +15,7 @@ Item {
 
     Row {
         // Content-width (not full-width) so a capped inter-tab gap clusters few-tab
-        // layouts centered instead of pinning them to opposite dock edges. At the 4-/5-tab
-        // defaults the gap fills to the padded width, so centring reproduces the same
-        // ~16px side margin the old left/right anchors gave — pixel-identical there.
+        // layouts centered instead of pinning them to opposite dock edges.
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: parent.top
         anchors.bottom: parent.bottom
@@ -136,7 +134,6 @@ Item {
                     text: root.tabLabel(providerTab.providerKey)
                 }
 
-                // Small amber warning glyph on a bad-status tab.
                 Kirigami.Icon {
                     anchors.right: tabSurface.right
                     anchors.top: tabSurface.top
@@ -150,8 +147,6 @@ Item {
                     color: "#e0a23c"
                 }
 
-                // A muted-provider tab shows a small mute glyph instead of the
-                // bad-status warning (tabStatusBad is suppressed while muted).
                 Kirigami.Icon {
                     anchors.right: tabSurface.right
                     anchors.top: tabSurface.top
@@ -188,8 +183,6 @@ Item {
                     }
                 }
 
-                // Visible keyboard-focus indicator — matches tabSurface's rounding,
-                // invisible unless tabMouse actually has keyboard focus.
                 Rectangle {
                     anchors.fill: tabSurface
                     radius: tabSurface.radius

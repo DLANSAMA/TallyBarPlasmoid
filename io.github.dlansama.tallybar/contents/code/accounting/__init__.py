@@ -1,7 +1,4 @@
-"""Token accounting, model pricing, cost calculation, and usage-limit helpers.
-
-Modularized package preserving full backwards compatibility with flat imports.
-"""
+"""Token accounting, model pricing, cost calculation, and usage-limit helpers."""
 from __future__ import annotations
 
 import io_helpers

@@ -1,11 +1,6 @@
-"""Provider-specific API callers and data acquisition logic.
-
-Each provider (Gemini, Claude, Codex/OpenAI, Antigravity) has its own fetch
-path that returns a normalised provider dict suitable for the QML UI.
-"""
+"""Gemini provider: gemini.google.com usage scrape and Google One AI credits."""
 from __future__ import annotations
 
-import datetime as dt
 import json
 import re
 import time
@@ -21,6 +16,7 @@ from cookies import BrowserCookie, cookiejar_for_domains, has_session_cookies
 from http_helpers import http_text, scrub_credentials
 from io_helpers import atomic_write_text
 from parsers import (
+    fresh_credit_balance,
     parse_batchexecute_payload,
     parse_gemini_usage_info,
     parse_google_one_credits,
@@ -63,13 +59,12 @@ GOOGLE_ONE_CREDITS_RPC = "DrWK4"
 # provider keeps its own cache file. 0600 atomic write (the tokens are session secrets).
 # ---------------------------------------------------------------------------
 
-_BATCH_TOKEN_TTL = 1800.0  # 30 min; staleness within the TTL self-heals via revalidation
+_BATCH_TOKEN_TTL = 1800.0
 _GEMINI_TOKEN_CACHE = Path.home() / ".tallybar" / "cache" / "gemini_tokens.json"
 _GOOGLE_ONE_TOKEN_CACHE = Path.home() / ".tallybar" / "cache" / "google_one_tokens.json"
 
 
 def _load_cached_batch_tokens(cache_path: Path) -> tuple[str, str, str] | None:
-    """Cached (at, bl, sid) tokens from `cache_path` if present and younger than the TTL."""
     try:
         data = json.loads(cache_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -114,10 +109,6 @@ def _gemini_limits_via_post(jar: Any, timeout: float, at: str, bl: str, sid: str
         return None
 
 
-# ---------------------------------------------------------------------------
-# Gemini web scraping
-# ---------------------------------------------------------------------------
-
 def extract_embedded_config_value(html: str, key: str) -> str | None:
     patterns = [
         rf'"{re.escape(key)}":"((?:\\.|[^"\\])*)"',
@@ -144,7 +135,6 @@ def extract_embedded_config_value(html: str, key: str) -> str | None:
 
 
 _SIGNIN_URL_RE = re.compile(r"accounts\.google\.com/(?:v3/signin|ServiceLogin|AccountChooser)")
-# Pull the full sign-in URL out of the logged-out shell so the UI can open it.
 _SIGNIN_FULL_URL_RE = re.compile(
     r"https://accounts\.google\.com/(?:v3/signin|ServiceLogin|AccountChooser)[^\s\"'\\<>]*"
 )
@@ -217,9 +207,6 @@ def run_gemini_web(cookies: list[BrowserCookie], timeout: float) -> dict[str, An
 
     jar = cookiejar_for_domains(cookies, GEMINI_DOMAINS)
 
-    # Fast path: reuse cached tokens to skip the usage-HTML GET. Only a non-empty result
-    # short-circuits; a miss/empty/failure falls through to the full scrape (limits are
-    # still fetched live via the POST).
     cached = _load_gemini_tokens()
     if cached is not None:
         cached_limits = _gemini_limits_via_post(jar, timeout, *cached)
@@ -293,29 +280,17 @@ def run_gemini_web(cookies: list[BrowserCookie], timeout: float) -> dict[str, An
     except Exception as exc:
         result.update(status="api-error", message=f"Gemini usage parse failed: {scrub_credentials(str(exc))[:120]}")
         return result
-    # If the POST succeeded and parsed limits, these scraped tokens are known-good — cache
-    # them so the next refresh can skip this HTML GET.
     if limits:
         _save_gemini_tokens(at, bl, sid)
-    # Show only the Code Assist quota windows (Session + Weekly). The consumer
-    # gemini.google.com web-app quota ("Gemini Apps" etc.) is a different metric
-    # and was confusing mixed in here, so it is intentionally not merged.
-
     result.update(
         status="ok" if limits else "api-empty",
         message="Read gemini.google.com/usage metrics RPC" if limits else "Gemini usage RPC returned no recognizable limits",
         limits=limits,
     )
-    # Tier is NOT hardcoded: gemini.google.com never returns the subscription tier.
-    # The real Google AI tier (Ultra/Pro/Free) is resolved from the shared Google
-    # account in apply_local_cost_summaries() and propagated here.
+    # gemini.google.com never returns the tier; apply_cost_summaries propagates it.
+    # → tests/test_providers.py::test_gemini_web_result_never_carries_a_tier
     return result
 
-
-
-# ---------------------------------------------------------------------------
-# Google One AI credit balance (one.google.com/ai/activity)
-# ---------------------------------------------------------------------------
 
 def post_google_one_batchexecute(
     jar: Any,
@@ -356,9 +331,6 @@ def post_google_one_batchexecute(
     )
 
 
-# Google One reuses the shared batchexecute token cache (see _load_cached_batch_tokens):
-# the /ai/activity GET only scrapes at/bl/sid, so a warm refresh skips it and POSTs straight
-# for the live balance. Its own cache file (its bl/sid differ from Gemini's BardChatUi app).
 def _load_google_one_tokens() -> tuple[str, str, str] | None:
     return _load_cached_batch_tokens(_GOOGLE_ONE_TOKEN_CACHE)
 
@@ -409,9 +381,8 @@ def _google_one_credits_via_post(jar: Any, timeout: float, at: str, bl: str, sid
         return None
 
 
-# The Google One AI credit pool changes on the order of hours/days, not the 60s widget
-# refresh. Re-fetching it every refresh means an authenticated one.google.com batchexecute
-# RPC each cycle. Throttle it exactly like the Claude credit/overage GETs
+# The Google One AI credit pool changes over hours/days. Re-fetching it every refresh means
+# an authenticated one.google.com batchexecute RPC each cycle. Throttle it exactly like the Claude credit/overage GETs
 # (claude.CREDIT_REFRESH_SECONDS): reuse the previous snapshot's balance when it was fetched
 # less than this many seconds ago, skipping the RPC entirely.
 GOOGLE_ONE_REFRESH_SECONDS = 300
@@ -423,30 +394,8 @@ def google_one_credit_fresh(prev: Any) -> dict[str, Any] | None:
     ``GOOGLE_ONE_REFRESH_SECONDS`` — else None (stale/absent/other-source → re-fetch).
 
     ``prev`` is the previous snapshot's *antigravity* provider dict (the Google One balance
-    lands there via ``apply_google_one_credits``). Mirrors ``claude._credit_balance_fresh``,
-    including the None-safety on every step and rejecting negative ages from a clock jump."""
-    if not isinstance(prev, dict):
-        return None
-    cb = prev.get("creditBalance")
-    if not isinstance(cb, dict):
-        return None
-    if cb.get("source") != "google-one-ai":
-        return None
-    fetched = cb.get("fetchedAt")
-    if not isinstance(fetched, str) or not fetched:
-        return None
-    try:
-        # now_iso() emits local time with a UTC offset; the Z-replace is a belt for
-        # foreign/legacy stamps.
-        ts = dt.datetime.fromisoformat(fetched.replace("Z", "+00:00"))
-    except Exception:
-        return None
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=dt.timezone.utc)
-    age = (dt.datetime.now(dt.timezone.utc) - ts).total_seconds()
-    if age < 0 or age >= GOOGLE_ONE_REFRESH_SECONDS:
-        return None
-    return cb
+    lands there via ``apply_google_one_credits``)."""
+    return fresh_credit_balance(prev, GOOGLE_ONE_REFRESH_SECONDS, source="google-one-ai")
 
 
 def run_google_one_credits(cookies: list[BrowserCookie], timeout: float) -> dict[str, Any]:
@@ -467,8 +416,6 @@ def run_google_one_credits(cookies: list[BrowserCookie], timeout: float) -> dict
 
     jar = cookiejar_for_domains(cookies, GOOGLE_ONE_DOMAINS)
 
-    # Fast path: reuse cached tokens to skip the activity-HTML GET. Any miss/failure falls
-    # through to the full scrape below — the balance is still fetched live via the POST.
     cached = _load_google_one_tokens()
     if cached is not None:
         credits = _google_one_credits_via_post(jar, timeout, *cached)
@@ -538,7 +485,6 @@ def run_google_one_credits(cookies: list[BrowserCookie], timeout: float) -> dict
         result.update(status="api-empty", message="Google One credits RPC returned no recognizable balance")
         return result
 
-    # Cache the fresh, known-good tokens so the next refresh can skip this HTML GET.
     _save_google_one_tokens(at, bl, sid)
     return _google_one_ok_result(result, credits)
 

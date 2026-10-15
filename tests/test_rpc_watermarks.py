@@ -29,10 +29,6 @@ from providers import antigravity as agmod  # noqa: E402
 from providers import cost as costmod       # noqa: E402
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 _LMT_A = "2026-06-07T10:00:00.000000000Z"
 _LMT_B = "2026-06-07T11:30:00.000000000Z"
 
@@ -90,6 +86,11 @@ def _gen(step_index: int, tokens: int = 100) -> dict:
     }
 
 
+def _harvest(*args, **kwargs):
+    h = agmod.collect_antigravity_rpc_usage(*args, **kwargs)
+    return h.usage, h.marks
+
+
 def _fake_processes(pid=9999, token="tok", scheme="http"):
     return [(pid, token, scheme)]
 
@@ -97,10 +98,6 @@ def _fake_processes(pid=9999, token="tok", scheme="http"):
 def _fake_ports(pid):
     return [12345], {}
 
-
-# ---------------------------------------------------------------------------
-# Test 1: unchanged cascade skipped
-# ---------------------------------------------------------------------------
 
 def test_unchanged_cascade_skipped():
     cid = "aaaa-unchanged"
@@ -113,19 +110,12 @@ def test_unchanged_cascade_skipped():
     with patch.object(agmod, "find_antigravity_processes", return_value=_fake_processes()), \
          patch.object(agmod, "antigravity_ports", side_effect=_fake_ports), \
          patch.object(agmod, "_post_local_rpc", side_effect=fake_post):
-        usage, marks = agmod.collect_antigravity_rpc_usage(3.0, known={cid: _LMT_A})
+        usage, marks = _harvest(3.0, known={cid: _LMT_A})
 
-    # No metadata call issued for the unchanged cascade.
     assert cid not in calls
-    # Cascade absent from usage (was skipped).
     assert cid not in usage
-    # Watermark re-confirmed.
     assert marks.get(cid) == _LMT_A
 
-
-# ---------------------------------------------------------------------------
-# Test 2: new / changed cascade queried
-# ---------------------------------------------------------------------------
 
 def test_new_cascade_queried():
     cid_new = "bbbb-new"
@@ -141,7 +131,7 @@ def test_new_cascade_queried():
     with patch.object(agmod, "find_antigravity_processes", return_value=_fake_processes()), \
          patch.object(agmod, "antigravity_ports", side_effect=_fake_ports), \
          patch.object(agmod, "_post_local_rpc", side_effect=fake_post):
-        usage, marks = agmod.collect_antigravity_rpc_usage(3.0, known=known)
+        usage, marks = _harvest(3.0, known=known)
 
     assert cid_new in calls
     assert cid_changed in calls
@@ -150,10 +140,6 @@ def test_new_cascade_queried():
     assert marks.get(cid_new) == _LMT_A
     assert marks.get(cid_changed) == _LMT_B
 
-
-# ---------------------------------------------------------------------------
-# Test 3: failed metadata call doesn't advance watermark
-# ---------------------------------------------------------------------------
 
 def test_failed_metadata_does_not_advance_mark():
     cid = "dddd-fail"
@@ -168,7 +154,7 @@ def test_failed_metadata_does_not_advance_mark():
     with patch.object(agmod, "find_antigravity_processes", return_value=_fake_processes()), \
          patch.object(agmod, "antigravity_ports", side_effect=_fake_ports), \
          patch.object(agmod, "_post_local_rpc", side_effect=_fail_metadata):
-        usage, marks = agmod.collect_antigravity_rpc_usage(3.0, known={})
+        usage, marks = _harvest(3.0, known={})
 
     assert cid in calls          # call was attempted
     assert cid not in usage      # no usage — server returned 500
@@ -186,21 +172,17 @@ def test_exception_during_metadata_does_not_advance_mark():
     with patch.object(agmod, "find_antigravity_processes", return_value=_fake_processes()), \
          patch.object(agmod, "antigravity_ports", side_effect=_fake_ports), \
          patch.object(agmod, "_post_local_rpc", side_effect=_exc_metadata):
-        usage, marks = agmod.collect_antigravity_rpc_usage(3.0, known={})
+        usage, marks = _harvest(3.0, known={})
 
     assert cid not in usage
     assert cid not in marks
 
 
-# ---------------------------------------------------------------------------
-# Test 4: deadline partial abort
-# ---------------------------------------------------------------------------
-
 def test_deadline_pre_list_returns_empty():
     """Deadline already expired before the list call → returns ({}. {})."""
     with patch.object(agmod, "find_antigravity_processes", return_value=_fake_processes()), \
          patch.object(agmod, "antigravity_ports", side_effect=_fake_ports):
-        usage, marks = agmod.collect_antigravity_rpc_usage(
+        usage, marks = _harvest(
             3.0, known={}, deadline=time.time() - 1.0
         )
 
@@ -245,7 +227,7 @@ def test_deadline_partial_harvest():
          patch.object(agmod, "_post_local_rpc", side_effect=_timed_post), \
          patch.object(agmod.time, "time", side_effect=_mock_time):
 
-        usage, marks = agmod.collect_antigravity_rpc_usage(
+        usage, marks = _harvest(
             3.0, known={}, deadline=deadline
         )
 
@@ -254,10 +236,6 @@ def test_deadline_partial_harvest():
     assert cid1 in marks
     assert cid2 not in marks
 
-
-# ---------------------------------------------------------------------------
-# Test 5: missing / empty lastModifiedTime always queried
-# ---------------------------------------------------------------------------
 
 def test_missing_lmt_always_queried():
     cid = "ffff-nolmt"
@@ -275,17 +253,13 @@ def test_missing_lmt_always_queried():
     with patch.object(agmod, "find_antigravity_processes", return_value=_fake_processes()), \
          patch.object(agmod, "antigravity_ports", side_effect=_fake_ports), \
          patch.object(agmod, "_post_local_rpc", side_effect=_post):
-        usage, marks = agmod.collect_antigravity_rpc_usage(3.0, known=known)
+        usage, marks = _harvest(3.0, known=known)
 
     assert cid in calls
     assert cid in usage
     # Mark set to empty-string — cascade will be re-queried next refresh (can't tell if changed).
     assert marks.get(cid) == ""
 
-
-# ---------------------------------------------------------------------------
-# Test 6: ledger integration round-trip (marks persisted + fed back as `known`)
-# ---------------------------------------------------------------------------
 
 def test_ledger_marks_round_trip(monkeypatch, tmp_path):
     """Watermarks land in the saved ledger JSON; a second run feeds them back as `known`."""
@@ -301,7 +275,7 @@ def test_ledger_marks_round_trip(monkeypatch, tmp_path):
 
     def _fake_rpc(timeout, known=None, deadline=None, **_kwargs):
         received_known.update(known or {})
-        return (
+        return agmod.RpcHarvest(
             {cid: [{"stepKey": "0", "u": 10, "c": 0, "o": 5,
                     "model_placeholder": "MODEL_PLACEHOLDER_M133",
                     "api_provider": "API_PROVIDER_GOOGLE_GEMINI",
@@ -322,10 +296,6 @@ def test_ledger_marks_round_trip(monkeypatch, tmp_path):
     costmod.update_antigravity_token_ledger()
     assert received_known.get(cid) == lmt
 
-
-# ---------------------------------------------------------------------------
-# Test 7: .bak recovery preserves rpcWatermarks
-# ---------------------------------------------------------------------------
 
 def test_bak_recovery_preserves_watermarks(monkeypatch, tmp_path):
     ledger_path = tmp_path / "ledger.json"
@@ -349,10 +319,6 @@ def test_bak_recovery_preserves_watermarks(monkeypatch, tmp_path):
     assert loaded.get("rpcWatermarks", {}).get(cid) == lmt
 
 
-# ---------------------------------------------------------------------------
-# Test 8: prune rules
-# ---------------------------------------------------------------------------
-
 def test_stale_mark_without_entries_is_pruned(monkeypatch, tmp_path):
     """A mark for a cascade with no persisted entries and absent from live_marks is dropped."""
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
@@ -369,7 +335,7 @@ def test_stale_mark_without_entries_is_pruned(monkeypatch, tmp_path):
     }), encoding="utf-8")
 
     # RPC returns empty (LS not running or cascade unloaded).
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     costmod.update_antigravity_token_ledger()
 
@@ -392,17 +358,13 @@ def test_entry_bearing_mark_survives_ls_down(monkeypatch, tmp_path):
     }), encoding="utf-8")
 
     # LS down — RPC returns nothing.
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     costmod.update_antigravity_token_ledger()
 
     saved = json.loads((tmp_path / "ledger.json").read_text())
     assert saved.get("rpcWatermarks", {}).get(cid) == _LMT_A
 
-
-# ---------------------------------------------------------------------------
-# Test 9: no write churn when marks are identical
-# ---------------------------------------------------------------------------
 
 def test_no_write_churn_when_marks_identical(monkeypatch, tmp_path):
     """When watermarks and entries are unchanged, the ledger file is NOT re-written."""
@@ -423,7 +385,7 @@ def test_no_write_churn_when_marks_identical(monkeypatch, tmp_path):
 
     # RPC re-confirms the same watermark (unchanged cascade).
     monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage",
-                        lambda *a, **k: ({}, {cid: _LMT_A}))
+                        lambda *a, **k: agmod.RpcHarvest({}, {cid: _LMT_A}))
 
     costmod.update_antigravity_token_ledger()
 
@@ -431,10 +393,6 @@ def test_no_write_churn_when_marks_identical(monkeypatch, tmp_path):
     mtime_after = ledger_path.stat().st_mtime_ns
     assert mtime_before == mtime_after, "Ledger was unnecessarily re-written despite no changes"
 
-
-# ---------------------------------------------------------------------------
-# Test 10: old ledger without / with wrong-typed rpcWatermarks loads fine
-# ---------------------------------------------------------------------------
 
 def test_old_ledger_without_watermarks(monkeypatch, tmp_path):
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
@@ -452,7 +410,7 @@ def test_old_ledger_without_watermarks(monkeypatch, tmp_path):
 
     def _fake_rpc(timeout, known=None, deadline=None, **_kwargs):
         received_known.update(known or {})
-        return {}, {}
+        return agmod.RpcHarvest()
 
     monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", _fake_rpc)
     costmod.update_antigravity_token_ledger()
@@ -478,9 +436,46 @@ def test_wrong_typed_watermarks_treated_as_empty(monkeypatch, tmp_path, bad_valu
 
     def _fake_rpc(timeout, known=None, deadline=None, **_kwargs):
         received_known.update(known or {})
-        return {}, {}
+        return agmod.RpcHarvest()
 
     monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", _fake_rpc)
     costmod.update_antigravity_token_ledger()  # must not raise
 
     assert received_known == {}
+
+
+# --- Per-generation keys are stable across polls ------------------------------------------
+# A ledger entry is keyed `<cascadeId>#<stepKey>`: stepIndices[0] when present, else
+# `g<position in the generator list>` (never the position among usage-bearing records, which
+# shifts between polls and would double-count or silently drop a generation).
+
+def _gen_no_step(tokens: int = 100) -> dict:
+    g = _gen(0, tokens)
+    del g["stepIndices"]
+    return g
+
+
+def _step_keys(generations: list) -> list[str]:
+    cid = "eeee-keys"
+    fake_post = _make_rpc_stubs(summaries={cid: _LMT_A}, metadata_payloads={cid: generations})
+    with patch.object(agmod, "find_antigravity_processes", return_value=_fake_processes()), \
+         patch.object(agmod, "antigravity_ports", side_effect=_fake_ports), \
+         patch.object(agmod, "_post_local_rpc", side_effect=fake_post):
+        usage, _ = _harvest(3.0)
+    return [r["stepKey"] for r in usage[cid]]
+
+
+def test_generation_keys_are_stable_when_a_usageless_generation_appears():
+    # An earlier stepless generation has no usage on the first poll and gains it on the next:
+    # the later one keeps its key, so it is neither billed twice nor dropped.
+    first = [_gen(7), {"chatModel": {}}, _gen_no_step()]
+    second = [_gen(7), _gen_no_step(), _gen_no_step()]
+    assert _step_keys(first) == ["7", "g2"]
+    assert _step_keys(second) == ["7", "g1", "g2"]
+
+
+def test_step_index_keys_ignore_list_position_and_never_collide_with_g_keys():
+    shifted = [{"stepIndices": [3], "chatModel": {}}, _gen(7), _gen_no_step()]
+    # stepIndices[0] survives a shift; the stepless one is keyed by its list position (g2).
+    assert _step_keys(shifted) == ["7", "g2"]
+    assert _step_keys([_gen(1), _gen_no_step(), _gen_no_step()]) == ["1", "g1", "g2"]

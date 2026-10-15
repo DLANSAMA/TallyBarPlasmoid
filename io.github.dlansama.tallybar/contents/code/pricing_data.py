@@ -27,9 +27,6 @@ except ImportError as e:
 from typing import Any
 
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
 
 LITELLM_PRICING_URL = (
     "https://raw.githubusercontent.com/BerriAI/litellm/main/"
@@ -39,14 +36,12 @@ LITELLM_PRICING_URL = (
 from io_helpers import atomic_write_text, to_daemon_thread
 
 PRICING_CACHE_PATH = Path.home() / ".tallybar" / "pricing_cache.json"
-PRICING_CACHE_TTL = 86400.0  # 24 hours — model pricing changes rarely
-# Format of pricing_cache.json. Bump it whenever _litellm_to_tallybar's output changes:
-# the cache holds converted entries, not LiteLLM's raw fields, so an older one can't be
-# upgraded in place. Both loaders refuse any other version — even as the stale fallback —
-# and cache_is_current() makes build_snapshot refetch on that same refresh.
-# 2: prompt-length tiers (long_context_threshold + long_*) for every provider. A cache
-#    saved before (no "version" key) has none and would bill every long prompt at the
-#    base rates.
+PRICING_CACHE_TTL = 86400.0
+# Format of pricing_cache.json: converted entries, not LiteLLM's raw fields, so an older one
+# can't be upgraded in place. Both loaders refuse any other version (even as the stale
+# fallback) and build_snapshot refetches.
+# → tests/test_pricing_data.py::test_pricing_cache_version_tracks_converter_output,
+#   ::test_pre_tier_price_cache_is_never_served
 PRICING_CACHE_VERSION = 2
 
 # Only ingest chat models from these direct-API providers (skip Bedrock/Vertex
@@ -58,33 +53,30 @@ PRICING_CACHE_VERSION = 2
 _RELEVANT_PROVIDERS = frozenset(("anthropic", "openai", "gemini", "xai"))
 
 
-# ---------------------------------------------------------------------------
-# Embedded fallback — a snapshot of per-MTok pricing that ships with the code.
-# This is ONLY used when both the network fetch and the local cache are
-# unavailable (e.g., first run offline). It is intentionally NOT the source of
-# truth — the fetched data from LiteLLM is.
-# ---------------------------------------------------------------------------
+# Last day each introductory Gemini rate in _FALLBACK_PRICING applies (ISO date). After it the
+# row must be updated to the list rate (see the comment on those rows); a test fails then.
+INTRO_RATE_ENDS: dict[str, str] = {
+    "gemini-4-argon": "2026-11-30",
+    "gemini-3.6-flash": "2026-12-31",
+    "gemini-3.7-flash": "2026-12-31",
+    "gemini-3.8-flash": "2026-12-31",
+}
 
+# Embedded fallback — a snapshot of per-MTok pricing that ships with the code. The fetched
+# LiteLLM data is the source of truth; these rows bill a first run / offline, and
+# _with_fallback_supplement appends them for any key the live catalog lacks.
 _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
     # Anthropic Claude. cache_write is the 5-minute write rate (1.25x input);
-    # cache_write_1h is the 1-hour write rate (2x input) — usage_cost_usd splits
-    # cache_creation by the on-disk ephemeral_1h/5m breakdown and bills each portion
-    # at its own rate. (LiteLLM is the source of truth; this ships for offline use.)
-    # cache_read is NOT always 0.1x input: Opus 5.5 reads at 0.05x and Fable/Mythos 5.1
-    # at 0.025x, so copy each published rate rather than deriving it. Every 5.x model
-    # needs its own exact key — family matching would price "claude-opus-5-5" off a
-    # "claude-opus-5" row, and with no matching row at all usage_cost_usd falls back to
-    # the claude-sonnet-4 family default.
-    # Haiku 5.5 and Sonnet 4.5 also carry a prompt-length tier (long_context_threshold +
-    # long_* rates; see _long_context_tier): a request whose prompt passes the threshold
-    # bills every token at the long rates. Every row below for a model the LiteLLM catalog
-    # tiers (OpenAI, Gemini and xAI too) carries that tier, so a first run / offline bills
-    # long prompts the way the live catalog does.
-    # Sonnet 4.5's 200K tier comes from the LiteLLM catalog; Anthropic's pricing page no
-    # longer lists it. Pricing stays catalog-driven: this row mirrors the catalog, and the
-    # live entry wins whenever one is cached.
-    # Rates: Anthropic's published pricing, identical to the LiteLLM catalog (2026-10-07)
-    # apart from that Sonnet 4.5 tier.
+    # cache_write_1h is the 1-hour write rate (2x input). LiteLLM is the source of truth;
+    # this ships for offline use.
+    # cache_read is not always 0.1x input (Opus 5.5 0.05x, Fable/Mythos 5.1 0.025x): copy each
+    # published rate. Every 5.x model needs its own exact key, or family matching prices it
+    # off a shorter row.
+    # → tests/test_pricing_data.py::test_offline_fallback_prices_every_current_claude_model_exactly
+    # Every row for a model the catalog prompt-tiers (any provider) carries that tier, so a
+    # first run / offline bills long prompts like the live catalog.
+    # → tests/test_pricing_data.py::test_offline_fallback_carries_every_provider_prompt_tier
+    # Sonnet 4.5's 200K tier is catalog-only (Anthropic's page no longer lists it).
     ("claude-fable-5-1",     {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 0.25}),
     ("claude-fable-5",       {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 1.00}),
     ("claude-mythos-5-1",    {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 0.25}),
@@ -134,6 +126,7 @@ _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
     ("gpt-4o-mini",          {"input":  0.15, "output":  0.60, "cache_read":  0.075}),
     ("gpt-4o",               {"input":  2.50, "output": 10.00, "cache_read":  1.25}),
     # Google Gemini
+    # Introductory rates end on the dates in INTRO_RATE_ENDS (a test fails once one passes).
     # Rates from ai.google.dev/gemini-api/docs/pricing (2026-10-01). Every Flash version
     # needs its own exact key ("gemini-3.5-flash" would otherwise family-match
     # "gemini-3.5-flash-lite"). 3.6/3.7/3.8 Flash are on an introductory rate through
@@ -194,12 +187,10 @@ _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
                                    "long_context_threshold": 199_999, "long_input": 2.00,
                                    "long_output":  4.00, "long_cache_read": 0.40}),
     # Named Grok API models (pay-per-use rates from xAI price sheet).
-    # grok-4.6 MUST have its own exact key: get_pricing family-matches
-    # ``"grok-4" in "grok-4.6"``, so a missing row inherits grok-4's $3/$15
-    # instead of the published 4.6 short-context rate ($2 / $6 / $0.50 cache).
-    # LiteLLM has lagged this launch; the supplement keeps the live catalog
-    # authoritative once it grows a grok-4.6 key.
-    # 4.6 / 4.5 / 4.20 / 4.3 rates and long-prompt tiers: the LiteLLM catalog (2026-10-07).
+    # grok-4.6 needs its own exact key: get_pricing family-matches "grok-4" in "grok-4.6" and
+    # would bill grok-4's $3/$15 instead of $2/$6/$0.50 cache.
+    # → tests/test_pricing_data.py::test_embedded_exact_match_grok_46_not_grok_4
+    # 4.6 / 4.5 / 4.20 / 4.3 rates and long-prompt tiers: the LiteLLM catalog.
     ("grok-4.6",                  {"input":  2.00, "output":  6.00, "cache_read":  0.50,
                                    "long_context_threshold": 199_999, "long_input": 4.00,
                                    "long_output": 12.00, "long_cache_read": 1.00}),
@@ -217,18 +208,13 @@ _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
 )
 
 
-# ---------------------------------------------------------------------------
-# In-memory state
-# ---------------------------------------------------------------------------
 
-# The active pricing table: list of (pattern, {input, output, ...}) tuples.
 # Populated on first call to get_pricing(), then refreshed in the background.
 _active_pricing: list[tuple[str, dict[str, float]]] | None = None
 _last_fetch_time: float = 0.0
 # Resolution memo: get_pricing is called once per usage record by the local-log cost
 # summarizers, so an un-memoized lookup is O(records × catalog) substring scans per
-# refresh. Keyed by lowercased model name; MUST be cleared wherever _active_pricing is
-# (re)built, or a stale catalog's resolution survives a refresh.
+# refresh. Keyed by lowercased model name; only _install_catalog resets it.
 _resolve_memo: dict[str, dict[str, float]] = {}
 # Bumped (under _pricing_lock) every time _active_pricing is (re)built. get_pricing scans
 # the catalog OUTSIDE the lock — it runs once per usage record — and only memoizes its
@@ -239,15 +225,11 @@ _catalog_generation = 0
 # compute_local_cost_summaries -> get_pricing while the event-loop thread finishes an
 # awaited refresh_pricing. A resolution computed against the pre-refresh catalog must not
 # be memoized after refresh_pricing's clear() (it would serve a stale price for the rest of
-# the run) — the generation check in get_pricing's memo write is what prevents that; the
-# lock alone did not, because the scan and memo write used to happen outside it.
+# the run) — the generation check in get_pricing's memo write is what prevents that.
 # → tests/test_pricing_data.py::test_memo_write_dropped_when_catalog_refreshed_mid_scan
 _pricing_lock = threading.Lock()
 
 
-# ---------------------------------------------------------------------------
-# LiteLLM → TallyBar price format converter
-# ---------------------------------------------------------------------------
 
 _LONG_INPUT_FIELD = re.compile(r"^input_cost_per_token_above_(\d+)k_tokens$")
 
@@ -303,8 +285,6 @@ def _long_context_tier(info: dict[str, Any], prices: dict[str, float],
 
 
 def _litellm_to_tallybar(raw: dict[str, Any]) -> list[tuple[str, dict[str, float]]]:
-    """Convert LiteLLM's per-token pricing dict into the TallyBar per-MTok
-    tuple format, filtering to only the direct-API providers we care about."""
     results: list[tuple[str, dict[str, float]]] = []
     for model_id, info in raw.items():
         if model_id == "sample_spec":
@@ -344,15 +324,11 @@ def _litellm_to_tallybar(raw: dict[str, Any]) -> list[tuple[str, dict[str, float
             # currently omits it). Anthropic's published 1h cache-write rate is a flat
             # 2x input for EVERY Claude model, so synthesize it from input rather than
             # silently letting usage_cost_usd fall back to the 5m cache_write rate — that
-            # undercounts 1h-cached Claude usage by ~8.7% (the exact bug the 1h split fixed,
-            # re-opened for any model the live catalog hasn't filled in). Matches the
+            # undercounts 1h-cached Claude usage by ~8.7%. Matches the
             # embedded fallback table, which hardcodes cache_write_1h = 2x input.
             prices["cache_write_1h"] = prices["input"] * 2.0
         if provider == "anthropic" and "cache_write" not in prices:
-            # Anthropic's published 5-minute cache-write rate is 1.25x input for every
-            # Claude model; synthesize it when the live catalog omits the field.
             prices["cache_write"] = prices["input"] * 1.25
-        # Prompt-length tier, for every provider (see _long_context_tier).
         prices.update(_long_context_tier(info, prices, provider))
 
         results.append((model_id, prices))
@@ -373,9 +349,6 @@ def _litellm_to_tallybar(raw: dict[str, Any]) -> list[tuple[str, dict[str, float
     return results
 
 
-# ---------------------------------------------------------------------------
-# Fetch and cache
-# ---------------------------------------------------------------------------
 
 def _fetch_litellm_pricing(timeout: float = 10.0) -> dict[str, Any] | None:
     """Download the LiteLLM model catalog JSON. Returns None on any failure."""
@@ -386,7 +359,6 @@ def _fetch_litellm_pricing(timeout: float = 10.0) -> dict[str, Any] | None:
             LITELLM_PRICING_URL,
             headers={"Accept": "application/json", "User-Agent": "tallybar-plasmoid/1.0"},
         )
-        # Use default SSL for public GitHub raw content
         context = ssl.create_default_context()
         with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
             if response.status != 200:
@@ -405,7 +377,7 @@ def _load_cache() -> list[tuple[str, dict[str, float]]] | None:
             return None
         fetched_at = float(data.get("fetchedAt", 0))
         if time.time() - fetched_at > PRICING_CACHE_TTL:
-            return None  # Expired, but we'll still use it as a fallback below
+            return None
         entries = data.get("pricing")
         if not isinstance(entries, list):
             return None
@@ -447,9 +419,6 @@ def _save_cache(pricing: list[tuple[str, dict[str, float]]]) -> None:
         pass
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 def _with_fallback_supplement(entries: list[tuple[str, dict[str, float]]]) -> list[tuple[str, dict[str, float]]]:
     """Append embedded-fallback rows for models the live catalog doesn't have an
@@ -464,11 +433,21 @@ def _with_fallback_supplement(entries: list[tuple[str, dict[str, float]]]) -> li
     return list(entries) + supplement
 
 
+def _install_catalog(
+    entries: list[tuple[str, dict[str, float]]] | None, fetched_at: float
+) -> None:
+    """Swap in a catalog (None = unloaded), dropping memoized resolutions and bumping the
+    generation. The caller holds _pricing_lock."""
+    global _active_pricing, _last_fetch_time, _catalog_generation
+    _active_pricing = entries
+    _last_fetch_time = fetched_at
+    _resolve_memo.clear()
+    _catalog_generation += 1
+
+
 async def refresh_pricing(timeout: float = 10.0) -> bool:
     """Fetch latest pricing from LiteLLM and update the in-memory + disk cache.
     Returns True if successful, False if the fetch failed (stale data retained)."""
-    global _active_pricing, _last_fetch_time, _catalog_generation
-
     raw = await to_daemon_thread(_fetch_litellm_pricing, timeout)
     if raw is None:
         return False
@@ -478,57 +457,34 @@ async def refresh_pricing(timeout: float = 10.0) -> bool:
         return False
 
     with _pricing_lock:
-        _active_pricing = _with_fallback_supplement(converted)
-        _resolve_memo.clear()
-        _catalog_generation += 1
-        _last_fetch_time = time.time()
+        _install_catalog(_with_fallback_supplement(converted), time.time())
     _save_cache(converted)  # disk cache stays pure fetched data
     return True
 
 
 def get_pricing(model: str | None) -> dict[str, float]:
-    """Look up per-MTok pricing for a model name (case-insensitive substring
-    match, same semantics as the original MODEL_PRICING_USD_PER_MTOK).
+    """Look up per-MTok pricing for a model name (case-insensitive: exact key, then
+    longest ``pattern in name``, then longest ``name in pattern``).
 
     ONLY does fast in-memory or stale disk-cache reads, and never calls
     refresh_pricing synchronously."""
-    global _active_pricing, _last_fetch_time, _catalog_generation
-
-    # Bootstrap: load pricing data if not yet in memory
     if _active_pricing is None:
         with _pricing_lock:
-            # Re-check inside the lock: another thread may have already bootstrapped
-            # while we were waiting to acquire it (double-checked locking).
             if _active_pricing is None:
-                _resolve_memo.clear()
-                _catalog_generation += 1
-                # Try disk cache first (fast, no network)
                 cached = _load_cache()
                 if cached:
-                    _active_pricing = _with_fallback_supplement(cached)
-                    _last_fetch_time = time.time()
+                    _install_catalog(_with_fallback_supplement(cached), time.time())
                 else:
-                    # Try stale cache (better than nothing, no network)
                     stale = _load_cache_stale()
                     if stale:
-                        _active_pricing = _with_fallback_supplement(stale)
                         try:
-                            _last_fetch_time = os.path.getmtime(PRICING_CACHE_PATH)
+                            fetched_at = os.path.getmtime(PRICING_CACHE_PATH)
                         except Exception:
-                            _last_fetch_time = 0.0
+                            fetched_at = 0.0
+                        _install_catalog(_with_fallback_supplement(stale), fetched_at)
                     else:
-                        # Last resort: embedded fallback
-                        _active_pricing = list(_FALLBACK_PRICING)
-                        _last_fetch_time = 0.0
+                        _install_catalog(list(_FALLBACK_PRICING), 0.0)
 
-    # Lookup: prefer an EXACT (case-insensitive) key, then the most specific
-    # FAMILY match (a catalog key that is a substring of the queried name — e.g.
-    # "gpt-5" for "gpt-5-codex"), and only then the looser direction (the query is
-    # a substring of a longer catalog key). Returning the FIRST hit in either
-    # direction (the old behaviour) let a short canonical name like "gpt-5" resolve
-    # to a longer earlier-listed key ("gpt-5.5") and mis-price by ~2x; exact-first
-    # plus longest-pattern fixes that while preserving the useful family matching
-    # (still guarded by test_pricing_data.py's bidirectional-match test).
     name = (model or "").lower()
     if not name:
         return {}
@@ -539,39 +495,35 @@ def get_pricing(model: str | None) -> dict[str, float]:
         catalog = _active_pricing or []
         generation = _catalog_generation
     result: dict[str, float] = {}
-    family = None        # pattern in name  (catalog key ⊂ query) — most specific family
-    family_len = -1
-    loose = None         # name in pattern  (query ⊂ longer catalog key) — last resort
-    loose_len = -1
+    key_in_name = None
+    key_in_name_len = -1
+    name_in_key = None
+    name_in_key_len = -1
     for pattern, prices in catalog:
         if pattern == name:
-            result = prices                    # exact key wins outright
+            result = prices
             break
         if pattern in name:
-            if len(pattern) > family_len:
-                family, family_len = prices, len(pattern)
+            if len(pattern) > key_in_name_len:
+                key_in_name, key_in_name_len = prices, len(pattern)
         elif name in pattern:
-            if len(pattern) > loose_len:
-                loose, loose_len = prices, len(pattern)
+            if len(pattern) > name_in_key_len:
+                name_in_key, name_in_key_len = prices, len(pattern)
     else:
-        if family is not None:
-            result = family
-        elif loose is not None:
-            result = loose
+        if key_in_name is not None:
+            result = key_in_name
+        elif name_in_key is not None:
+            result = name_in_key
     with _pricing_lock:
-        if generation == _catalog_generation:  # catalog not rebuilt while we scanned
+        if generation == _catalog_generation:
             _resolve_memo[name] = result
     return result
 
 
 def invalidate_cache() -> None:
     """Clear in-memory pricing so the next get_pricing() call re-bootstraps."""
-    global _active_pricing, _last_fetch_time, _catalog_generation
     with _pricing_lock:
-        _active_pricing = None
-        _last_fetch_time = 0.0
-        _resolve_memo.clear()
-        _catalog_generation += 1
+        _install_catalog(None, 0.0)
 
 
 def cache_is_current() -> bool:

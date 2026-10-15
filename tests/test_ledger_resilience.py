@@ -76,7 +76,7 @@ def test_load_rejects_wrong_shape(monkeypatch, tmp_path):
 def test_update_acquires_and_releases_exclusive_lock(monkeypatch, tmp_path):
     _point_at(monkeypatch, tmp_path)
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())     # no disk scan
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))  # no RPC
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())  # no RPC
     import fcntl
     calls = []
     real_flock = fcntl.flock
@@ -104,7 +104,7 @@ def test_ledger_update_skips_gracefully_when_lock_held(monkeypatch, tmp_path):
               "entries": {"a#0": {"d": "2026-05-01", "u": 1, "c": 2, "o": 3}}}
     led.write_text(json.dumps(seeded), encoding="utf-8")
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: {})
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     lock_path = led.with_suffix(".lock")
     holder = lock_path.open("a")
@@ -155,11 +155,11 @@ def test_rpc_stems_reconstruct_with_rsplit(monkeypatch, tmp_path):
                                                           "model": "gemini-3.1-pro"}}}),
                    encoding="utf-8")
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: {})
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     # No exception, entry preserved; the rsplit stem would be "ca#sc" (full), not "ca" (split).
     out = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
     assert f"{weird}#0" in out["entries"]
     # The full key "ca#sc#0" rsplits to the full cascade id "ca#sc"; split() would give "ca".
     assert f"{weird}#0".rsplit("#", 1)[0] == weird
-    assert f"{weird}#0".split("#", 1)[0] != weird                        # the old (buggy) form
+    assert f"{weird}#0".split("#", 1)[0] != weird

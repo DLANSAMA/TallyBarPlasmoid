@@ -1,8 +1,4 @@
-"""Provider-specific API callers and data acquisition logic.
-
-Each provider (Gemini, Claude, Codex/OpenAI, Antigravity) has its own fetch
-path that returns a normalised provider dict suitable for the QML UI.
-"""
+"""Claude provider: browser-API path and the Claude Code statusLine fallback."""
 from __future__ import annotations
 
 import asyncio
@@ -18,6 +14,7 @@ from accounting import (
 from cookies import BrowserCookie, cookiejar_for_domains, has_session_cookies
 from http_helpers import http_json_async, scrub_credentials
 from parsers import (
+    fresh_credit_balance,
     add_pace_detail,
     claude_org_ids,
     normalize_tier,
@@ -50,45 +47,24 @@ CLAUDE_DOMAINS = ("claude.ai",)
 CLAUDE_API_BASE = "https://claude.ai/api"
 CLAUDE_ORGANIZATIONS_URL = f"{CLAUDE_API_BASE}/organizations"
 
-# The prepaid-credit balance and the monthly overage spend cap change on the order of
-# hours/days, not the 60s widget refresh. Re-fetching them every refresh is the bulk of
-# the botty call volume that trips claude.ai's Cloudflare rate limiter. Throttle: reuse
-# the previous snapshot's values when they were fetched less than this many seconds ago,
-# skipping the two GETs entirely.
+# The prepaid-credit balance and the monthly overage spend cap change over hours/days.
+# Re-fetching them every refresh is the bulk of the call volume that trips claude.ai's
+# Cloudflare rate limiter. Throttle: reuse the previous snapshot's values when they were
+# fetched less than this many seconds ago, skipping the two GETs entirely.
 CREDIT_REFRESH_SECONDS = 300
 
 
 def _credit_balance_fresh(prev: Any) -> dict[str, Any] | None:
     """Return the previous snapshot's Claude ``creditBalance`` iff it was fetched within
     ``CREDIT_REFRESH_SECONDS`` — else None (stale/absent → re-fetch). None-safe."""
-    if not isinstance(prev, dict):
-        return None
-    cb = prev.get("creditBalance")
-    if not isinstance(cb, dict):
-        return None
-    fetched = cb.get("fetchedAt")
-    if not isinstance(fetched, str) or not fetched:
-        return None
-    try:
-        # now_iso() emits local time with a UTC offset (accounting.now_iso uses
-        # astimezone().isoformat()); the Z-replace is a belt for foreign/legacy stamps.
-        ts = dt.datetime.fromisoformat(fetched.replace("Z", "+00:00"))
-    except Exception:
-        return None
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=dt.timezone.utc)
-    age = (dt.datetime.now(dt.timezone.utc) - ts).total_seconds()
-    if age < 0 or age >= CREDIT_REFRESH_SECONDS:
-        return None
-    return cb
+    return fresh_credit_balance(prev, CREDIT_REFRESH_SECONDS)
 
 
-# usage_summary is tried first, but when it answers "not here" (404/410, or 200 with no
-# recognizable limits — it 404'd for this account as of 2026-07) every refresh pays an extra
-# authenticated claude.ai GET, the very call volume that trips Cloudflare. Remember the miss
-# on the provider dict and go straight to /usage until this long has passed, then re-probe
-# once in case the endpoint comes back. Transient answers (403/429/5xx, network errors) are
-# NOT recorded — a blip must not switch the probe off for a day.
+# A usage_summary miss (404/410, or 200 with no limits) is remembered so each refresh skips
+# an extra claude.ai GET (the call volume that trips Cloudflare); re-probe after this long.
+# Transient answers (403/429/5xx, network errors) are never recorded.
+# → tests/test_providers.py::test_usage_summary_404_is_remembered_and_skipped,
+#   ::test_usage_summary_transient_error_is_not_remembered
 USAGE_SUMMARY_RETRY_SECONDS = 24 * 3600
 _USAGE_SUMMARY_GONE = (404, 410)
 
@@ -122,15 +98,12 @@ def _prev_monthly_limit(prev: Any) -> dict[str, Any] | None:
     return None
 
 
-# ---------------------------------------------------------------------------
 # Claude Code statusLine capture (integrations/claude_code/statusline_capture.py)
-# ---------------------------------------------------------------------------
 
-# Written by the optional statusLine hook: Claude Code hands its subscriber quota to the
-# hook on every status update, no cookies or network involved. The backend uses it as a
-# FALLBACK when the claude.ai cookie path can't produce limits (Cloudflare 403/429, signed
-# out, wallet locked, --no-network) — never over a live cookie reading, which also carries
-# the extra-usage/credit rows the statusLine blob doesn't have.
+# Written by the optional statusLine hook (Claude Code hands it the subscriber quota on every
+# status update). Used only when the cookie path yields no limits, never over a live reading,
+# which also carries the extra-usage rows this blob lacks.
+# → tests/test_claude_statusline_fallback.py
 CLAUDE_STATUSLINE_PATH = Path.home() / ".tallybar" / "claude_statusline.json"
 # A capture only updates while Claude Code runs. Past this age it is ignored outright:
 # the percentages only ever grow within a window, so a day-old reading is a misleading
@@ -252,7 +225,7 @@ def apply_claude_statusline_fallback(provider: dict[str, Any], capture: Any,
 
 async def _claude_get(url: str, jar: Any, timeout: float) -> tuple[int, Any] | None:
     """GET + JSON-decode, returning (status, data) or None on any failure — so a single
-    endpoint's error is treated as 'absent' (matching the old per-request suppress/continue)
+    endpoint's error is treated as 'absent' 
     instead of aborting the concurrent per-org batch."""
     try:
         return await http_json_async(url, jar, timeout)
@@ -260,10 +233,6 @@ async def _claude_get(url: str, jar: Any, timeout: float) -> tuple[int, Any] | N
         return None
 
 
-
-# ---------------------------------------------------------------------------
-# Claude browser API
-# ---------------------------------------------------------------------------
 
 async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
                          prev: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -307,7 +276,6 @@ async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
         result.update(status="api-error", message=f"API returned HTTP {status}")
         return result
 
-    # API wins when present; else keep the disk fallback already stamped on result.
     tier = parse_claude_tier(data) or disk_tier
     if tier:
         result["tier"] = tier
@@ -316,10 +284,6 @@ async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
     credit_balance: dict[str, Any] | None = None
     overage_limit: dict[str, Any] | None = None
 
-    # Throttle the two SLOW-changing endpoints (prepaid credits + overage spend cap): if the
-    # previous snapshot fetched them under CREDIT_REFRESH_SECONDS ago, carry those values
-    # forward and skip the GETs entirely. This is the bulk of the per-refresh call volume that
-    # trips claude.ai's Cloudflare rate limiter. None-safe on a missing/degraded prev.
     carried_credit = _credit_balance_fresh(prev)
     carried_monthly = _prev_monthly_limit(prev) if carried_credit is not None else None
     skip_credit_calls = carried_credit is not None
@@ -327,7 +291,6 @@ async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
         credit_balance = carried_credit
         overage_limit = carried_monthly
 
-    # usage_summary known-missing (see USAGE_SUMMARY_RETRY_SECONDS): skip the probe this run.
     summary_skip_since = _usage_summary_skip_since(prev)
     summary_unavailable_since: str | None = summary_skip_since
 
@@ -359,34 +322,26 @@ async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
                 if credit_balance is not None:
                     credit_balance["fetchedAt"] = now_iso()
                 else:
-                    # A3: the endpoint answered 200 but had no parseable prepaid balance
-                    # (accounts with no prepaid credits). Stamp an amount-less sentinel so
-                    # _credit_balance_fresh sees a fetchedAt and throttles the two slow GETs
-                    # for CREDIT_REFRESH_SECONDS — otherwise /prepaid/credits + /overage
-                    # fire on EVERY refresh, the bulk of the Cloudflare-tripping call volume.
-                    # Safe against the UI: _extra_usage_detail only renders a credit row when
-                    # creditBalance["amount"] > 0 (accounting.py), and hasExtraUsage() gates on
-                    # the resulting formattedExtraUsageDetail being non-empty — an amount-less
-                    # dict yields "" and shows nothing.
+                    # 200 but no parseable balance (no prepaid credits): stamp an
+                    # amount-less sentinel so _credit_balance_fresh still throttles the
+                    # GETs. The UI shows a credit row only when amount > 0
+                    # (accounting.limits._extra_usage_detail), so it renders nothing.
                     credit_balance = {"fetchedAt": now_iso()}
 
             # Upstream Swift fetches a dedicated endpoint for the Extra-usage spend cap.
             # See ClaudeWebAPIFetcher.fetch / parseOverageSpendLimit.
             if overage_limit is None and ov is not None and ov[0] == 200 and isinstance(ov[1], dict):
                 if ov[1].get("is_enabled") is True or ov[1].get("isEnabled") is True:
-                    # parse_claude_usage already handles the cents → dollars conversion
-                    # when this dict is given as data["extra_usage"]; reuse it.
                     parsed = parse_claude_usage({"extra_usage": ov[1]})
                     if parsed:
                         overage_limit = parsed[0]
 
-        # usage_summary preferred; fall back to /usage only if it yielded no limits.
         org_limits: list[dict[str, Any]] = []
         if summary is not None and summary[0] == 200:
             org_limits = parse_claude_usage(summary[1])
         if summary is not None:
             if org_limits:
-                summary_unavailable_since = None   # it works (again): keep probing it
+                summary_unavailable_since = None
             elif (summary[0] in _USAGE_SUMMARY_GONE or summary[0] == 200) and summary_unavailable_since is None:
                 summary_unavailable_since = now_iso()
         if not org_limits:
@@ -398,8 +353,6 @@ async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
             break
     if not limits:
         limits = parse_claude_usage(data)
-    # Merge in the dedicated overage endpoint result if usage_summary didn't already
-    # produce a "Monthly" row.
     if overage_limit is not None and not any(
         str(l.get("label", "")).lower() == "monthly" for l in limits
     ):

@@ -65,7 +65,7 @@ def test_embedded_exact_match_claude_sonnet_5_not_sonnet_4():
         assert prices["output"] == 10.0
 
 
-# Anthropic's published per-MTok rates (identical to the LiteLLM catalog on 2026-10-07).
+# Anthropic's published per-MTok rates (identical to the LiteLLM catalog).
 # Note the cache reads: Opus 5.5 reads at 0.05x input and Fable/Mythos 5.1 at 0.025x, so a
 # table that derived reads as 0.1x input would fail here.
 # Haiku 5.5 is priced by prompt length, so its row carries the over-100K tier too.
@@ -156,10 +156,9 @@ def test_embedded_fallback_when_no_cache_at_all():
 
 # ---------------------------------------------------------------------------
 # Exact-match-first against the EMBEDDED fallback table. With no cache,
-# the embedded _FALLBACK_PRICING is active. The old "first substring hit wins"
-# behaviour let a short canonical name ("gpt-5") resolve to a longer EARLIER-listed
-# key ("gpt-5.5") and overbill ~2x (5.0/30.0 vs the correct 2.5/15.0). exact-first
-# fixes that. These guard the embedded table specifically (the autouse
+# the embedded _FALLBACK_PRICING is active. A short canonical name ("gpt-5") must resolve
+# to its own row, not a longer earlier-listed key ("gpt-5.5"). These guard the embedded
+# table specifically (the autouse
 # _reset_pricing fixture keeps the injected fallback from leaking).
 # ---------------------------------------------------------------------------
 
@@ -212,8 +211,7 @@ def test_empty_and_none_model_return_empty_dict():
 # 1-hour cache-write rate. Anthropic prices 1h cache writes (2x input) higher than
 # the default 5-minute write (1.25x input); LiteLLM exposes the 1h rate in a
 # separate field. The converter must ingest it (per-MTok) so usage_cost_usd can
-# bill the 1h portion of cache_creation correctly. Dropping it under-bills cache-
-# heavy Claude use by ~8.7% on real data.
+# bill the 1h portion of cache_creation correctly.
 # ---------------------------------------------------------------------------
 
 def test_litellm_converts_1h_cache_write_rate():
@@ -351,15 +349,8 @@ def test_embedded_fallback_anthropic_has_1h_write_at_2x_input():
 
 
 # ---------------------------------------------------------------------------
-# [CRITICAL] Provider-prefixed raw LiteLLM model_ids (gemini/*, xai/*) must
-# resolve against their OWN live-fetched price, not the embedded
-# _FALLBACK_PRICING row for the same bare name. Before the fix, _litellm_to_
-# tallybar stored the prefixed id verbatim, so get_pricing's exact-match rule
-# could never match the bare-named query and always fell through to the
-# fallback row appended by _with_fallback_supplement (whose "already known"
-# exclusion was also keyed on the prefixed string, so it never excluded the
-# bare fallback key either). This silently under/over-billed every Gemini and
-# xAI usage record.
+# Provider-prefixed raw LiteLLM model_ids (gemini/*, xai/*) must resolve against their
+# OWN live-fetched price, not the embedded _FALLBACK_PRICING row for the same bare name.
 # ---------------------------------------------------------------------------
 
 def test_litellm_prefixed_model_id_resolves_to_live_price_not_fallback():
@@ -653,3 +644,54 @@ def test_pre_tier_price_cache_is_never_served(tmp_path, monkeypatch):
     assert not pricing_data.cache_is_current()
     cache.unlink()
     assert not pricing_data.cache_is_current()
+
+
+# --- Price-cache version discipline ---------------------------------------------------
+# pricing_cache.json is keyed by PRICING_CACHE_VERSION; a change to what
+# _litellm_to_tallybar emits without a bump serves old-shaped prices from disk.
+
+_CATALOG_FIXTURE = {
+    "claude-opus-4-8": {
+        "litellm_provider": "anthropic", "mode": "chat",
+        "input_cost_per_token": 5e-06, "output_cost_per_token": 2.5e-05,
+        "cache_read_input_token_cost": 5e-07, "cache_creation_input_token_cost": 6.25e-06,
+        "cache_creation_input_token_cost_above_1hr": 1e-05},
+    "claude-haiku-5-5": {
+        "litellm_provider": "anthropic", "mode": "chat",
+        "input_cost_per_token": 1e-06, "output_cost_per_token": 5e-06,
+        "input_cost_per_token_above_100k_tokens": 5e-06,
+        "output_cost_per_token_above_100k_tokens": 2.5e-05},
+    "claude-new-model": {
+        "litellm_provider": "anthropic", "mode": "chat",
+        "input_cost_per_token": 4e-06, "output_cost_per_token": 1.6e-05},
+    "gpt-5": {
+        "litellm_provider": "openai", "mode": "chat",
+        "input_cost_per_token": 2.5e-06, "output_cost_per_token": 1.5e-05,
+        "cache_read_input_token_cost": 2.5e-07,
+        "input_cost_per_token_above_272k_tokens": 5e-06,
+        "output_cost_per_token_above_272k_tokens": 2.25e-05},
+    "gemini-2.5-pro": {
+        "litellm_provider": "gemini", "mode": "chat",
+        "input_cost_per_token": 1.25e-06, "output_cost_per_token": 1e-05,
+        "cache_read_input_token_cost": 1.25e-07,
+        "input_cost_per_token_above_200k_tokens": 2.5e-06,
+        "output_cost_per_token_above_200k_tokens": 1.5e-05},
+    "xai/grok-4": {
+        "litellm_provider": "xai", "mode": "chat",
+        "input_cost_per_token": 3e-06, "output_cost_per_token": 1.5e-05,
+        "input_cost_per_token_above_200k_tokens": 6e-06,
+        "output_cost_per_token_above_200k_tokens": 3e-05},
+}
+
+_CATALOG_PIN = (2, "a6119f95c10e49bc")
+
+
+def test_pricing_cache_version_tracks_converter_output():
+    import hashlib
+    import json
+    out = json.dumps(pricing_data._litellm_to_tallybar(_CATALOG_FIXTURE), sort_keys=True)
+    got = (pricing_data.PRICING_CACHE_VERSION, hashlib.sha256(out.encode()).hexdigest()[:16])
+    assert got == _CATALOG_PIN, (
+        f"_litellm_to_tallybar output (or PRICING_CACHE_VERSION) changed: now {got}, pinned "
+        f"{_CATALOG_PIN}. If the output changed, bump PRICING_CACHE_VERSION in pricing_data.py, "
+        f"then repin _CATALOG_PIN.")

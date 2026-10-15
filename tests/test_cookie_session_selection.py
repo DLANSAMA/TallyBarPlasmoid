@@ -23,7 +23,7 @@ def _c(browser, name, value, *, host=".claude.ai", expires=None, used=None, prof
 
 
 def test_time_normalization_matches_real_store_formats():
-    # Values observed in the dev machine's real stores (2026-09-23).
+    # Real Chromium/Firefox epochs.
     assert abs(_chromium_time_unix(13434609475043128) - 1790135875.04) < 1  # us since 1601
     assert _chromium_time_unix(0) is None                                   # session cookie
     assert abs(_unix_time_any_unit(1779234857318) - 1779234857.318) < 1e-3  # Firefox expiry: ms

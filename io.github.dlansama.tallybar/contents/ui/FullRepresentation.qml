@@ -54,7 +54,6 @@ Item {
     readonly property real drawerWidth: 312
     // The cost popout sizes to its footer content (chartArea is fixed at 150) so a sparse
     // provider (no burn rate, no per-model data — e.g. Gemini web) doesn't leave dead glass.
-    // 360 = header + tabs + chart + the 3 Today/7d/30d rows; +23 for the burn line; +per-model.
     // Per-section pixel heights of the cost-popout footer, shared by the footer rows
     // themselves AND drawerHeightFor()'s deterministic height mirror so the two cannot drift
     // (the same metricsBodyHeight() mirror foot-gun CLAUDE.md documents — but with a single
@@ -64,6 +63,14 @@ Item {
     readonly property int costBurnRowHeight: 18
     readonly property int costModelRowHeight: 16
     readonly property int costTypeRowHeight: 16
+    // Header + tabs + chart + the three Today/7d/30d rows.
+    readonly property int costDrawerBaseHeight: 360
+    // "BY TYPE": separator (3 top margin + 1 + 5 spacing) plus the header.
+    readonly property int costTypeSeparatorHeight: 9
+    readonly property int costTypeHeaderHeight: 19
+    // "TOP MODELS": separator plus the header.
+    readonly property int costModelSeparatorHeight: 6
+    readonly property int costModelHeaderHeight: 18
     // Extra-usage section height — single source shared by the section's own
     // Layout.preferredHeight AND metricsBodyHeight()'s mirror, so the two can't drift
     // (the documented foot-gun; the metric rows + cost section are already single-sourced
@@ -72,15 +79,15 @@ Item {
 
     function drawerHeightFor() {
         const cost = root.costSummary() || ({});
-        let h = 360;
+        let h = root.costDrawerBaseHeight;
         if (Number(cost.burnRatePerDay || 0) > 0)
-            h += root.costBurnRowHeight + root.costFooterSpacing;   // burn line (= 23)
+            h += root.costBurnRowHeight + root.costFooterSpacing;
         const types = root.costTypeRows(root.costTypePeriod()).length;
-        if (types > 0)    // separator (3 top margin + 1 + 5 spacing) + "BY TYPE" header (19) + N type rows (21 each)
-            h += 9 + 19 + types * (root.costTypeRowHeight + root.costFooterSpacing);
+        if (types > 0)
+            h += root.costTypeSeparatorHeight + root.costTypeHeaderHeight + types * (root.costTypeRowHeight + root.costFooterSpacing);
         const models = root.costModelBreakdown().length;
-        if (models > 0)   // separator + "TOP MODELS" header (= 6 + 18) + N model rows (21 each)
-            h += 6 + 18 + models * (root.costModelRowHeight + root.costFooterSpacing);
+        if (models > 0)
+            h += root.costModelSeparatorHeight + root.costModelHeaderHeight + models * (root.costModelRowHeight + root.costFooterSpacing);
         return h;
     }
     readonly property real drawerHeight: root.drawerHeightFor()
@@ -165,9 +172,6 @@ Item {
         return Math.max(0, Math.min(100, n));
     }
 
-    // compactCount + trimDecimals live in lib/format.js (imported as Fmt) — a SINGLE source
-    // shared with Python's accounting.compact_token_count via the node parity test
-    // (tests/test_compact_count_parity.py), so the panel and the backend cost lines can't drift.
 
     function tabLabel(provider) {
         return UIHelpers.tabLabel(provider);
@@ -250,8 +254,8 @@ Item {
         // Cap the inter-tab gap. The dock Row is horizontalCenter-anchored, so with providers
         // hidden via the visibility feature the raw fill gap balloons (~190px at 2 tabs) and
         // pins the tabs to opposite dock edges; clamping it clusters few-tab layouts centered.
-        // The 4- and 5-tab defaults sit below the cap (~23px / ~4px), so their fill gap is
-        // unchanged and the row still spans the full padded width — pixel-identical there.
+        // The 4- and 5-tab defaults sit below the cap (~23px / ~4px), so the row still
+        // spans the full padded width there.
         const raw = (available - root.switcherContentWidth()) / (count - 1);
         return Math.max(1, Math.min(24, raw));
     }
@@ -261,9 +265,8 @@ Item {
     }
 
     function primaryTextColor(alpha) {
-        // Fixed light-on-dark palette — the popup paints its own dark glass, so
-        // colors must NOT track Kirigami.Theme/PlasmaCore.Theme (a light global
-        // theme would render dark text invisible against the glass). See CLAUDE.md.
+        // Fixed light-on-dark palette: the popup paints its own dark glass, so a light global
+        // theme must not leak in. → tests/test_enforced_rules.py::test_no_plasma5_theme_or_plasmoid_enum_constants_in_ui
         return Qt.rgba(0.96, 0.97, 1, alpha === undefined ? 0.96 : alpha);
     }
 
@@ -336,10 +339,9 @@ Item {
     // bare percentage into a pace read: fill past the marker = burning faster
     // than the window sustains, fill short of it = headroom.
     //
-    // Deliberately NOT a colour change. Bars stay provider-accent at every
-    // percentage; competitors signal pace by recolouring to amber/red, we mark
-    // time instead. Endpoints are dropped (<=0, >=100) — a marker pinned to
-    // either edge reads as chrome, not information.
+    // Deliberately not a colour change: bars stay provider-accent at every percentage.
+    // → tests/test_enforced_rules.py::test_usage_bars_never_recolour_by_percentage
+    // Endpoints are dropped (<=0, >=100): a marker pinned to an edge reads as chrome.
     function metricPacePercent(limit) {
         if (!limit)
             return -1;
@@ -534,7 +536,6 @@ Item {
             return "";
         return String(root.providerData().actionUrl || "");
     }
-    // Mirror of CompactRepresentation.statusIsBad — the bad/actionable statuses.
     function statusIsBad(status) {
         return UIHelpers.statusIsBad(status);
     }
@@ -571,8 +572,7 @@ Item {
         return String(cost.today || cost.sessionLine || cost.last30Days || cost.monthLine || "").trim().length > 0;
     }
 
-    // Render "$188" as "$ 188"; dropped in the refactor while callers stayed, which
-    // silently killed the Today / Last 30 days cost lines.
+    // Render "$188" as "$ 188".
     function menuMoneySpacing(text) {
         return UIHelpers.menuMoneySpacing(text);
     }
@@ -918,8 +918,6 @@ Item {
     }
 
     function quickActionRows() {
-        // NB: no "Add Account" entry — the widget has no multi-account concept, and it
-        // opened the identical dashboardUrl() as "Usage Dashboard" below (a confusing dupe).
         // The strip is a fixed-height (44px) centered Row, so dropping an entry doesn't touch
         // actionFooterHeight()'s mirror.
         return [{
@@ -965,7 +963,7 @@ Item {
         }
         // All-AI cross-provider total row (26) + its top separator (1), shown only when some
         // provider has cost data; then 1px rule + quick-action strip (44) + 1px rule + system
-        // action rows (Quit). (The refresh-interval picker moved into the Settings popout.)
+        // action rows (Quit).
         const allAi = root.allAiTotals().has ? 27 : 0;
         return allAi + 1 + 44 + 1 + height;
     }
@@ -1012,11 +1010,10 @@ Item {
         return tier.length > 0 ? updated + " · " + tier : updated;
     }
 
-    // Bumped every minute while the popup is open so updatedText() re-evaluates and the
-    // relative age actually advances (otherwise it'd show "just now" until the next refresh).
+    // Bumped while the popup is open so updatedText() re-evaluates and the
+    // relative age advances (otherwise it'd show "just now" until the next refresh).
     property int nowTick: 0
     Timer {
-        // 30s so the relative "Updated Xm ago" line advances promptly while the popup is open.
         interval: 30000
         repeat: true
         running: root.hostExpanded
@@ -1126,8 +1123,7 @@ Item {
     // Size the popup to exactly fit the current provider's content so the body
     // never scrolls. Computed deterministically from the data — NOT from
     // metricsContent.implicitHeight, which reads 0 until the Repeater's
-    // delegates instantiate asynchronously (that race is what collapsed the
-    // popup to a tiny scroller before). Each term mirrors a real
+    // delegates instantiate asynchronously. Each term mirrors a real
     // Layout.preferredHeight in the layout below.
     function rowMetricHeight(limit) {
         const hasSplit = String(root.metricDetailLeftText(limit)).length > 0 || String(root.metricDetailRightText(limit)).length > 0;
@@ -1137,11 +1133,13 @@ Item {
 
     // SINGLE source for the cost section's height — used by BOTH the section's own
     // Layout.preferredHeight AND the metricsBodyHeight() mirror, so the two can never
-    // diverge (the documented scrollbar foot-gun). Base 107, +20 for the breakdown line.
+    // diverge (the documented scrollbar foot-gun).
+    readonly property int costSectionBaseHeight: 107
+    readonly property int costBreakdownLineHeight: 20
     function costSectionHeight() {
         if (!root.hasCostSection())
             return 0;
-        return 107 + (root.costBreakdownText().length > 0 ? 20 : 0);
+        return root.costSectionBaseHeight + (root.costBreakdownText().length > 0 ? root.costBreakdownLineHeight : 0);
     }
 
     // Usage by type, from the backend's typeBreakdown: uncached input, output, cache reads,
@@ -1294,19 +1292,16 @@ Item {
         return total + (parts.length - 1) * 8;
     }
 
-    // Chrome around the scrollable body: top margin 6 + dock 58 + 8 + hero 50
-    // + 8 + flickable top margin 10 + 8 + footer + bottom margin 10 = 158 + footer.
-    // 158 = fixed chrome (margins + dock + hero + flickable margins + footer rules); the
-    // footer height (incl. the All-AI total row) lives in actionFooterHeight(); the degraded
-    // banner, when shown, adds its own fixed strip (24) + one ColumnLayout gap (8) above the body.
-    readonly property real popupChromeHeight: 158 + root.actionFooterHeight() + (root.degradedText().length > 0 ? 32 : 0)
+    // Chrome around the scrollable body, excluding the footer (actionFooterHeight()).
+    readonly property int popupChromeFixedHeight: 6 + 58 + 8 + 50 + 8 + 10 + 8 + 10
+    // The degraded banner, when shown: its own strip plus one ColumnLayout gap above the body.
+    readonly property int degradedBannerHeight: 24 + 8
+    readonly property real popupChromeHeight: root.popupChromeFixedHeight + root.actionFooterHeight() + (root.degradedText().length > 0 ? root.degradedBannerHeight : 0)
     readonly property real popupScreenCap: Math.max(440, root.availableScreenHeight - 96)
     readonly property real popupFitHeight: Math.max(360, Math.min(root.popupScreenCap, root.popupChromeHeight + root.metricsBodyHeight() + 6))
 
-    // The main widget keeps its NORMAL size at all times — opening the token-usage
-    // graph no longer widens it. Instead the graph appears as a SEPARATE floating
-    // window beside the widget (see costPopout below), so the two read as distinct
-    // cards with the desktop showing between them (the macOS reference layout).
+    // The token-usage graph is a SEPARATE floating window beside the widget (see
+    // costPopout below), so the widget keeps its normal size when it opens.
     readonly property bool drawerExpanded: root.costDrawerOpen && root.hasCostSection()
 
     implicitWidth: root.contentWidth
@@ -1349,7 +1344,7 @@ Item {
         height: 1
     }
 
-    // Token-usage graph extracted to CostPopout.qml. `root` carries the helpers /
+    // Token-usage graph (CostPopout.qml). `root` carries the helpers /
     // cost data / costGraphMode state; `anchorItem` is the left-edge flyoutAnchor KWin
     // places the window against (opens leftward, beside the Cost row).
     CostPopout {
@@ -1357,7 +1352,7 @@ Item {
         anchorItem: flyoutAnchor
     }
 
-    // Settings flyout — extracted to SettingsPopout.qml. `root` carries the helper
+    // Settings flyout (SettingsPopout.qml). `root` carries the helper
     // functions / config state / signals; `anchorItem` is the invisible left-edge
     // anchor KWin places the window against (opens leftward, beside the lower body).
     SettingsPopout {

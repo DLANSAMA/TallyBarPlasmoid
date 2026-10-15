@@ -24,7 +24,7 @@ import cli_statusline_capture as cap  # noqa: E402
 def _no_live_rpc(monkeypatch):
     # Unit tests must never reach a live Antigravity language server. Default the RPC source to
     # empty; tests exercising the RPC fold override this with their own fake payload.
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
 # A real statusLine payload (captured live from agy) — the confirmed schema.
 REAL_PAYLOAD = {
@@ -73,7 +73,7 @@ def test_capture_writes_ledger(cli_paths, monkeypatch):
     assert list(data["entries"]) == ["cli:cafe1234-0000-0000-0000-0000000000ce"]
     e = data["entries"]["cli:cafe1234-0000-0000-0000-0000000000ce"]
     assert (e["u"], e["c"], e["o"]) == (12946, 48848, 4798)
-    assert e["model"] == "Gemini 3.5 Flash (High)"  # captured for per-model pricing
+    assert e["model"] == "Gemini 3.5 Flash (High)"
 
 
 def test_normalize_model_name():
@@ -86,7 +86,7 @@ def test_cli_priced_per_model_not_pro_default(cli_paths, monkeypatch, tmp_path):
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ide_ledger.json")
     # A pinned catalog: the resolution order is under test, not today's LiteLLM rates
-    # (this used to read whatever the developer's own pricing cache held). No gpt-oss key,
+    # No gpt-oss key,
     # so that one must come from _EXTRA_MODEL_PRICES. 3.6 Flash is here because the real
     # active pricing always carries its embedded _FALLBACK_PRICING row.
     catalog = {"gemini-3.5-flash": {"input": 1.5, "output": 9.0, "cache_read": 0.15},
@@ -126,8 +126,7 @@ def test_gemini_36_enums_resolve(monkeypatch, tmp_path):
 
 def test_extra_model_prices_never_shadow_an_embedded_fallback_row():
     """_FALLBACK_PRICING rows are always merged into the active pricing, so _prices_for
-    finds them first and an _EXTRA_MODEL_PRICES entry with the same key is never read.
-    Two such tables once billed Gemini 3.6 Flash at two different rates."""
+    finds them first and an _EXTRA_MODEL_PRICES entry with the same key is never read."""
     fallback_keys = {key for key, _ in pricing_data._FALLBACK_PRICING}
     assert not set(costmod._EXTRA_MODEL_PRICES) & fallback_keys
 
@@ -139,13 +138,13 @@ def test_capture_is_idempotent_overwrite(cli_paths, monkeypatch):
     bigger["context_window"]["total_output_tokens"] = 9000
     _run_capture(monkeypatch, bigger)
     data = json.loads(cli_paths.read_text())
-    assert len(data["entries"]) == 1  # same session -> overwritten, not summed
+    assert len(data["entries"]) == 1
     e = data["entries"]["cli:cafe1234-0000-0000-0000-0000000000ce"]
     assert e["u"] == 90000 - 48848 and e["o"] == 9000
 
 
 def test_summary_includes_cli_tokens(cli_paths, monkeypatch, tmp_path):
-    monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())  # no IDE data
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ide_ledger.json")
     _run_capture(monkeypatch, REAL_PAYLOAD)
 
@@ -179,7 +178,7 @@ def test_cache_counted_in_volume_and_billed(monkeypatch, tmp_path):
 
     tok0, cost0 = vol_and_cost(0)
     tok1, cost1 = vol_and_cost(900000)
-    assert tok1 == tok0 + 900000   # cached IS counted in the standard total volume
+    assert tok1 == tok0 + 900000
     assert cost1 > cost0           # and billed (at the cache-read rate)
 
 
@@ -189,7 +188,7 @@ def test_relaxed_gate_shows_cli_when_ide_not_running(cli_paths, monkeypatch, tmp
     _run_capture(monkeypatch, REAL_PAYLOAD)
 
     providers = {"antigravity": {"label": "Antigravity", "status": "not-running", "limits": []}}
-    costmod.apply_local_cost_summaries(providers)
+    costmod.apply_cost_summaries(providers, costmod.compute_local_cost_summaries())
     assert "costSummary" in providers["antigravity"]
 
 
@@ -198,7 +197,6 @@ def test_pb_find_usage_is_model_agnostic():
     blob = bytes([0x08, 0xED, 0x08, 0x10, 0x64, 0x18, 0x32, 0x30, 0x18])
     found = costmod._pb_find_usage(blob)
     assert found and found[0].get(1) == 1133 and found[0].get(2) == 100 and found[0].get(6) == 24
-    # the OLD gate (field1 must == 1016) would have rejected this Flash record
     assert found[0].get(1) != 1016
 
 
@@ -240,10 +238,9 @@ def test_learned_model_name_heals_unmapped_enum_to_real_name(monkeypatch, tmp_pa
         "entries": {"disk-stem:0": {"d": today, "u": 100000, "c": 0, "o": 50000, "me": 1084}},
     }))
 
-    def _fake_rpc_with_learned(timeout, known=None, deadline=None, learned_names=None, **_kw):
-        if learned_names is not None:
-            learned_names["MODEL_PLACEHOLDER_M84"] = "Gemini 4.0 Ultra"
-        return {}, {}  # zero NEW usage this run -- the model was only seen via GetAvailableModels
+    def _fake_rpc_with_learned(timeout, known=None, deadline=None, **_kw):
+        # zero NEW usage this run -- the model was only seen via GetAvailableModels
+        return agmod.RpcHarvest(learned_names={"MODEL_PLACEHOLDER_M84": "Gemini 4.0 Ultra"})
 
     monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", _fake_rpc_with_learned)
 
@@ -257,7 +254,7 @@ def test_learned_model_name_heals_unmapped_enum_to_real_name(monkeypatch, tmp_pa
 
     # Antigravity has since closed -- the RPC returns nothing at all -- but the persisted
     # learned name must still heal the entry, not just during the run it was captured.
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
     summary2 = costmod.antigravity_ledger_cost_summary()
     labels2 = {row["model"] for row in summary2["modelBreakdown"]}
     assert "Gemini 4.0 Ultra" in labels2
@@ -311,8 +308,7 @@ _FLASH_38_COST = (1000 * 0.75 + 200 * 0.075 + 500 * 3.75) / 1e6
 
 def test_learned_enum_bills_at_its_learned_model_not_the_pro_default(monkeypatch, tmp_path):
     """A disk entry carries only the model enum. When that enum is known only from the
-    ledger's learnedModelNames, the breakdown already showed the learned name, but pricing
-    skipped the learned table and billed the gemini-3.1-pro default (about 3x for Flash)."""
+    ledger's learnedModelNames, pricing must use the learned name, not the gemini-3.1-pro default."""
     assert 1999 not in costmod._MODEL_ENUM_NAMES  # this test is about a LEARNED-only enum
     summary = _summary_for_disk_entry(monkeypatch, tmp_path, 1999,
                                       learned={"1999": "Gemini 3.8 Flash (High)"})
@@ -331,7 +327,7 @@ def test_static_enum_table_prices_gemini_3_8_flash_without_learned_names(monkeyp
 
 def test_static_enum_table_names_and_prices_gemini_4_argon(monkeypatch, tmp_path):
     """Offline (no catalog on disk), the embedded row prices Argon at $2 in / $0.10 cache
-    read / $10 out. The row was first added as a copy of Gemini 3.1 Pro's ($0.20 / $12)."""
+    read / $10 out."""
     monkeypatch.setattr(pricing_data, "PRICING_CACHE_PATH", tmp_path / "missing" / "pricing_cache.json")
     for me in (1417, 1418, 1419):
         summary = _summary_for_disk_entry(monkeypatch, tmp_path, me, pinned_catalog=False)
@@ -370,7 +366,7 @@ def test_no_summary_without_tokens(cli_paths, monkeypatch, tmp_path):
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ide_ledger.json")
     providers = {"antigravity": {"label": "Antigravity", "status": "ok", "limits": []}}
-    costmod.apply_local_cost_summaries(providers)
+    costmod.apply_cost_summaries(providers, costmod.compute_local_cost_summaries())
     assert "costSummary" not in providers["antigravity"]  # subscription price NOT shown
 
 
@@ -427,8 +423,7 @@ def test_rpc_local_date():
     assert agmod._rpc_local_date("") == ""
     assert agmod._rpc_local_date("not-a-date") == ""
     # Nanosecond precision + trailing Z must not crash (fromisoformat rejects >6 frac digits);
-    # the result is a real local YYYY-MM-DD within one tz-offset day of the UTC instant
-    # (this is the regression guard for the "always fell back to today" createdAt bug).
+    # the result is a real local YYYY-MM-DD within one tz-offset day of the UTC instant.
     out = agmod._rpc_local_date("2026-05-28T12:00:00.137443809Z")
     assert len(out) == 10 and out.count("-") == 2
     assert out in {"2026-05-27", "2026-05-28", "2026-05-29"}
@@ -460,7 +455,7 @@ def test_output_not_double_counted(monkeypatch, tmp_path):
 
 
 def _fake_rpc(payload):
-    return lambda *a, **k: (payload, {})
+    return lambda *a, **k: agmod.RpcHarvest(payload, {})
 
 
 def test_rpc_usage_folds_with_per_model_pricing(monkeypatch, tmp_path):
@@ -515,12 +510,10 @@ def test_rpc_supersedes_legacy_db_entries(monkeypatch, tmp_path):
 
 
 def test_update_antigravity_token_ledger_pruning(monkeypatch, tmp_path):
-    # Mock conversation dirs so no DB files are scanned
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
     ledger_path = tmp_path / "ide_ledger.json"
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", ledger_path)
 
-    # Save a ledger with some old entries and some recent entries
     current_date = dt.date.today()
     old_date = (current_date - dt.timedelta(days=36)).isoformat()
     recent_date = (current_date - dt.timedelta(days=34)).isoformat()
@@ -534,14 +527,11 @@ def test_update_antigravity_token_ledger_pruning(monkeypatch, tmp_path):
     }
     ledger_path.write_text(json.dumps(ledger_data))
 
-    # Run the ledger update (or ledger_cost_summary which triggers update)
     res = costmod.update_antigravity_token_ledger()
 
-    # Verify old entry is pruned, recent entry is kept
     assert "old:1" not in res["entries"]
     assert "recent:1" in res["entries"]
 
-    # Verify file is updated on disk
     saved_data = json.loads(ledger_path.read_text())
     assert "old:1" not in saved_data["entries"]
     assert "recent:1" in saved_data["entries"]
@@ -576,7 +566,6 @@ def test_update_antigravity_token_ledger_multi_generation_aggregation(monkeypatc
         mock_con.execute.side_effect = mock_execute
         mock_connect.return_value = mock_con
 
-        # Mock ANTIGRAVITY_CONVERSATION_DIRS to have at least one directory with a DB file
         db_dir = tmp_path / "convs"
         db_dir.mkdir()
         (db_dir / "test.db").write_text("")
@@ -584,13 +573,12 @@ def test_update_antigravity_token_ledger_multi_generation_aggregation(monkeypatc
 
         res = costmod.update_antigravity_token_ledger()
 
-        # Verify the sum of the elements in the entries
         entry = res["entries"]["test:1"]
-        assert entry["u"] == 300 # 100 + 200
-        assert entry["c"] == 30 # 10 + 20
-        assert entry["o"] == 150 # 50 + 100
-        assert entry["t"] == 15 # 5 + 10
-        assert entry["x"] == 6 # 2 + 4
+        assert entry["u"] == 300
+        assert entry["c"] == 30
+        assert entry["o"] == 150
+        assert entry["t"] == 15
+        assert entry["x"] == 6
         assert entry["me"] == 1016
         assert entry["n"] == 2  # two distinct records summed -> bills at the base rates
 
@@ -629,10 +617,8 @@ def test_real_temp_db_two_phase_scan_short_circuits(monkeypatch, tmp_path):
     monkeypatch.setattr(cm, "ANTIGRAVITY_CONVERSATION_DIRS", (conv_dir,))
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", ledger)
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
-    # RPC already empty via the autouse fixture; keep it explicit for clarity.
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
-    # Spy on _pb_find_usage WITHOUT replacing its behaviour (first scan still really parses).
     real_pb = cm._pb_find_usage
     calls = {"n": 0}
 
@@ -643,7 +629,7 @@ def test_real_temp_db_two_phase_scan_short_circuits(monkeypatch, tmp_path):
 
     res1 = costmod.update_antigravity_token_ledger()
     assert "mydb:0" in res1["entries"]             # first scan captured the real blob
-    assert calls["n"] == 1                          # parsed exactly once
+    assert calls["n"] == 1
     entry = res1["entries"]["mydb:0"]
     assert (entry["u"], entry["o"], entry["me"]) == (100, 50, 1133)
 
@@ -666,7 +652,7 @@ def test_deadline_break_abandons_scan_early(monkeypatch, tmp_path):
     monkeypatch.setattr(cm, "ANTIGRAVITY_CONVERSATION_DIRS", (conv_dir,))
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", ledger)
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     res = costmod.update_antigravity_token_ledger(deadline=time.time() - 100)
     # The scan never ran (deadline spent at the top of the dir loop) -> nothing captured.
@@ -692,7 +678,7 @@ def test_deadline_break_skips_remaining_db_connects(monkeypatch, tmp_path):
     monkeypatch.setattr(cm, "ANTIGRAVITY_CONVERSATION_DIRS", (conv_dir,))
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     base = 1_000_000.0
     clock = {"t": base}
@@ -711,7 +697,6 @@ def test_deadline_break_skips_remaining_db_connects(monkeypatch, tmp_path):
     monkeypatch.setattr(sqlite3, "connect", spy_connect)
 
     costmod.update_antigravity_token_ledger(deadline=deadline)
-    # Exactly one DB was opened; the per-DB guard skipped the other before connecting it.
     assert len(connected_dbs) == 1
 
 
@@ -724,7 +709,7 @@ def test_hourly_residual_fold(monkeypatch, tmp_path):
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
     ledger = tmp_path / "ledger.json"
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", ledger)
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
     monkeypatch.setattr(costmod, "model_pricing",
                         lambda *a, **k: {"input": 10.0, "output": 10.0, "cache_read": 10.0})
 
@@ -732,9 +717,7 @@ def test_hourly_residual_fold(monkeypatch, tmp_path):
     hnow = dt.datetime.now().astimezone().hour
     hfixed = 3 if hnow != 3 else 4            # a fixed hour distinct from "now"
     ledger.write_text(json.dumps({"trackingStarted": today, "entries": {
-        # h-bearing: tokens = u(1000) + c(0) + o(200) = 1200, stamped to hfixed
         "x#0": {"d": today, "u": 1000, "c": 0, "o": 200, "model": "Gemini 3.5 Flash (High)", "h": hfixed},
-        # hour-LESS: tokens = u(500) + c(0) + o(100) = 600, must land in the current hour
         "x#1": {"d": today, "u": 500, "c": 0, "o": 100, "model": "Gemini 3.5 Flash (High)"},
     }}))
 
@@ -758,13 +741,13 @@ def test_enum_map_heals_fallback_model_retroactively(monkeypatch, tmp_path):
     """An RPC entry captured while its placeholder was UNKNOWN stores the family-fallback
     model string (e.g. gemini-3-pro) plus the raw enum in "me". Once the enum is mapped
     in _MODEL_ENUM_NAMES, the summary re-attributes the entry WITHOUT a re-query — the
-    enum map outranks the stored string (real case: M132 = Gemini 3.5 Flash, 2026-06-09)."""
+    enum map outranks the stored string."""
     from providers import cost as cm
     monkeypatch.setattr(cm, "ANTIGRAVITY_CONVERSATION_DIRS", ())
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
     ledger = tmp_path / "ledger.json"
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", ledger)
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     today = dt.date.today().isoformat()
     ledger.write_text(json.dumps({"trackingStarted": today, "entries": {
@@ -818,7 +801,7 @@ def test_legacy_model_strings_migrated_on_update(monkeypatch, tmp_path):
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
     ledger = tmp_path / "ledger.json"
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", ledger)
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     today = dt.date.today().isoformat()
     ledger.write_text(json.dumps({"trackingStarted": today, "entries": {
@@ -837,8 +820,7 @@ def test_legacy_model_strings_migrated_on_update(monkeypatch, tmp_path):
 
 def test_pb_find_usage_accepts_both_markers_rejects_missing_input(monkeypatch):
     """The disk gate accepts BOTH usage markers — field6==24 (pre-2.0) and field6==26 (the
-    Antigravity-2.0 marker flip) — provided token field 2 is present. Gating on 24 alone silently
-    dropped every 2.0-format generation (measured ~45-80% of IDE usage). A field6==24 record MISSING
+    Antigravity-2.0 marker flip) — provided token field 2 is present. A field6==24 record MISSING
     token field 2 is still rejected so non-usage submessages don't slip into the ledger as garbage."""
     # field1=1133, field2=100, field3=50, field6=24 (pre-2.0 marker) -> accepted.
     found_v1 = costmod._pb_find_usage(_USAGE_BLOB_F6_24)
@@ -1059,7 +1041,7 @@ def test_heal_never_downgrades_stored_name_when_lookup_fails(monkeypatch, tmp_pa
                 "date": today, "hour": None}
 
     monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage",
-                        lambda *a, **k: ({cid: [rec("0"), rec("1")]}, {cid: "lmt"}))
+                        lambda *a, **k: agmod.RpcHarvest({cid: [rec("0"), rec("1")]}, {cid: "lmt"}))
     res = costmod.update_antigravity_token_ledger()
     assert res["entries"][f"{cid}#0"]["model"] == "Gemini 4 Ultra (High)"  # preserved
     assert res["entries"][f"{cid}#1"]["model"] == "gemini-3.1-pro"         # filled
@@ -1097,10 +1079,6 @@ def test_ledger_family_resolution_is_memoized(monkeypatch, tmp_path):
     assert len(calls) == 3
     assert len(set(calls)) == 3
 
-
-# ---------------------------------------------------------------------------
-# gen_metadata protobuf encoder + embedded-timestamp disk scan (main-tree unique)
-# ---------------------------------------------------------------------------
 
 def _pb_varint(n: int) -> bytes:
     out = bytearray()
@@ -1184,7 +1162,7 @@ def test_disk_scan_dates_by_embedded_timestamp_not_today(monkeypatch, tmp_path):
     monkeypatch.setattr(cm, "ANTIGRAVITY_CONVERSATION_DIRS", (conv_dir,))
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     res = costmod.update_antigravity_token_ledger()
     key = "mydb@0.0"
@@ -1206,7 +1184,7 @@ def test_disk_scan_counts_generation_once_not_doubled(monkeypatch, tmp_path):
     monkeypatch.setattr(cm, "ANTIGRAVITY_CONVERSATION_DIRS", (conv_dir,))
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     res = costmod.update_antigravity_token_ledger()
     conv_keys = [k for k in res["entries"] if k.startswith("c@")]
@@ -1235,7 +1213,7 @@ def test_disk_scan_rescans_changed_db_skips_unchanged(monkeypatch, tmp_path):
     ledger = tmp_path / "ledger.json"
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", ledger)
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     real_pb = cm._pb_generations
     calls = {"n": 0}
@@ -1289,7 +1267,7 @@ def test_disk_dating_migration_resets_db_scanned(monkeypatch, tmp_path):
     monkeypatch.setattr(cm, "ANTIGRAVITY_CONVERSATION_DIRS", (conv_dir,))
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", ledger)
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     res = costmod.update_antigravity_token_ledger()
     assert res["diskDatingVersion"] == cm.ANTIGRAVITY_DISK_DATING_VERSION
@@ -1315,7 +1293,7 @@ def test_pb_generations_captures_2_0_marker_26(tmp_path, monkeypatch):
     monkeypatch.setattr(cm, "ANTIGRAVITY_CONVERSATION_DIRS", (conv_dir,))
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
     res = costmod.update_antigravity_token_ledger()
     folded = {k: v for k, v in res["entries"].items() if k.startswith("conv26@")}
     assert len(folded) == 2
@@ -1325,14 +1303,12 @@ def test_pb_generations_captures_2_0_marker_26(tmp_path, monkeypatch):
 
 def test_antigravity_summary_burn_rate_uses_unbiased_denominator(tmp_path, monkeypatch):
     """antigravity_ledger_cost_summary must use the same trailing_week_days()
-    denominator as token_summary — not the old hard-coded 7.0."""
+    denominator as token_summary — not a hard-coded 7.0."""
     import accounting
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
     ledger = tmp_path / "ledger.json"
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", ledger)
-    # Write 7 daily entries with $7/day so week_cost == 49 — same fixture as the
-    # token_summary burn-rate test.
     today = dt.date.today()
     entries = {}
     for i in range(7):
@@ -1341,8 +1317,6 @@ def test_antigravity_summary_burn_rate_uses_unbiased_denominator(tmp_path, monke
     monkeypatch.setattr(costmod, "model_pricing",
                         lambda *a, **k: {"input": 0.0, "output": 0.0, "cache_read": 0.0})
 
-    # Build a ledger where each day has $7 of precomputed cost rather than raw tokens
-    # (easier: patch trailing_week_days and verify it is consulted).
     called_with = []
 
     def fake_twd(now=None):
@@ -1353,9 +1327,7 @@ def test_antigravity_summary_burn_rate_uses_unbiased_denominator(tmp_path, monke
     monkeypatch.setattr(costmod, "trailing_week_days", fake_twd)
     ledger.write_text(json.dumps({"trackingStarted": today.isoformat(), "entries": entries}))
     s = costmod.antigravity_ledger_cost_summary()
-    # The function must have called trailing_week_days (not a hard-coded 7.0).
     assert called_with, "trailing_week_days was never called — cost.py still uses hard-coded 7.0"
-    # The reported burn rate must match week_cost / trailing_week_days().
     expected_denom = accounting.trailing_week_days()
     week_cost = s["cost7d"]
     assert s["burnRatePerDay"] == pytest.approx(week_cost / expected_denom, rel=1e-3)
@@ -1388,8 +1360,7 @@ def _cost_summary(tmp_path, monkeypatch, pricing=None) -> dict:
 
 def test_cache_read_billed_per_call_steps_entries(tmp_path, monkeypatch):
     """Every ':' steps entry is one API call that pays for the cache it re-reads, so a
-    conversation's cache volume is the SUM over its calls — not its peak. (Collapsing to
-    the peak once understated the agy CLI's 30-day cost by ~a third on a real ledger.)"""
+    conversation's cache volume is the SUM over its calls — not its peak."""
     today = dt.date.today().isoformat()
     entries = {
         "conv:0": {"d": today, "me": 1016, "u": 500, "c": 10_000, "o": 100},
@@ -1433,8 +1404,7 @@ def test_cache_read_single_step_unchanged(tmp_path, monkeypatch):
 
 
 def test_cache_read_cli_sessions_each_counted(tmp_path, monkeypatch):
-    """CLI statusLine entries ('cli:<sessionId>') are separate sessions — both count in full.
-    (Regression: a stem split on ':' once collapsed every 'cli:' session into one.)"""
+    """CLI statusLine entries ('cli:<sessionId>') are separate sessions — both count in full."""
     today = dt.date.today().isoformat()
     entries = {
         "cli:session-aaa": {"d": today, "model": "Gemini 3.5 Flash (High)", "u": 100, "c": 5_000, "o": 50},
@@ -1458,12 +1428,7 @@ def test_cache_read_breakdown_line_reports_full_cache(tmp_path, monkeypatch):
     assert "Cached 1M" in s["breakdown"], s["breakdown"]
 
 
-# ---------------------------------------------------------------------------
-# Task 3: Enum mappings for 330 and 1050
-# ---------------------------------------------------------------------------
-
 def test_enum_330_is_mapped():
-    """Enum 330 must map to a flash-lite-tier display name (not fall through to Unknown)."""
     name = costmod._MODEL_ENUM_NAMES.get(330)
     assert name is not None, "Enum 330 is unmapped — must resolve to a flash-lite tier display name"
     assert "flash" in name.lower() or "lite" in name.lower(), (
@@ -1472,14 +1437,12 @@ def test_enum_330_is_mapped():
 
 
 def test_enum_1050_is_mapped():
-    """Enum 1050 must map to a flash-lite-tier display name."""
     name = costmod._MODEL_ENUM_NAMES.get(1050)
     assert name is not None, "Enum 1050 is unmapped"
     assert "flash" in name.lower() or "lite" in name.lower()
 
 
 def test_enum_330_resolve_model_display():
-    """_resolve_model_display must return the enum-330 display name, not 'Unknown'."""
     entry = {"me": 330, "u": 100, "c": 0, "o": 50}
     name = costmod._resolve_model_display(entry)
     assert name != "Unknown", "330 fell through to Unknown; should resolve to flash-lite name"
@@ -1487,7 +1450,6 @@ def test_enum_330_resolve_model_display():
 
 
 def test_enum_330_in_model_family_gemini_group():
-    """Enum 330 should resolve to the Gemini family (for breakdown grouping)."""
     entry = {"me": 330, "u": 100, "c": 0, "o": 50}
     name = costmod._resolve_model_display(entry)
     family = costmod._model_family(name)
@@ -1495,10 +1457,6 @@ def test_enum_330_in_model_family_gemini_group():
         f"Expected Gemini family for enum 330, got '{family}'"
     )
 
-
-# ---------------------------------------------------------------------------
-# Task 2: Marker-26 ingestion + dedup (focused tests, supplements test_genmetadata_scan.py)
-# ---------------------------------------------------------------------------
 
 def test_marker26_and_marker24_steps_disjoint_keys(tmp_path, monkeypatch):
     """Marker-26 entries from gen_metadata and marker-24 entries from steps.metadata
@@ -1545,7 +1503,7 @@ def test_marker26_and_marker24_steps_disjoint_keys(tmp_path, monkeypatch):
     monkeypatch.setattr(cm, "ANTIGRAVITY_CONVERSATION_DIRS", (conv,))
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
     res = cm.update_antigravity_token_ledger()
     entries = res["entries"]

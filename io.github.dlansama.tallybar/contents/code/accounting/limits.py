@@ -1,4 +1,3 @@
-"""Rate-limit, quota-lane, and plan/tier formatting helpers."""
 from __future__ import annotations
 
 import datetime as dt

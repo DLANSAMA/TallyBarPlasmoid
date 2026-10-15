@@ -84,11 +84,7 @@ def test_decrypt_chromium_value_v10_cbc_real_roundtrip(evp):
 
 @pytest.mark.skipif(_OPENSSL is None, reason="openssl CLI not available")
 def test_decrypt_chromium_value_wrong_password_returns_none(evp):
-    # A real v10 CBC ciphertext, but every candidate key is wrong: the CBC attempt's
-    # padding/decode fails (caught by the inner `except Exception: pass`), the GCM
-    # fallback (body is long enough to attempt) also fails on both sha1/sha256 key
-    # derivations, and the function falls through every candidate to return None --
-    # exactly the "real key isn't available" fallback path.
+    # A real v10 CBC ciphertext, but every candidate key is wrong, so the result is None.
     encrypted = _encrypt_v10_cbc(b"the-real-password", b"a-fairly-long-secret-cookie-value-here")
     passwords = {"chrome": [b"totally-wrong-password"], "generic": [b"another-wrong-one"]}
 

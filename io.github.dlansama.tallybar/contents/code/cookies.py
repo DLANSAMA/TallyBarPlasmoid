@@ -150,11 +150,11 @@ def _sweep_stale_cookie_dirs() -> None:
                     continue
                 target = os.path.join(base, name)
                 try:
-                    st = os.lstat(target)  # never follow symlinks
+                    st = os.lstat(target)
                 except OSError:
                     continue
                 if not stat.S_ISDIR(st.st_mode):
-                    continue  # skips symlinks and regular files
+                    continue
                 if st.st_uid != os.getuid():
                     continue
                 if st.st_mtime >= cutoff:
@@ -286,18 +286,18 @@ def decrypt_chromium_value(
 
 def _query_sqlite_with_wal_retry(
     tmp: Path,
-    query_fn: Callable[[sqlite3.Connection], list[BrowserCookie]],
-) -> list[BrowserCookie]:
+    query_fn: Callable[[sqlite3.Connection], tuple[list[BrowserCookie], dict[str, int]]],
+) -> tuple[list[BrowserCookie], dict[str, int]]:
     """Open `tmp` read-only and run `query_fn` against it. A torn/corrupted copy of
     an actively-written -wal or -shm sidecar can raise sqlite3.DatabaseError not just
     at connect() time but also once a pragma/execute/fetchall actually walks the
     corrupted page — so this wraps the WHOLE query, not just the connect(). On
     DatabaseError from anywhere in query_fn, strip the sidecars and retry once
     against just the main file (the same fallback previously reachable only from a
-    connect()-time failure). query_fn must return a fresh list each call (no
-    caller-visible partial state to roll back)."""
+    connect()-time failure). query_fn returns its cookies with the row counters
+    of that attempt, so a discarded attempt leaves nothing behind."""
 
-    def _attempt() -> list[BrowserCookie]:
+    def _attempt() -> tuple[list[BrowserCookie], dict[str, int]]:
         con = sqlite3.connect(f"file:{urllib.parse.quote(str(tmp))}?mode=ro", uri=True, timeout=1.0)
         try:
             con.row_factory = sqlite3.Row
@@ -347,13 +347,8 @@ def read_chromium_cookies(
             stats["errors"] = 1
             return cookies, stats
 
-        def _query(con: sqlite3.Connection) -> list[BrowserCookie]:
-            # Fresh per attempt: on a wal/shm-strip retry the whole query re-runs, so
-            # the counters below must not double-count a discarded partial attempt.
-            stats["rows"] = 0
-            stats["matched"] = 0
-            stats["decrypted"] = 0
-            stats["errors"] = 0
+        def _query(con: sqlite3.Connection) -> tuple[list[BrowserCookie], dict[str, int]]:
+            counts = {"rows": 0, "matched": 0, "decrypted": 0, "errors": 0}
             found: list[BrowserCookie] = []
             columns = {row["name"] for row in con.execute("pragma table_info(cookies)")}
             value_col = "value" if "value" in columns else "'' as value"
@@ -368,20 +363,20 @@ def read_chromium_cookies(
                 """
             )
             for row in rows:
-                stats["rows"] += 1
+                counts["rows"] += 1
                 host = str(row["host_key"] or "")
                 if domain_filter and not host_matches_any(host, domain_filter):
                     continue
-                stats["matched"] += 1
+                counts["matched"] += 1
                 value = str(row["value"] or "")
                 encrypted = bytes(row["encrypted_value"] or b"")
                 if not value and encrypted:
                     decrypted = decrypt_chromium_value(crypto, host, encrypted, store.family, passwords)
                     if decrypted is None:
-                        stats["errors"] += 1
+                        counts["errors"] += 1
                         continue
                     value = decrypted
-                    stats["decrypted"] += 1
+                    counts["decrypted"] += 1
                 if not value:
                     continue
                 found.append(
@@ -398,10 +393,11 @@ def read_chromium_cookies(
                         last_used_unix=_chromium_time_unix(row["last_access_utc"]),
                     )
                 )
-            return found
+            return found, counts
 
         try:
-            cookies = _query_sqlite_with_wal_retry(tmp, _query)
+            cookies, counts = _query_sqlite_with_wal_retry(tmp, _query)
+            stats.update(counts)
         except Exception:
             stats["errors"] += 1
     return cookies, stats
@@ -423,21 +419,17 @@ def read_firefox_cookies(path: Path, domain_filter: tuple[str, ...]) -> tuple[li
             stats["errors"] = 1
             return cookies, stats
 
-        def _query(con: sqlite3.Connection) -> list[BrowserCookie]:
-            # Fresh per attempt: on a wal/shm-strip retry the whole query re-runs, so
-            # the counters below must not double-count a discarded partial attempt.
-            stats["rows"] = 0
-            stats["matched"] = 0
-            stats["errors"] = 0
+        def _query(con: sqlite3.Connection) -> tuple[list[BrowserCookie], dict[str, int]]:
+            counts = {"rows": 0, "matched": 0, "errors": 0}
             found: list[BrowserCookie] = []
             columns = {r["name"] for r in con.execute("pragma table_info(moz_cookies)")}
             access_col = "lastAccessed" if "lastAccessed" in columns else "0 as lastAccessed"
             for row in con.execute(f"select host, name, path, value, isSecure, expiry, {access_col} from moz_cookies"):
-                stats["rows"] += 1
+                counts["rows"] += 1
                 host = str(row["host"] or "")
                 if domain_filter and not host_matches_any(host, domain_filter):
                     continue
-                stats["matched"] += 1
+                counts["matched"] += 1
                 value = str(row["value"] or "")
                 if value:
                     found.append(
@@ -454,10 +446,11 @@ def read_firefox_cookies(path: Path, domain_filter: tuple[str, ...]) -> tuple[li
                             last_used_unix=_unix_time_any_unit(row["lastAccessed"]),
                         )
                     )
-            return found
+            return found, counts
 
         try:
-            cookies = _query_sqlite_with_wal_retry(tmp, _query)
+            cookies, counts = _query_sqlite_with_wal_retry(tmp, _query)
+            stats.update(counts)
         except Exception:
             stats["errors"] += 1
     return cookies, stats
@@ -477,13 +470,9 @@ def select_session_cookies(cookies: list[BrowserCookie], domains: tuple[str, ...
     """The cookies to authenticate ``domains`` with: unexpired, and all from ONE browser
     profile — the one used most recently for these domains.
 
-    A login session lives in one profile. Merging every profile into one jar made the
-    LAST store read win each (domain, path, name) collision — Firefox, read last — so a
-    profile abandoned months ago (observed: last used 4 months before the live Chrome one)
-    could shadow the live session, or splice two Google accounts' SID/HSID cookies into one
-    request; and expired cookies were sent anyway. Profile choice = the latest
-    ``last_used_unix`` among its matching cookies; ties (or stores without access times)
-    fall back to the most cookies, then discovery order."""
+    A login session lives in one profile, so profiles are never merged. Profile choice =
+    the latest ``last_used_unix`` among its matching cookies; ties (or stores without
+    access times) fall back to the most cookies, then discovery order."""
     current = time.time() if now is None else now
     stores: dict[tuple[str, str], list[BrowserCookie]] = {}
     for item in cookies:
@@ -538,10 +527,8 @@ def cookiejar_for_domains(cookies: list[BrowserCookie], domains: tuple[str, ...]
 
 
 def _open_kwallet_and_collect_passwords(background: bool) -> tuple[dict[str, list[bytes]], dict[str, Any]]:
-    # Synchronous D-Bus work (connect/open/list/read/close), meant to run off the event-loop
-    # thread — see the call site in collect_browser_sessions for why. diagnostics() is built here,
-    # before the `with` block closes the wallet: its `available` field reads the live handle, so
-    # building it after close() would wrongly report `available: false` on an otherwise-successful run.
+    # diagnostics() is built before the `with` closes the wallet: its `available` field
+    # reads the live handle, so after close() it would report false on a successful run.
     with KWalletClient(background=background) as kwallet:
         passwords = kwallet.safe_storage_passwords()
         return passwords, kwallet.diagnostics(passwords)
@@ -549,7 +536,7 @@ def _open_kwallet_and_collect_passwords(background: bool) -> tuple[dict[str, lis
 
 async def collect_browser_sessions(timeout: float, background: bool = False) -> tuple[list[BrowserCookie], dict[str, Any]]:
     import asyncio
-    from io_helpers import to_daemon_thread  # daemon worker: a stuck cookie read can't gate exit
+    from io_helpers import to_daemon_thread
     home = Path.home()
     domain_filter = (
         "claude.ai",
@@ -562,14 +549,9 @@ async def collect_browser_sessions(timeout: float, background: bool = False) -> 
         "accounts.google.com",
         "generativelanguage.googleapis.com",
     )
-    # KWalletClient's connect/open/list-entries/read-password/close calls are synchronous
-    # Gio D-Bus round-trips (call_sync). Run the whole sequence on a daemon thread like every
-    # other blocking fetch in this module — otherwise a wedged/slow kwalletd parks the event-loop
-    # thread itself, and the outer asyncio.wait_for(timeout) can't fire until that call returns,
-    # stalling the snapshot past its budget. The wallet is closed inside the thread (end of the
-    # `with` in _open_kwallet_and_collect_passwords) right after passwords are extracted, before
-    # the cookie-file reads below even start; `diagnostics()` only reads cached attributes, so it's
-    # safe to call from the event loop afterward.
+    # KWalletClient's calls are synchronous Gio D-Bus round-trips: run them on a daemon
+    # thread, or a wedged kwalletd parks the event loop and asyncio.wait_for can't fire.
+    # The wallet is closed inside the thread; `diagnostics()` only reads cached attributes.
     passwords, kwallet_diagnostics = await to_daemon_thread(_open_kwallet_and_collect_passwords, background)
     crypto_evp = OpenSslEvp()
     cookies: list[BrowserCookie] = []
@@ -585,10 +567,8 @@ async def collect_browser_sessions(timeout: float, background: bool = False) -> 
     ]
 
     if chromium_tasks or firefox_tasks:
-        # Honor the caller-supplied timeout as an internal bound (build_snapshot
-        # also wraps this call, but a truthful signature should enforce its own
-        # deadline). On timeout this raises, which the orchestrator turns into an
-        # empty cookie jar + "timeout" browser diagnostic.
+        # On timeout this raises, which the orchestrator turns into an empty cookie
+        # jar + "timeout" browser diagnostic.
         results = await asyncio.wait_for(
             asyncio.gather(*chromium_tasks, *firefox_tasks), timeout
         )

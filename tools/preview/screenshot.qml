@@ -57,9 +57,6 @@ import QtQuick.Window
 Window {
     id: shot
 
-    // ---------------------------------------------------------------------
-    // Arguments
-    // ---------------------------------------------------------------------
     function argValue(key, fallback) {
         const args = Qt.application.arguments;
         for (let i = 1; i < args.length; ++i) {
@@ -332,11 +329,9 @@ Window {
     // the time it was grabbed so the GIF can replay at real speed however slow a grab was.
     // ---------------------------------------------------------------------
     readonly property int demoFrameMs: 50
-    readonly property string demoCanvas: "#141416"
     property var demo: null
 
     Timer {
-        // One settle pass (fonts, Repeaters, the bars' grow-in springs) before the walk.
         interval: 1500
         running: shot.walk.length > 0
         repeat: false
@@ -500,11 +495,11 @@ Window {
             card, "demoPointer");
         // GIF frames must be opaque: ffmpeg's GIF encoder only stores the changed pixels of
         // frames without transparency, and the card's rounded corners are transparent. Same
-        // colour as the padding demo_gif.py adds when the card is shorter than the tallest frame.
+        // colour (cursors.json's canvas) as the padding demo_gif.py adds when the card is shorter
+        // than the tallest frame.
         if (shot.demoDir.length > 0)
             Qt.createQmlObject('import QtQuick; Rectangle { anchors.fill: parent; z: -2000; color: "'
-                               + shot.demoCanvas + '" }', card, "demoCanvas");
-        // QtTest is only needed here, so a plain render never depends on it.
+                               + spec.canvas + '" }', card, "demoCanvas");
         const events = Qt.createQmlObject("import QtTest; TestEvent {}", shot, "demoEvents");
         shot.demo = { card: card, overlay: overlay, events: events, steps: demoSteps(card),
                       i: 0, stepAt: 0, pos: Qt.point(0, 0), clickAt: -1e9, start: Date.now(), frame: 0,

@@ -1,7 +1,6 @@
 // Pure UI formatting and URL helper functions for TallyBar.
 //
 // Imported by FullRepresentation.qml (`import "lib/ui_helpers.js" as UIHelpers`).
-// All functions are pure deterministic helpers that do not require QML root state.
 
 function tabLabel(provider) {
     if (provider === "gemini") return "Gemini";
@@ -187,10 +186,7 @@ function compactUsd(value) {
 // Parse a user-typed amount under the given locale's separators (Qt.locale().decimalPoint /
 // .groupSeparator), returning NaN when it isn't a plain non-negative number.
 //
-// The budget field used `parseFloat(text.replace(/,/g, ""))`: in a decimal-comma locale
-// (de_DE, fr_FR, …) the DoubleValidator accepts "12,50", and stripping every comma turned
-// it into 1250 — a 100x budget. Group separators are removed, the locale's decimal point
-// becomes ".", and a C-style "12.50" typed in a comma locale is still read as 12.5 (a lone
+// Group separators are removed, the locale's decimal point becomes ".", and a C-style "12.50" typed in a comma locale is still read as 12.5 (a lone
 // group separator followed by 1-2 digits can only be a decimal point).
 function parseLocaleAmount(text, decimalPoint, groupSeparator) {
     let t = String(text || "").replace(/[\s\u00a0\u202f]/g, "");

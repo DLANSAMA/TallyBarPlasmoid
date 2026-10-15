@@ -1,4 +1,3 @@
-"""HTTP helper functions: JSON/text fetching, async wrappers, and provider timeout guards."""
 from __future__ import annotations
 
 import asyncio
@@ -40,14 +39,14 @@ def scrub_credentials(text: str) -> str:
         return text
     text = re.sub(r"Bearer\s+[a-zA-Z0-9_\-\.]+", "Bearer [REDACTED]", text)
     text = re.sub(r"sk-[a-zA-Z0-9_\-]+", "sk-[REDACTED]", text)
-    text = re.sub(r"ya29\.[a-zA-Z0-9_\-]+", "ya29.[REDACTED]", text)        # Google OAuth access token
-    text = re.sub(r"GOCSPX-[a-zA-Z0-9_\-]+", "GOCSPX-[REDACTED]", text)     # Google OAuth client secret
-    text = re.sub(r"1//[a-zA-Z0-9_\-]{20,}", "1//[REDACTED]", text)         # Google OAuth refresh token
-    text = re.sub(r"AIza[0-9A-Za-z_\-]{35}", "AIza[REDACTED]", text)        # Google API key literal
-    text = re.sub(r"sessionKey=[^&\s\"']+", "sessionKey=[REDACTED]", text)  # Claude browser session cookie
-    text = re.sub(r"csrf_token[\"']?\s*[=:]\s*[\"']?[^&\s\"']+", "csrf_token=[REDACTED]", text)  # Antigravity CSRF token
-    text = re.sub(r"\b(access_token|refresh_token)=[^&\s\"']+", r"\1=[REDACTED]", text)    # OAuth body k/v
-    text = re.sub(r"\b(at|f\.sid|sid)=[^&\s\"']+", r"\1=[REDACTED]", text)  # batchexecute session tokens
+    text = re.sub(r"ya29\.[a-zA-Z0-9_\-]+", "ya29.[REDACTED]", text)
+    text = re.sub(r"GOCSPX-[a-zA-Z0-9_\-]+", "GOCSPX-[REDACTED]", text)
+    text = re.sub(r"1//[a-zA-Z0-9_\-]{20,}", "1//[REDACTED]", text)
+    text = re.sub(r"AIza[0-9A-Za-z_\-]{35}", "AIza[REDACTED]", text)
+    text = re.sub(r"sessionKey=[^&\s\"']+", "sessionKey=[REDACTED]", text)
+    text = re.sub(r"csrf_token[\"']?\s*[=:]\s*[\"']?[^&\s\"']+", "csrf_token=[REDACTED]", text)
+    text = re.sub(r"\b(access_token|refresh_token)=[^&\s\"']+", r"\1=[REDACTED]", text)
+    text = re.sub(r"\b(at|f\.sid|sid)=[^&\s\"']+", r"\1=[REDACTED]", text)
     # Google browser session cookies (SID/HSID/APISID/SAPISID/OSID + __Secure- variants).
     # '_' is a word char, so __Secure- has no leading \b; anchor on start-or-non-word instead.
     text = re.sub(r"(?i)(?<![\w-])__secure-[0-9]?p?(?:sid|apisid)\w*=[^&\s\"';]+",

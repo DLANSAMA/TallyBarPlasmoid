@@ -1,7 +1,5 @@
-"""Model pricing and usage cost calculation."""
 from __future__ import annotations
 
-import sys
 from typing import Any, NamedTuple
 
 from pricing_data import get_pricing as _get_pricing
@@ -25,14 +23,6 @@ def model_pricing(model: str | None) -> dict[str, float]:
     return _get_pricing(model)
 
 
-def _get_pricing_fn():
-    """Support test patching on accounting.model_pricing transparently."""
-    acct = sys.modules.get("accounting")
-    if acct is not None and hasattr(acct, "model_pricing"):
-        return acct.model_pricing
-    return model_pricing
-
-
 def _provider_family_for_model(model: str | None) -> str | None:
     """Infer the provider family (claude/codex/gemini/grok) from a model-name string,
     so an unrecognised-but-non-empty model can fall back to its family's default
@@ -45,7 +35,7 @@ def _provider_family_for_model(model: str | None) -> str | None:
     if "gemini" in m:
         return "gemini"
     if any(t in m for t in ("gpt", "codex", "openai", "davinci")) or \
-            (len(m) >= 2 and m[0] == "o" and m[1].isdigit()):  # o3 / o4-mini / o1
+            (len(m) >= 2 and m[0] == "o" and m[1].isdigit()):
         return "codex"
     if any(t in m for t in ("grok", "xai")):
         return "grok"
@@ -53,17 +43,16 @@ def _provider_family_for_model(model: str | None) -> str | None:
 
 
 def _family_default_pricing(model: str | None) -> dict[str, float]:
-    """Pricing for the family-default model of `model`'s inferred provider, or {}."""
     family = _provider_family_for_model(model)
     if family is None:
         return {}
-    return _get_pricing_fn()(DEFAULT_MODEL_FOR_PROVIDER[family])
+    return model_pricing(DEFAULT_MODEL_FOR_PROVIDER[family])
 
 
 def has_catalog_price(model: str | None) -> bool:
     """True when ``model`` resolves to a price of its own (live catalog or embedded
     fallback). False means usage_cost_usd bills it at its family's default rate instead."""
-    return bool(_get_pricing_fn()(model))
+    return bool(model_pricing(model))
 
 
 def prompt_tier_prices(prices: dict[str, float], prompt_tokens: float) -> dict[str, float]:
@@ -100,14 +89,13 @@ USAGE_TYPES = ("input", "output", "cacheRead", "cacheWrite")
 
 class UsageSplit(NamedTuple):
     """One request's usage, whole and by type (USAGE_TYPES order)."""
-    tokens: int                                   # usage_token_total
-    cost: float                                   # usage_cost_usd
+    tokens: int
+    cost: float
     type_tokens: tuple[int, int, int, int]
     type_costs: tuple[float, float, float, float]
 
 
 def _usage_int(usage: dict[str, Any], *keys: str) -> int:
-    """The first of ``keys`` holding a positive number, as an int; else 0."""
     for k in keys:
         v = usage.get(k)
         if isinstance(v, (int, float)) and v > 0:
@@ -127,16 +115,15 @@ def _usage_counts(usage: dict[str, Any]) -> dict[str, int]:
                                      "cachedContentTokenCount", "cached")
     thoughts_separate = _usage_int(usage, "thoughtsTokenCount", "thoughts")
 
-    # Token counts take cache writes from the top-level field only; the nested fallback
-    # below is billed but never counted. That is how the token and cost readers have always
-    # split it, and the parse caches' keep/drop filter (usage_token_total > 0) depends on it.
+    # Counted from the top-level field only: the nested fallback below is billed, not counted
+    # (the parse caches' usage_token_total > 0 filter depends on it).
+    # → tests/test_type_breakdown.py::test_nested_cache_writes_bill_but_do_not_count_as_tokens
     cache_create_tokens = cache_create
     cache_create_1h = 0
     cc_detail = usage.get("cache_creation")
     if isinstance(cc_detail, dict):
         eph_1h = _usage_int(cc_detail, "ephemeral_1h_input_tokens")
         if cache_create == 0:
-            # Defensive: a record carrying ONLY the nested breakdown still has its writes.
             cache_create = eph_1h + _usage_int(cc_detail, "ephemeral_5m_input_tokens")
         cache_create_1h = min(eph_1h, cache_create)
 
@@ -157,11 +144,8 @@ def _cost_terms(n: dict[str, int], model: str | None) -> list[tuple[int, float]]
     """``(USAGE_TYPES index, cost x 1e6)`` per billed lane of one request, in the order
     usage_cost_usd has always summed them (so its total stays bit-identical). Empty when
     the model has no price."""
-    prices = _get_pricing_fn()(model)
+    prices = model_pricing(model)
     if not prices and model:
-        # A non-empty model the catalog doesn't know (a brand-new model that shipped
-        # before LiteLLM catalogued it) would otherwise bill $0 while tokens still
-        # count. Fall back to its provider family's default pricing instead.
         prices = _family_default_pricing(model)
     if not prices:
         return []
@@ -250,16 +234,10 @@ def usage_split(usage: Any, model: str | None) -> UsageSplit:
     )
 
 
-# Every usage key the readers actually look at: _usage_counts (behind usage_cost_usd,
-# usage_split and usage_token_breakdown) and _explicit_total. Anything else in a provider's usage dict is
-# metadata the math never touches (Anthropic ships service_tier, inference_geo,
-# server_tool_use, iterations, speed and output_tokens_details on EVERY assistant message;
-# OpenAI ships reasoning_output_tokens, which is deliberately not added — it is already
-# inside output_tokens).
-#
-# This set lives here, beside its consumers, so that adding a key to usage_cost_usd without
-# adding it here is a one-file mistake rather than a silent cross-module drift. The
-# round-trip is pinned by tests/test_accounting.py::test_slim_usage_*.
+# Every usage key the readers look at (_usage_counts, _explicit_total); the rest of a usage
+# dict is metadata the math skips (OpenAI's reasoning_output_tokens is already inside
+# output_tokens). Kept beside its consumers.
+# → tests/test_accounting.py::test_slim_usage_covers_every_key_the_readers_consume
 _USAGE_SCALAR_FIELDS = frozenset({
     "input_tokens", "inputTokens", "promptTokenCount", "input",
     "output_tokens", "outputTokens", "candidatesTokenCount", "output",
@@ -306,7 +284,6 @@ def slim_usage(usage: Any) -> Any:
 
 
 def _explicit_total(usage: Any) -> int | None:
-    """The record's own total-token field, if it carries a positive one."""
     if not isinstance(usage, dict):
         return None
     for key in ("total_tokens", "totalTokens", "totalTokenCount", "total"):
@@ -320,7 +297,6 @@ def usage_token_total(usage: Any) -> int:
     total = _explicit_total(usage)
     if total is not None:
         return total
-    # fallback: reconstruct total using breakdown elements
     in_val, out_val, cached_val = usage_token_breakdown(usage)
     return in_val + out_val + cached_val
 

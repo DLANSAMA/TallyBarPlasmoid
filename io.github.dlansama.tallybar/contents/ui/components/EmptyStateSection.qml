@@ -19,8 +19,6 @@ ColumnLayout {
     Text {
         id: emptyStateText
 
-        // When the bad state carries an actionUrl, the message reads as a
-        // link (accent colour + underline) and clicking it opens the sign-in page.
         readonly property string actionUrl: root.providerActionUrl()
         readonly property bool isLink: actionUrl.length > 0
 
@@ -95,7 +93,6 @@ ColumnLayout {
             }
         }
 
-        // Visible keyboard-focus indicator, invisible unless unlockMouse has focus.
         Rectangle {
             anchors.fill: parent
             radius: unlockButton.radius
@@ -106,10 +103,7 @@ ColumnLayout {
         }
     }
 
-    // Sign-in button: for missing-cookies / unauthorized, opens the
-    // provider's login site in the browser so the user can land a fresh session
-    // cookie, then refresh. Styled/positioned like the unlock button; the two are
-    // mutually exclusive by status (never both visible).
+    // Sign-in button (missing-cookies / unauthorized); mutually exclusive with the unlock button.
     Rectangle {
         id: signInButton
         Layout.alignment: Qt.AlignHCenter
@@ -155,7 +149,6 @@ ColumnLayout {
             }
         }
 
-        // Visible keyboard-focus indicator, invisible unless signInMouse has focus.
         Rectangle {
             anchors.fill: parent
             radius: signInButton.radius

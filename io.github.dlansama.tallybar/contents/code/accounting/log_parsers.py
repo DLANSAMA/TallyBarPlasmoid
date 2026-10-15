@@ -11,12 +11,12 @@ import zlib
 from pathlib import Path
 from typing import Any
 
-from io_helpers import atomic_write_text
+from io_helpers import atomic_write_text, load_json_with_backup, save_json_with_backup
 from parsers import as_dict
+from . import pricing as _pricing
 from .formatting import parse_timestamp
 from .pricing import (
     DEFAULT_MODEL_FOR_PROVIDER,
-    _get_pricing_fn,
     has_catalog_price,
     slim_usage,
     usage_split,
@@ -41,10 +41,12 @@ _UNSET = object()
 
 _PARSE_CACHE_DIR = Path.home() / ".tallybar" / "cache"
 _CACHE_SCHEMA_VERSION = 1          # bump to invalidate ALL parse caches at once
-_CLAUDE_PARSE_VERSION = 5          # bump when _parse_claude_file's output shape changes
-_CODEX_PARSE_VERSION = 3           # bump when _parse_codex_file's output shape changes
-_GROK_PARSE_VERSION = 3            # bump when _parse_grok_file's output shape changes
-_GEMINI_PARSE_VERSION = 2          # bump when _parse_gemini_file's output shape changes
+# A cached record is only valid for the output shape that wrote it, so a shape change
+# bumps its version. → tests/test_accounting.py::test_parse_cache_versions_track_output_shape
+_CLAUDE_PARSE_VERSION = 5
+_CODEX_PARSE_VERSION = 3
+_GROK_PARSE_VERSION = 3
+_GEMINI_PARSE_VERSION = 2
 # A deadline-cut walk stops this long BEFORE the deadline so its checkpoint save lands
 # while the process is still alive (the scan runs on a daemon thread that dies with the
 # one-shot backend). A 45 MB Claude cache saves in ~0.2 s; 1.5 s leaves room for a larger
@@ -149,13 +151,13 @@ def _tail_parse(path: Path, prev: dict[str, Any], parser, size: int,
     if (not isinstance(prev_off, int) or not isinstance(prev_fp, int)
             or not isinstance(prev_recs, list) or not isinstance(prev_size, int)):
         return None
-    if size <= prev_size:              # shrank, or unchanged-size rewrite
+    if size <= prev_size:          
         return None
     if prev_off < 0 or prev_off > end:
         return None
     if _offset_fingerprint(path, prev_off) != prev_fp:
         return None
-    if end == prev_off:                # grew, but only by a still-unterminated line
+    if end == prev_off:              
         return list(prev_recs)
     tail = parser(path, prev_off, end)
     if tail is None:
@@ -210,17 +212,15 @@ def _cached_log_records(root: Path, pattern: str, cache_path: Path | None,
                 continue
             changed = True
         else:
-            # The parse window's END is fixed BEFORE reading and the parser is bounded to
-            # it, so the cached records are exactly the parse of bytes [0, off) no matter
-            # what the agent appends meanwhile. (Parsing to EOF and measuring the offset
-            # afterwards double-counted a final line whose "\n" had not landed yet.)
+            # Fix the window END before reading so the records are exactly the parse of
+            # bytes [0, off) while the agent keeps appending.
+            # → tests/test_accounting.py::test_append_during_the_parse_is_neither_lost_nor_doubled
             end = _safe_resume_offset(path)
             if end is None:
                 continue
             if prev is not None:
                 # An active session's JSONL is appended to constantly, so "changed" is the
-                # common case during use and a full reparse of a large file was the single
-                # most expensive thing a refresh did.
+                # common case during use.
                 recs = _tail_parse(path, prev, parser, st.st_size, end)
             if recs is None:
                 recs = parser(path, 0, end)
@@ -291,22 +291,20 @@ def _parse_claude_file(path: Path, start: int = 0,
 
     Opened in binary so ``start`` is a real byte offset: text-mode ``seek()`` only accepts
     opaque cookies from ``tell()``. ``json.loads`` takes bytes directly, and decoding a
-    mangled line now raises UnicodeDecodeError, which is skipped alongside JSONDecodeError
-    rather than escaping the way it used to in text mode.
+    mangled line raises UnicodeDecodeError, which is skipped alongside JSONDecodeError.
 
     The dedup key ``r`` is the API message id, falling back to ``requestId`` and then the
     line uuid. Every line of one message (one per content block, each carrying the full
     usage) shares that id, and so does a copy of the message in another transcript. Some
     transcripts carry no ``requestId`` on any line (they have no ``version`` field either,
-    and some repeat another session's messages); keying on ``requestId`` first billed each
-    such message once per content-block line, and a repeated message again.
+    and some repeat another session's messages).
 
     Subagent transcripts (any file under a ``subagents/`` directory) carry two extra
     per-line fields for the summarizer's output estimate: ``f`` marks a line that holds
     final usage (a non-null ``stop_reason`` or ``usage.output_tokens_details``), and a
     non-final line records its visible output size ``v`` keyed by its line uuid ``i``.
     Several Claude Code versions log only the start-of-message usage for many subagent
-    turns (over 90% of them in 2.1.258 and 2.1.284), so no line of such a request ever
+    turns, so no line of such a request ever
     holds the real ``output_tokens`` and the max-output fold has nothing to recover.
     Main-session lines never carry these fields. The flag derives from the path, which is
     the parse cache's key, so the cache stays a pure function of each entry's file.
@@ -324,7 +322,7 @@ def _parse_claude_file(path: Path, start: int = 0,
         for line in handle:
             if remaining is not None:
                 remaining -= len(line)
-                if remaining < 0:      # past the window: appended after ``end`` was fixed
+                if remaining < 0:
                     break
             try:
                 record = json.loads(line)
@@ -414,7 +412,7 @@ def _parse_codex_file(path: Path) -> list[dict[str, Any]] | None:
             total = info.get("total_token_usage")
             total = total if isinstance(total, dict) and total else None
             if total is not None and prev_total is not None and total == prev_total:
-                continue  # repeated token_count: the session's cumulative total hasn't moved
+                continue
             if isinstance(last, dict) and last:
                 usage: Any = last
             elif total is not None:
@@ -968,7 +966,7 @@ def _grok_archive_split(rec: dict[str, Any], tokens: int, cost: float) -> dict[s
         return acc
     typed = {"input": int(rec.get("in") or 0), "output": int(rec.get("out") or 0),
              "cacheRead": int(rec.get("cached") or 0)}
-    prices = _get_pricing_fn()(DEFAULT_MODEL_FOR_PROVIDER["grok"])
+    prices = _pricing.model_pricing(DEFAULT_MODEL_FOR_PROVIDER["grok"])
     rates = {"input": prices.get("input", 0.0), "output": prices.get("output", 0.0),
              "cacheRead": prices.get("cache_read", prices.get("input", 0.0))}
     weights = {key: typed[key] * rates[key] for key in typed}
@@ -976,7 +974,7 @@ def _grok_archive_split(rec: dict[str, Any], tokens: int, cost: float) -> dict[s
     if weight_sum <= 0:
         weights = {}
     elif not sum(weights.values()):
-        weights = dict(typed)  # no rates to go by: share the cost by tokens
+        weights = dict(typed)
     for key, count in typed.items():
         acc[key]["tokens"] += count
         if weights:
@@ -1002,34 +1000,15 @@ def _get_grok_archive_path() -> Path:
 
 
 def _load_grok_archive() -> dict[str, Any]:
-    main = _get_grok_archive_path()
-    bak = main.with_name(main.name + ".bak")
-    for idx, path in enumerate((main, bak)):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and isinstance(data.get("days"), dict):
-                return data
-        except (OSError, json.JSONDecodeError):
-            pass
-        if idx == 0:
-            try:
-                main.replace(main.with_name(main.name + ".corrupt"))
-            except OSError:
-                pass
-    return {"version": 1, "days": {}}
+    return load_json_with_backup(
+        _get_grok_archive_path(),
+        lambda data: isinstance(data, dict) and isinstance(data.get("days"), dict),
+        {"version": 1, "days": {}},
+    )
 
 
 def _save_grok_archive(archive: dict[str, Any]) -> None:
-    main = _get_grok_archive_path()
-    payload = json.dumps(archive)
-    try:
-        atomic_write_text(main, payload)
-    except OSError:
-        return
-    try:
-        atomic_write_text(main.with_name(main.name + ".bak"), payload)
-    except OSError:
-        pass
+    save_json_with_backup(_get_grok_archive_path(), archive)
 
 
 def merge_grok_archive(live_days: dict[str, dict[str, Any]],

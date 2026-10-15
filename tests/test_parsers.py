@@ -69,9 +69,7 @@ def test_parse_antigravity_limits_choose_priority_is_order_independent():
     # Two Gemini Pro entries at different effort tiers (Low vs High). The
     # predicate order inside choose() (low-effort condition tried before the
     # catch-all) must decide the winner -- NOT the order the upstream API
-    # happens to list the entries in. Regression for a bug where an
-    # entries-outer any(predicates) collapsed to the loosest predicate and let
-    # list order silently decide which effort tier's usage was reported.
+    # happens to list the entries in.
     low = {
         "label": "Gemini 3.1 Pro (Low)",
         "modelId": "gemini-3.1-pro-low",
@@ -99,13 +97,11 @@ def test_relative_reset():
     # Test invalid string returns input unchanged
     assert parsers.relative_reset("invalid") == "invalid"
     
-    # Future timestamp (days)
     import datetime as dt
     future_time = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=2, hours=3)).isoformat()
     reset_str = parsers.relative_reset(future_time)
     assert "Resets in 2d" in reset_str
 
-    # Past timestamp
     past_time = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=5)).isoformat()
     assert parsers.relative_reset(past_time) == "Reset due"
 
@@ -115,12 +111,10 @@ def test_parse_batchexecute_payload():
     result = parsers.parse_batchexecute_payload(payload, "rpc1")
     assert result == ["item"]
     
-    # Invalid rpc ID
     assert parsers.parse_batchexecute_payload(payload, "rpc2") is None
 
 
 def test_parse_claude_credit_balance():
-    # Valid credit balance
     data = {"amount": 1050, "currency": "USD"}
     res = parsers.parse_claude_credit_balance(data)
     assert res == {
@@ -130,16 +124,13 @@ def test_parse_claude_credit_balance():
         "source": "claude-prepaid-credits",
     }
     
-    # Invalid format
     assert parsers.parse_claude_credit_balance([]) is None
 
 
 def test_parse_claude_tier():
-    # Rate limit tier
     data = {"organizations": [{"rate_limit_tier": "pro_tier"}]}
     assert parsers.parse_claude_tier(data) == "Pro"
 
-    # Plan
     data2 = {"organizations": [{"plan": "free"}]}
     assert parsers.parse_claude_tier(data2) == "Free"
 
@@ -220,12 +211,6 @@ def test_group_agy_model_quota():
     assert res["Others"]["reset"] == "Resets in 1h"
 
 
-# ---------------------------------------------------------------------------
-# Additional coverage.
-# Functions not exercised above: extract_limits_from_json,
-# antigravity_model_entries, plus extra branches of parse_claude_usage,
-# parse_gemini_usage_info, parse_google_one_credits, and relative_reset.
-# ---------------------------------------------------------------------------
 
 
 def test_extract_limits_from_json_used_limit_and_remaining_total():
@@ -312,7 +297,7 @@ def test_parse_claude_usage_weekly_and_model_windows():
 def test_parse_claude_usage_seven_day_both_sonnet_and_opus():
     # A payload carrying independent non-empty seven_day_sonnet AND
     # seven_day_opus windows must surface BOTH rows -- a match for one model
-    # must not short-circuit the other (regression for a nested-loop fix).
+    # must not short-circuit the other.
     data = {
         "seven_day_sonnet": {"utilization": 42.0, "resets_at": "2030-01-01T00:00:00Z"},
         "seven_day_opus": {"utilization": 88.0, "resets_at": "2030-01-01T00:00:00Z"},

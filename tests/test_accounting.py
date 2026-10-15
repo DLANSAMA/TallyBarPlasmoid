@@ -8,7 +8,6 @@ from pathlib import Path
 import sys
 from unittest.mock import patch
 
-# Adjust sys.path to find backend modules
 sys.path.insert(0, str(Path(__file__).parent.parent / "io.github.dlansama.tallybar" / "contents" / "code"))
 
 import accounting
@@ -26,12 +25,10 @@ def test_compact_token_count():
 
 def test_compact_token_count_fixed_point_at_1e12_does_not_recurse():
     """999_500_000_000 rounds to n=1000 at the "B" tier, the largest unit — there's no
-    bigger tier to carry into, so the old code recursed into compact_token_count(1e12),
-    which round-trips to the SAME value (a true numeric fixed point) and blew the stack
-    (RecursionError). Must format directly against "B" instead."""
+    bigger tier to carry into. Recursing into compact_token_count(1e12) round-trips to the
+    SAME value (a numeric fixed point), so it must format directly against "B" instead."""
     assert accounting.compact_token_count(999_500_000_000) == "1000B"
     assert accounting.compact_token_count(10**12) == "1000B"
-    # A comfortably larger value in the same regime must not recurse/crash either.
     assert accounting.compact_token_count(5_000_000_000_000) == "5000B"
 
 def test_exact_usd():
@@ -50,7 +47,7 @@ def test_compact_usd():
     assert accounting.compact_usd(-5.0) == "$0.00"
 
 def test_usage_cost_usd_anthropic():
-    with patch("accounting.model_pricing") as mock_pricing:
+    with patch("accounting.pricing.model_pricing") as mock_pricing:
         mock_pricing.return_value = {"input": 3.00, "output": 15.00, "cache_write": 3.75, "cache_read": 0.30}
         usage = {
             "input_tokens": 100000,
@@ -63,16 +60,14 @@ def test_usage_cost_usd_anthropic():
         # cache_read_input_tokens as SEPARATE, additive buckets (input_tokens
         # already EXCLUDES the cache tokens), so each is billed at its own rate:
         #   100000*3.00 + 5000*15.00 + 20000*3.75 + 50000*0.30 = 465000 -> $0.465.
-        # (Subtracting cache_creation off input_tokens — the old behavior — under-billed.)
         assert pytest.approx(cost, 1e-6) == 0.465
 
 def test_usage_cost_usd_anthropic_1h_cache_write():
     # Anthropic bills 1-HOUR cache writes at 2x input ($10/MTok for Opus 4.8) and
     # 5-minute writes at 1.25x ($6.25). The flat cache_creation_input_tokens count is
     # split by the nested cache_creation.ephemeral_1h/5m breakdown and each portion
-    # billed at its own rate. Billing ALL of it at the 5m rate (the old behavior)
-    # under-billed cache-heavy Claude use by ~8.7% on real data.
-    with patch("accounting.model_pricing") as mock_pricing:
+    # billed at its own rate.
+    with patch("accounting.pricing.model_pricing") as mock_pricing:
         mock_pricing.return_value = {"input": 5.00, "output": 25.00,
                                      "cache_write": 6.25, "cache_write_1h": 10.00, "cache_read": 0.50}
         usage = {
@@ -85,13 +80,12 @@ def test_usage_cost_usd_anthropic_1h_cache_write():
         cost = accounting.usage_cost_usd(usage, "claude-opus-4-8")
         # 10000*5 + 2000*25 + 18000*10 + 12000*6.25 + 40000*0.50
         #  = 50000 + 50000 + 180000 + 75000 + 20000 = 375000 -> $0.375.
-        # Old (all 30000 @ 6.25): 50000+50000+187500+20000 = 307500 -> $0.3075.
         assert pytest.approx(cost, 1e-6) == 0.375
 
 def test_usage_cost_usd_cache_write_flat_without_breakdown():
     # No cache_creation breakdown (older logs / non-Anthropic) -> all cache-creation
     # billed at the flat 5m rate. Guards that the 1h split is inert without the field.
-    with patch("accounting.model_pricing") as mock_pricing:
+    with patch("accounting.pricing.model_pricing") as mock_pricing:
         mock_pricing.return_value = {"input": 5.00, "output": 25.00,
                                      "cache_write": 6.25, "cache_write_1h": 10.00, "cache_read": 0.50}
         usage = {"input_tokens": 10000, "output_tokens": 2000,
@@ -101,9 +95,7 @@ def test_usage_cost_usd_cache_write_flat_without_breakdown():
         assert pytest.approx(cost, 1e-6) == 0.2875
 
 def test_usage_cost_usd_1h_breakdown_clamped_to_cache_create():
-    # A malformed breakdown whose 1h count exceeds cache_creation_input_tokens must
-    # NOT over-bill: the 1h portion is clamped to cache_create, the remainder is 0.
-    with patch("accounting.model_pricing") as mock_pricing:
+    with patch("accounting.pricing.model_pricing") as mock_pricing:
         mock_pricing.return_value = {"input": 5.00, "output": 25.00,
                                      "cache_write": 6.25, "cache_write_1h": 10.00, "cache_read": 0.50}
         usage = {"input_tokens": 0, "output_tokens": 0,
@@ -117,7 +109,7 @@ def test_usage_cost_usd_1h_breakdown_without_flat_field_is_derived():
     # Defensive: a record carrying ONLY the nested breakdown (no flat
     # cache_creation_input_tokens) must still bill — the volume is derived from
     # ephemeral_1h + ephemeral_5m so the cache-write tokens aren't silently dropped to $0.
-    with patch("accounting.model_pricing") as mock_pricing:
+    with patch("accounting.pricing.model_pricing") as mock_pricing:
         mock_pricing.return_value = {"input": 5.00, "output": 25.00,
                                      "cache_write": 6.25, "cache_write_1h": 10.00, "cache_read": 0.50}
         usage = {"input_tokens": 0, "output_tokens": 0,
@@ -137,7 +129,7 @@ def test_usage_cost_usd_long_prompt_bills_the_whole_request_at_the_tier_rates():
     # Claude Haiku 5.5 bills 5x once the prompt passes 100K tokens; the prompt is fresh
     # input + cache writes + cache reads: 1_000 + 30_000 + 70_000 = 101_000 here, so
     # every component, output included, bills at its long-context rate.
-    with patch("accounting.model_pricing") as mock_pricing:
+    with patch("accounting.pricing.model_pricing") as mock_pricing:
         mock_pricing.return_value = dict(_HAIKU_5_5_PRICES)
         usage = {"input_tokens": 1_000, "output_tokens": 2_000,
                  "cache_read_input_tokens": 70_000,
@@ -153,7 +145,7 @@ def test_usage_cost_usd_long_prompt_bills_the_whole_request_at_the_tier_rates():
 
 def test_usage_cost_usd_prompt_at_the_threshold_stays_on_the_base_rates():
     # "Over 100,000 tokens": a prompt of exactly 100_000 still bills the base tier.
-    with patch("accounting.model_pricing") as mock_pricing:
+    with patch("accounting.pricing.model_pricing") as mock_pricing:
         mock_pricing.return_value = dict(_HAIKU_5_5_PRICES)
         usage = {"input_tokens": 1_000, "output_tokens": 2_000,
                  "cache_read_input_tokens": 69_000,
@@ -166,7 +158,7 @@ def test_usage_cost_usd_prompt_at_the_threshold_stays_on_the_base_rates():
 def test_usage_cost_usd_long_prompt_counts_breakdown_only_cache_writes():
     # A record with only the nested cache_creation breakdown still counts those writes
     # toward the prompt size: 1_000 + 40_000 + 60_000 = 101_000 -> long tier.
-    with patch("accounting.model_pricing") as mock_pricing:
+    with patch("accounting.pricing.model_pricing") as mock_pricing:
         mock_pricing.return_value = dict(_HAIKU_5_5_PRICES)
         usage = {"input_tokens": 1_000, "output_tokens": 0,
                  "cache_creation": {"ephemeral_1h_input_tokens": 40_000,
@@ -176,7 +168,7 @@ def test_usage_cost_usd_long_prompt_counts_breakdown_only_cache_writes():
         assert pytest.approx(cost, 1e-6) == 0.078
 
 def test_usage_cost_usd_openai():
-    with patch("accounting.model_pricing") as mock_pricing:
+    with patch("accounting.pricing.model_pricing") as mock_pricing:
         mock_pricing.return_value = {"input": 2.50, "output": 15.00, "cache_read": 0.25}
         usage = {
             "input_tokens": 100000,
@@ -201,10 +193,10 @@ def test_usage_token_total_and_breakdown():
     assert cached == 70000     # cached_input_tokens(40000) + cache_creation(10000) + cache_read(20000)
 
     total = accounting.usage_token_total(usage)
-    assert total == 136000     # 60000 + 6000 + 70000 (no explicit total key)
+    assert total == 136000
 
 def test_usage_cost_and_breakdown_with_tool_tokens():
-    with patch("accounting.model_pricing") as mock_pricing:
+    with patch("accounting.pricing.model_pricing") as mock_pricing:
         mock_pricing.return_value = {
             "input": 2.00,
             "output": 10.00,
@@ -229,7 +221,7 @@ def test_usage_cost_and_breakdown_with_tool_tokens():
         assert pytest.approx(cost, 1e-6) == 0.206
 
         total = accounting.usage_token_total(usage)
-        assert total == 110000     # 75000 + 5000 + 30000
+        assert total == 110000
 
 def test_usage_token_total_and_breakdown_helper_matches_separate_calls():
     # The combined helper must be behaviour-identical to calling usage_token_total()
@@ -251,11 +243,10 @@ def test_usage_token_total_and_breakdown_helper_matches_separate_calls():
     no_total = {"input_tokens": 100000, "output_tokens": 5000, "cache_read_input_tokens": 20000}
     total, breakdown = accounting.usage_token_total_and_breakdown(no_total)
     assert breakdown == (100000, 5000, 20000)
-    assert total == 125000                     # 100000 + 5000 + 20000
+    assert total == 125000
     assert total == accounting.usage_token_total(no_total)
     assert breakdown == accounting.usage_token_breakdown(no_total)
 
-    # Non-dict degrades to (0, (0, 0, 0)), matching the individual functions.
     assert accounting.usage_token_total_and_breakdown(None) == (0, (0, 0, 0))
     assert accounting.usage_token_total(None) == 0
     assert accounting.usage_token_breakdown(None) == (0, 0, 0)
@@ -405,12 +396,8 @@ def test_enrich_ui_formatting():
     assert limits[1]["formattedUsedText"] == "10% used"
 
 
-# ---------------------------------------------------------------------------
-# Local per-provider token-summary readers. These exercise the real
-# file-discovery / parsing / dedup / bucketing paths AND the corrected cost math
-# end-to-end. Pricing is patched to a flat $10/MTok so each expected dollar value
-# is a regression guard for a specific per-provider accounting rule.
-# ---------------------------------------------------------------------------
+# Pricing is patched to a flat $10/MTok so each expected dollar value pins one
+# per-provider accounting rule.
 
 _FLAT_PRICES = {"input": 10.0, "output": 10.0, "cache_write": 10.0, "cache_read": 10.0}
 _NOW = dt.datetime(2026, 5, 28, 12, 0, 0, tzinfo=dt.timezone.utc)
@@ -431,13 +418,12 @@ def test_local_claude_token_summary(tmp_path):
     # The SAME requestId twice must be de-duplicated (counted once).
     (proj / "session.jsonl").write_text(json.dumps(rec) + "\n" + json.dumps(rec) + "\n", encoding="utf-8")
 
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         summary = accounting.local_claude_token_summary(projects_dir=tmp_path, now=_NOW)
 
     assert summary is not None
     assert summary["source"] == "local-claude-logs"
-    # (100000 + 5000 + 20000 + 50000) * 10 / 1e6 = $1.75. With the old bug
-    # (cache_creation subtracted from input_tokens) it would be $1.55.
+    # (100000 + 5000 + 20000 + 50000) * 10 / 1e6 = $1.75.
     assert "Today: $1.75" in summary["today"]
     assert "175K tok" in summary["today"]
     # The single record is today, so "Last 7 days" (sum of the daily buckets) matches it.
@@ -465,13 +451,12 @@ def test_local_claude_summary_uses_final_streamed_output(tmp_path):
     (proj / "session.jsonl").write_text(
         json.dumps(partial) + "\n" + json.dumps(final) + "\n", encoding="utf-8")
 
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         summary = accounting.local_claude_token_summary(projects_dir=tmp_path, now=_NOW)
 
     assert summary is not None
     # Final output 5000 billed (input/cache counted once):
     #   (100000 + 5000 + 20000 + 50000) * 10 / 1e6 = $1.75 ; 175K tok.
-    # First-wins (the old bug) would bill output 5 -> $1.70 and 170K tok.
     assert "Today: $1.75" in summary["today"]
     assert "175K tok" in summary["today"]
 
@@ -522,7 +507,7 @@ def _write_subagent_fixture(root):
 
 def test_subagent_output_estimated_when_no_line_carries_final_usage(tmp_path):
     _write_subagent_fixture(tmp_path)
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         summary = accounting.local_claude_token_summary(projects_dir=tmp_path, now=_NOW,
                                                         cache_dir=None)
     assert summary is not None
@@ -538,7 +523,7 @@ def test_subagent_output_estimated_when_no_line_carries_final_usage(tmp_path):
 def test_subagent_estimate_survives_the_incremental_parse_cache(tmp_path):
     _write_subagent_fixture(tmp_path)
     cache = tmp_path / "cache"
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         truth = accounting.local_claude_token_summary(projects_dir=tmp_path, now=_NOW, cache_dir=None)
         cold = accounting.local_claude_token_summary(projects_dir=tmp_path, now=_NOW, cache_dir=cache)
         warm = accounting.local_claude_token_summary(projects_dir=tmp_path, now=_NOW, cache_dir=cache)
@@ -564,7 +549,7 @@ def test_either_final_marker_disables_the_estimate(tmp_path, stop_reason, detail
         _cc_line("req_c", "u-c1", 4, [{"type": "text", "text": "c" * 4000}])
         + _cc_line("req_c", "u-c2", 4, [], stop_reason=stop_reason, details=details),
         encoding="utf-8")
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         summary = accounting.local_claude_token_summary(projects_dir=tmp_path, now=_NOW, cache_dir=None)
     assert summary["tokens30d"] == 10 + 1000 + 4
     assert "estimatedOutputTokens" not in summary
@@ -584,9 +569,8 @@ def _fork_line(msg_id, uuid, cache_read, out, request_id=None):
 
 def test_requestid_less_messages_and_their_copies_count_once(tmp_path):
     """Some transcripts carry no requestId on any line, and some of them repeat another
-    session's messages. Keyed on requestId-then-uuid, each requestId-less message was
-    billed once per content-block line, and a repeated one again. Every one of those lines
-    shares the message id, so each message must count exactly once."""
+    session's messages. Every content-block line of a
+    message shares the message id, so each message must count exactly once."""
     proj = tmp_path / "proj"
     proj.mkdir()
     # Parent: message A, two content-block lines, with requestId.
@@ -598,10 +582,9 @@ def test_requestid_less_messages_and_their_copies_count_once(tmp_path):
         _fork_line("msg_A", "u-a1", 1000, 40) + _fork_line("msg_A", "u-a2", 1000, 40)
         + _fork_line("msg_B", "u-b1", 2000, 60) + _fork_line("msg_B", "u-b2", 2000, 60)
         + _fork_line("msg_B", "u-b3", 2000, 60), encoding="utf-8")
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         summary = accounting.local_claude_token_summary(projects_dir=tmp_path, now=_NOW, cache_dir=None)
     # A: 10 + 1000 + 40 = 1050 once; B: 10 + 2000 + 60 = 2070 once.
-    # requestId-then-uuid keying gave 3 x 1050 + 3 x 2070 = 9360.
     assert summary["tokens30d"] == 1050 + 2070
     assert summary["cost30d"] == pytest.approx((1050 + 2070) * 10 / 1e6)
 
@@ -610,10 +593,10 @@ def test_unpriced_claude_model_is_named(tmp_path):
     proj = tmp_path / "proj"
     proj.mkdir()
     (proj / "s.jsonl").write_text(_cc_line("req_1", "u-1", 9, []), encoding="utf-8")
-    with patch("accounting.model_pricing", return_value={}):
+    with patch("accounting.pricing.model_pricing", return_value={}):
         summary = accounting.local_claude_token_summary(projects_dir=tmp_path, now=_NOW, cache_dir=None)
     assert summary["unpricedModels"] == ["claude-opus-5-5"]
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         summary = accounting.local_claude_token_summary(projects_dir=tmp_path, now=_NOW, cache_dir=None)
     assert "unpricedModels" not in summary
 
@@ -630,7 +613,7 @@ def test_local_codex_token_summary(tmp_path):
     sess.mkdir(parents=True)
     (sess / "rollout.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         summary = accounting.local_codex_token_summary(sessions_dir=tmp_path, now=_NOW)
 
     assert summary is not None
@@ -653,14 +636,14 @@ def test_local_gemini_token_summary(tmp_path):
     }]}
     (tmp_path / "session-test.json").write_text(json.dumps(session), encoding="utf-8")
 
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         summary = accounting.local_gemini_token_summary(gemini_dir=tmp_path, now=_NOW)
 
     assert summary is not None
     assert summary["source"] == "local-gemini-logs"
     # (70000 uncached input + (4000+1000) output + 5000 tool + 30000 cached) * 10 / 1e6
     # = $1.10. thoughts billed as output (not subtracted/clamped); tool added at input
-    # rate. With the old "output - thoughts" clamp it would be $1.09.
+    # rate.
     assert "Today: $1.10" in summary["today"]
     assert "110K tok" in summary["today"]
 
@@ -707,7 +690,7 @@ def test_local_grok_token_summary(tmp_path):
     ]
     (logs / "unified.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         summary = accounting.local_grok_token_summary(
             logs_dir=logs, sessions_dir=sessions, now=_NOW)
 
@@ -732,7 +715,7 @@ def test_local_grok_summary_defaults_unmapped_sid_to_grok_build(tmp_path):
     (logs / "unified.jsonl").write_text(
         _grok_done(_NOW, "UNKNOWN", 100000, 40000, 10000, 2000) + "\n", encoding="utf-8")
 
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         summary = accounting.local_grok_token_summary(
             logs_dir=logs, sessions_dir=sessions, now=_NOW)
 
@@ -796,7 +779,7 @@ def _grok_window_fixture(root):
 def test_model_breakdown_per_window_covers_only_that_window(tmp_path, build):
     """modelBreakdown1d / modelBreakdown7d / modelBreakdown each list only the models used
     in their own window, and each list's cost adds up to that window's total."""
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         summary = build(tmp_path)
     assert summary is not None
     names = [{row["model"] for row in summary[k]}
@@ -818,7 +801,7 @@ def test_parse_cache_grok_transparent(tmp_path):
         _grok_done(_NOW, "S1", 100000, 40000, 10000, 2000) + "\n", encoding="utf-8")
     cache = tmp_path / "cache"
 
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         fresh = accounting.local_grok_token_summary(
             logs_dir=logs, sessions_dir=sessions, now=_NOW, cache_dir=None)
         cold = accounting.local_grok_token_summary(
@@ -847,7 +830,7 @@ def test_parse_cache_gemini_transparent(tmp_path):
     (ag / "session-hidden.json").write_text(json.dumps(session), encoding="utf-8")  # pruned
     cache = tmp_path / "cache"
 
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         fresh = accounting.local_gemini_token_summary(gemini_dir=root, now=_NOW, cache_dir=None)
         cold = accounting.local_gemini_token_summary(gemini_dir=root, now=_NOW, cache_dir=cache)
         warm = accounting.local_gemini_token_summary(gemini_dir=root, now=_NOW, cache_dir=cache)
@@ -882,7 +865,7 @@ def test_parse_cache_is_transparent_and_warm(tmp_path):
     (proj / "b.jsonl").write_text(json.dumps(_claude_rec("r2", 3000)) + "\n", encoding="utf-8")
     cache = tmp_path / "cache"
 
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         fresh = accounting.local_claude_token_summary(projects_dir=proj, now=_NOW, cache_dir=None)
         cold = accounting.local_claude_token_summary(projects_dir=proj, now=_NOW, cache_dir=cache)
         warm = accounting.local_claude_token_summary(projects_dir=proj, now=_NOW, cache_dir=cache)
@@ -902,7 +885,7 @@ def test_parse_cache_invalidates_on_file_growth(tmp_path):
     f.write_text(json.dumps(_claude_rec("r1", 5000)) + "\n", encoding="utf-8")
     cache = tmp_path / "cache"
 
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         first = accounting.local_claude_token_summary(projects_dir=proj, now=_NOW, cache_dir=cache)
         # Append a second request. Bump mtime explicitly so the test can't lose to
         # same-second-write granularity (size also changes, which alone invalidates).
@@ -927,7 +910,7 @@ def test_parse_cache_prunes_deleted_files(tmp_path):
     gone.write_text(json.dumps(_claude_rec("r2", 9000)) + "\n", encoding="utf-8")
     cache = tmp_path / "cache"
 
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         accounting.local_claude_token_summary(projects_dir=proj, now=_NOW, cache_dir=cache)
         gone.unlink()
         after = accounting.local_claude_token_summary(projects_dir=proj, now=_NOW, cache_dir=cache)
@@ -947,12 +930,12 @@ def test_parse_cache_rebuilds_on_corruption_and_version_bump(tmp_path):
     cache.mkdir()
     cache_file = cache / "claude_logs.json"
 
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         truth = accounting.local_claude_token_summary(projects_dir=proj, now=_NOW, cache_dir=None)
 
         # (a) Garbage cache -> ignored, full reparse, correct result, cache rewritten valid.
         cache_file.write_text("}{ not json", encoding="utf-8")
-        with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+        with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
             assert accounting.local_claude_token_summary(projects_dir=proj, now=_NOW, cache_dir=cache) == truth
         json.loads(cache_file.read_text(encoding="utf-8"))   # now valid again
 
@@ -960,20 +943,18 @@ def test_parse_cache_rebuilds_on_corruption_and_version_bump(tmp_path):
         data = json.loads(cache_file.read_text(encoding="utf-8"))
         data["version"] = data["version"] + 999
         cache_file.write_text(json.dumps(data), encoding="utf-8")
-        with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+        with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
             assert accounting.local_claude_token_summary(projects_dir=proj, now=_NOW, cache_dir=cache) == truth
 
 
 def test_burn_rate_is_measured_from_the_summary_now_not_the_wall_clock(tmp_path):
-    # The burn rate's partial day comes from the summary's own `now`. It used to read the
-    # real clock, so two summaries for one fixed moment differed whenever the calls
-    # straddled a second boundary (the parse-cache tests above flaked on projectedMonthlyCost).
+    # The burn rate's partial day comes from the summary's own `now`.
     proj = tmp_path / "proj"
     proj.mkdir()
     (proj / "s.jsonl").write_text(json.dumps(_claude_rec("r1", 5000)) + "\n", encoding="utf-8")
     local = _NOW.astimezone()
     days = 6 + (local.hour * 3600 + local.minute * 60 + local.second) / 86400
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         s = accounting.local_claude_token_summary(projects_dir=proj, now=_NOW, cache_dir=None)
     assert s["cost7d"] == 1.75
     assert s["burnRatePerDay"] == round(1.75 / days, 6)
@@ -994,7 +975,7 @@ def test_parse_cache_codex_transparent(tmp_path):
     (sess / "rollout.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
     cache = tmp_path / "cache"
 
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         fresh = accounting.local_codex_token_summary(sessions_dir=tmp_path, now=_NOW, cache_dir=None)
         cold = accounting.local_codex_token_summary(sessions_dir=tmp_path, now=_NOW, cache_dir=cache)
         warm = accounting.local_codex_token_summary(sessions_dir=tmp_path, now=_NOW, cache_dir=cache)
@@ -1014,7 +995,7 @@ def test_local_summary_deadline_stops_walk_and_raises(tmp_path):
     (proj / "a.jsonl").write_text(json.dumps(_claude_rec("r1", 5000)) + "\n", encoding="utf-8")
     cache = tmp_path / "cache"
 
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES), \
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES), \
             pytest.raises(accounting.LogScanIncomplete):
         accounting.local_claude_token_summary(
             projects_dir=proj, now=_NOW, cache_dir=cache, deadline=time.time() - 1000)
@@ -1022,7 +1003,7 @@ def test_local_summary_deadline_stops_walk_and_raises(tmp_path):
     assert issubclass(accounting.LogScanIncomplete, TimeoutError)   # -> cost_summary_timeout
 
     # A deadline comfortably in the future must behave exactly like no deadline at all.
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         complete = accounting.local_claude_token_summary(
             projects_dir=proj, now=_NOW, cache_dir=cache, deadline=time.time() + 1000)
         truth = accounting.local_claude_token_summary(projects_dir=proj, now=_NOW, cache_dir=None)
@@ -1042,13 +1023,13 @@ def test_local_summary_deadline_threads_through_gemini_walker(tmp_path):
     (tmp_path / "session-a.json").write_text(json.dumps(session), encoding="utf-8")
     cache = tmp_path / "cache"
 
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES), \
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES), \
             pytest.raises(accounting.LogScanIncomplete):
         accounting.local_gemini_token_summary(
             gemini_dir=tmp_path, now=_NOW, cache_dir=cache, deadline=time.time() - 1000)
     assert not (cache / "gemini_logs.json").exists()
 
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         complete = accounting.local_gemini_token_summary(
             gemini_dir=tmp_path, now=_NOW, cache_dir=cache, deadline=time.time() + 1000)
     assert complete is not None
@@ -1108,7 +1089,7 @@ def test_local_summary_includes_hourly(tmp_path):
     }
     (tmp_path / "session.jsonl").write_text(json.dumps(rec) + "\n", encoding="utf-8")
 
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         summary = accounting.local_claude_token_summary(projects_dir=tmp_path, now=_NOW)
 
     assert summary is not None
@@ -1121,13 +1102,10 @@ def test_local_summary_includes_hourly(tmp_path):
     assert sum(1 for b in hourly if b["tokens"] > 0) == 1
 
 
-# ---------------------------------------------------------------------------
-# codex_credit_balance selects the first PRESENT key, not first truthy
-# ---------------------------------------------------------------------------
 
 def test_codex_credit_balance_zero_balance_not_dropped():
-    """A real exhausted balance of 0.0 must survive — the old `or` chain treated
-    0.0 as falsy and skipped to a later field (or None)."""
+    """A real exhausted balance of 0.0 must survive; the first PRESENT key wins,
+    not the first truthy one."""
     res = accounting.codex_credit_balance(
         {"credits": {"balance": 0.0, "currency": "credits"}}
     )
@@ -1144,9 +1122,6 @@ def test_codex_credit_balance_no_numeric_key_returns_none():
     assert res is None
 
 
-# ---------------------------------------------------------------------------
-# provider-family fallback pricing for unknown-but-non-empty models
-# ---------------------------------------------------------------------------
 
 def test_provider_family_for_model_mapping():
     """An unrecognised-but-non-empty model name maps to its provider family so
@@ -1170,7 +1145,7 @@ def test_usage_cost_usd_unknown_grok_model_uses_family_fallback():
             return {}
         return accounting._get_pricing(model)
 
-    with patch("accounting.model_pricing", side_effect=_fake_pricing):
+    with patch("accounting.pricing.model_pricing", side_effect=_fake_pricing):
         cost = accounting.usage_cost_usd(
             {"input_tokens": 1_000_000, "output_tokens": 1_000_000}, "grok-5"
         )
@@ -1187,7 +1162,7 @@ def test_usage_cost_usd_unknown_model_uses_family_fallback():
             return {}
         return accounting._get_pricing(model)
 
-    with patch("accounting.model_pricing", side_effect=_fake_pricing):
+    with patch("accounting.pricing.model_pricing", side_effect=_fake_pricing):
         cost = accounting.usage_cost_usd(
             {"input_tokens": 1_000_000, "output_tokens": 1_000_000}, "gpt-6-turbo"
         )
@@ -1201,9 +1176,6 @@ def test_usage_cost_usd_none_model_is_zero():
     assert cost == 0.0
 
 
-# ---------------------------------------------------------------------------
-# Grok billing-week window (main-tree unique)
-# ---------------------------------------------------------------------------
 
 def test_local_grok_billing_week_window(tmp_path):
     """Billing-week window uses exact timestamps — a record on the start DAY but BEFORE the
@@ -1242,7 +1214,7 @@ def test_local_grok_billing_week_window(tmp_path):
     logs.mkdir()
     (logs / "unified.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         summary_with = accounting.local_grok_token_summary(
             logs_dir=logs, now=now_inside,
             week_start=week_start, week_end=week_end,
@@ -1333,7 +1305,7 @@ def test_local_grok_keeps_composer_and_45_distinct(tmp_path):
     logs.mkdir()
     (logs / "unified.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         summary = accounting.local_grok_token_summary(logs_dir=logs, now=_NOW)
 
     assert summary is not None
@@ -1366,7 +1338,7 @@ def test_local_grok_fills_model_from_session_summary(tmp_path):
         "current_model_id": "grok-composer-2.5-fast",
     }), encoding="utf-8")
 
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         summary = accounting.local_grok_token_summary(logs_dir=logs, now=_NOW)
 
     assert summary is not None
@@ -1403,7 +1375,7 @@ def test_local_grok_keeps_45_and_46_distinct(tmp_path):
     logs.mkdir()
     (logs / "unified.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_FLAT_PRICES):
         summary = accounting.local_grok_token_summary(logs_dir=logs, now=_NOW)
 
     assert summary is not None
@@ -1419,7 +1391,7 @@ def test_grok_cli_pricing_maps_bare_versions_to_the_build_row():
     and summary.json both record the bare "grok-4.6". The bare string misses
     _grok_pricing_model's "build" branch, so CLI turns were priced on xAI's API row.
     """
-    # Bare versions -> build row (the fix).
+    # Bare versions -> build row.
     assert accounting._grok_cli_pricing_model("grok-4.6") == "grok-build-0.1"
     assert accounting._grok_cli_pricing_model("Grok 4.6") == "grok-build-0.1"
     assert accounting._grok_cli_pricing_model("grok-4.5") == "grok-build-0.1"
@@ -1476,9 +1448,7 @@ def test_codex_lane_label_follows_window_length_not_position():
     """A free account's primary lane is a 30-day window, not a 5-hour session.
 
     account/rateLimits/read returns lanes positionally, but the durations vary by
-    plan. Labelling by position alone rendered a free account's 43200-minute
-    primary as "Session - Resets in 29d 23h" (verified against a live
-    planType:"free" response, 2026-09-11).
+    plan, so a free account's 43200-minute primary must not read as a session.
     """
     plus = {
         "primary": {"usedPercent": 68, "windowDurationMins": 300, "resetsAt": 0},
@@ -1517,11 +1487,8 @@ def test_per_model_weekly_lane_gets_the_same_pace_line_as_weekly():
     """A per-model cap (Anthropic's seven_day_<model>) is a weekly WINDOW lane.
 
     parse_claude_usage discovers these from the payload, so the label is the model
-    name ("Fable"), not "Weekly". The label-only predicate matched neither
-    session nor weekly, so the lane skipped the polished pace line AND escaped the
-    left/right blanking — leaking internal phrasing ("3% in deficit") to the UI,
-    which reads as *behind* when it means ahead. Verified against a live
-    subscriber account with per-model caps.
+    name ("Fable"), not "Weekly". It must still get the polished pace line and the
+    left/right blanking, so internal phrasing ("3% in deficit") never reaches the UI.
     """
     def lane(label, pct, pace):
         return {"label": label, "percent": pct, "unit": "%", "windowMinutes": 10080,
@@ -1583,7 +1550,7 @@ _USAGE_CORPUS = [
     # OpenAI/Codex: subsets, plus an explicit total and reasoning already inside output.
     {"input_tokens": 12000, "cached_input_tokens": 9000, "output_tokens": 640,
      "reasoning_output_tokens": 512, "total_tokens": 12640},
-    # Gemini: thoughts + tool are additive (a 2026-05-28 audit wrongly called tool a dupe).
+    # Gemini: thoughts + tool are additive.
     {"input": 5000, "output": 300, "cached": 1200, "thoughts": 450, "tool": 90, "total": 5840},
     # Grok: already minimal — slimming must be a no-op on the values that matter.
     {"input_tokens": 700, "cached_input_tokens": 200, "output_tokens": 90},
@@ -1634,7 +1601,6 @@ def test_slim_usage_covers_every_key_the_readers_consume():
     source = "".join(inspect.getsource(fn) for fn in
                      (pricing.usage_cost_usd, pricing.usage_token_breakdown,
                       pricing._explicit_total))
-    # Every string literal fetched out of the usage dict inside those three readers.
     consumed = set(re.findall(r'(?:get|usage\.get)\(\s*"([a-zA-Z_][\w]*)"', source))
     consumed |= set(re.findall(r'"([a-zA-Z_][\w]*)"(?=\s*,\s*")', source))
     missing = {k for k in consumed if k.endswith(("tokens", "Tokens", "Count", "_input_tokens"))
@@ -1890,9 +1856,8 @@ def test_codex_total_only_events_contribute_their_increase(tmp_path):
 
 
 # --- A deadline-cut walk checkpoints, so a cold cache converges across refreshes ---------
-# A parse-version bump empties the cache; if the full re-parse didn't fit one refresh and a
-# cut walk saved nothing, every refresh restarted from zero and the scan never finished
-# (the "Cost scan timed out" banner stuck for good on a large history).
+# A parse-version bump empties the cache; a cut walk must save its progress so the full
+# re-parse finishes across refreshes.
 
 class _FakeClock:
     """Stands in for log_parsers.time: the walk's deadline check is its only clock read."""
@@ -1949,8 +1914,8 @@ def test_cut_walk_checkpoints_and_the_next_walk_resumes(tmp_path, monkeypatch):
 
 
 def test_cold_cache_converges_even_when_no_refresh_fits_a_full_parse(tmp_path, monkeypatch):
-    """Each refresh has time for ONE file. The old all-or-nothing save never finished;
-    with checkpoints the third refresh completes."""
+    """Each refresh has time for ONE file; checkpoints let the third
+    refresh complete."""
     root, walker = _three_files(tmp_path)
     cache = tmp_path / "cache" / "x_logs.json"
     clock = _FakeClock()
@@ -2019,7 +1984,7 @@ def test_prompt_tier_prices_switches_only_over_the_threshold():
 
 def test_usage_cost_usd_prompt_one_token_over_the_threshold_takes_the_tier():
     # 100_001 tokens is "over 100,000": every rate moves to the tier.
-    with patch("accounting.model_pricing") as mock_pricing:
+    with patch("accounting.pricing.model_pricing") as mock_pricing:
         mock_pricing.return_value = dict(_HAIKU_5_5_PRICES)
         usage = {"input_tokens": 1_001, "output_tokens": 2_000,
                  "cache_read_input_tokens": 69_000,
@@ -2118,3 +2083,111 @@ def test_codex_summary_tiers_each_request_not_the_day(tmp_path):
     assert summary_for(150_000, 150_000)["costToday"] == pytest.approx(1.56)
     # 300_000*10 + 1_000*45 = 3_045_000 -> $3.045
     assert summary_for(300_000)["costToday"] == pytest.approx(3.045)
+
+
+# --- Parse-cache version discipline ---------------------------------------------------
+# The parse caches are keyed by *_PARSE_VERSION; an output-shape change without a bump
+# serves stale records forever. Each parser's output on a fixed fixture is hashed and pinned
+# next to its version.
+
+def _fingerprint(obj):
+    import hashlib
+    return hashlib.sha256(json.dumps(obj, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def _fixture_claude(tmp_path):
+    usage = {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 7,
+             "cache_creation_input_tokens": 3,
+             "cache_creation": {"ephemeral_5m_input_tokens": 1, "ephemeral_1h_input_tokens": 2}}
+    lines = [
+        {"type": "assistant", "timestamp": "2026-01-02T03:04:05Z", "uuid": "u1",
+         "requestId": "req1", "message": {"id": "msg1", "model": "claude-opus-4-8",
+                                          "stop_reason": "end_turn", "usage": usage,
+                                          "content": [{"type": "text", "text": "hello"}]}},
+        {"type": "assistant", "timestamp": "2026-01-02T03:04:06Z", "uuid": "u2",
+         "message": {"model": "claude-haiku-5-5", "usage": {"input_tokens": 4, "output_tokens": 1},
+                     "content": [{"type": "tool_use", "input": {"a": "bcdefgh"}}]}},
+        {"type": "user", "timestamp": "2026-01-02T03:04:07Z"},
+    ]
+    text = "\n".join(json.dumps(x) for x in lines) + "\n"
+    main = tmp_path / "p" / "s.jsonl"
+    sub = tmp_path / "p" / "s" / "subagents" / "a.jsonl"
+    for f in (main, sub):
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text, encoding="utf-8")
+    return main, sub
+
+
+def _fixture_codex(tmp_path):
+    t1 = {"input_tokens": 1000, "cached_input_tokens": 200, "output_tokens": 100,
+          "reasoning_output_tokens": 30, "total_tokens": 1100}
+    t2 = {"input_tokens": 3000, "cached_input_tokens": 500, "output_tokens": 300,
+          "reasoning_output_tokens": 50, "total_tokens": 3300}
+    lines = [json.dumps({"timestamp": "2026-01-02T03:04:05Z", "payload": {"model": "gpt-5-codex"}}),
+             _codex_tc(last=t1, total=t1), _codex_tc(last=t1, total=t1), _codex_tc(total=t2)]
+    f = tmp_path / "rollout.jsonl"
+    f.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return f
+
+
+def _fixture_grok(tmp_path):
+    ts = dt.datetime(2026, 1, 2, 3, 4, 5, tzinfo=dt.timezone.utc)
+    lines = [json.dumps({"ts": ts.isoformat(), "msg": "model changed", "sid": "s1",
+                         "ctx": {"model": "grok-build"}}),
+             _grok_done(ts, "s1", 5000, 1200, 400, reasoning=100)]
+    f = tmp_path / "unified.jsonl"
+    f.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return f
+
+
+def _fixture_gemini(tmp_path):
+    session = {"messages": [
+        {"type": "gemini", "timestamp": "2026-01-02T03:04:05Z", "model": "gemini-2.5-pro",
+         "tokens": {"input": 100, "output": 20, "cached": 10, "thoughts": 5, "tool": 3, "total": 138}},
+        {"type": "user", "timestamp": "2026-01-02T03:04:04Z"}]}
+    f = tmp_path / "session.json"
+    f.write_text(json.dumps(session), encoding="utf-8")
+    return f
+
+
+# (version, fingerprint of the parser's output on the fixture above)
+_PARSE_PINS = {
+    "claude": (5, "07501fee7c53456a"),
+    "codex": (3, "c78d70d4941f28c1"),
+    "grok": (3, "610763b0f302ac40"),
+    "gemini": (2, "08a92be3066fcd9c"),
+}
+
+
+def test_parse_cache_versions_track_output_shape(tmp_path):
+    from accounting import log_parsers as lp
+    main, sub = _fixture_claude(tmp_path)
+    got = {
+        "claude": (lp._CLAUDE_PARSE_VERSION,
+                   _fingerprint([lp._parse_claude_file(main), lp._parse_claude_file(sub)])),
+        "codex": (lp._CODEX_PARSE_VERSION, _fingerprint(lp._parse_codex_file(_fixture_codex(tmp_path)))),
+        "grok": (lp._GROK_PARSE_VERSION, _fingerprint(lp._parse_grok_file(_fixture_grok(tmp_path)))),
+        "gemini": (lp._GEMINI_PARSE_VERSION, _fingerprint(lp._parse_gemini_file(_fixture_gemini(tmp_path)))),
+    }
+    for name, pin in _PARSE_PINS.items():
+        assert got[name] == pin, (
+            f"{name} parser output (or its version) changed: now {got[name]}, pinned {pin}. "
+            f"If the record shape changed, bump _{name.upper()}_PARSE_VERSION in "
+            f"accounting/log_parsers.py, then repin _PARSE_PINS['{name}'] to the new pair.")
+
+
+@pytest.mark.parametrize("period_type", ["USAGE_PERIOD_TYPE_WEEKLY", "USAGE_PERIOD_TYPE_MONTHLY", ""])
+def test_grok_billing_label_is_never_flagged_as_extra_usage(period_type):
+    """parse_grok_billing_config avoids "credits"/"monthly"/"extra" in its labels because
+    enrich_ui_formatting turns those words into isExtraUsage (the on-demand dollar slot)."""
+    import parsers
+    event = {"ctx": {"config": {
+        "creditUsagePercent": 40.0,
+        "currentPeriod": {"type": period_type or None, "start": "2026-07-04T13:20:44+00:00",
+                          "end": "2026-07-11T13:20:44+00:00"}}}}
+    parsed = parsers.parse_grok_billing_config(event)
+    providers = {"grok": {"limits": parsed["limits"]}}
+    accounting.enrich_ui_formatting(providers)
+    row = providers["grok"]["limits"][0]
+    assert row["isExtraUsage"] is False, f"label {row['label']!r} reads as extra usage"
+    assert "formattedExtraUsageDetail" not in providers["grok"]

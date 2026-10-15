@@ -1,3 +1,4 @@
+import asyncio
 import datetime as dt
 import json
 from pathlib import Path
@@ -79,14 +80,12 @@ def test_sqlite_copy(tmp_path):
             assert tmp_path.exists()
             assert tmp_path.read_text() == "dummy db"
 
-            # Verify permissions
             stat = tmp_path.stat()
             assert stat.st_mode & 0o777 == 0o600
 
             copied = tmp_path
             tmp_dir = tmp_path.parent
 
-        # After the context exits the copy and its temp dir are gone.
         assert not copied.exists()
         assert not tmp_dir.exists()
     finally:
@@ -657,8 +656,7 @@ async def _build_snapshot_carry_forward(claude_status, cached_snapshot):
 
 @pytest.mark.asyncio
 async def test_build_snapshot_carries_forward_transient_claude_failure():
-    """D1: pins the carry-forward LOOP in build_snapshot (backend.py:1007), not just the
-    unit function. A transient claude 'api-error' with a fresh good cache => the resulting
+    """Pins the carry-forward LOOP in build_snapshot, not just the unit function. A transient claude 'api-error' with a fresh good cache => the resulting
     snapshot's claude entry is 'ok', carries the cached limits, and is marked stale."""
     good_limits = [{"label": "Session", "percent": 40}]
     cached = _cached_provider("Claude", good_limits, ts_offset=60.0)
@@ -806,7 +804,7 @@ async def test_build_snapshot_google_one_refetched_when_stale():
 
 @pytest.mark.asyncio
 async def test_build_snapshot_no_carry_forward_when_cache_too_old():
-    """D1 negative: a cache older than the 900s grace window must let the real error
+    """A cache older than the 900s grace window must let the real error
     surface (the loop's max_stale_seconds bound is live in build_snapshot)."""
     cached = _cached_provider("Claude", [{"label": "Session", "percent": 40}], ts_offset=1000.0)
     res = await _build_snapshot_carry_forward("api-error", cached)
@@ -816,13 +814,13 @@ async def test_build_snapshot_no_carry_forward_when_cache_too_old():
 
 
 def test_carry_forward_staleAsOf_survives_save_load_roundtrip(tmp_path, monkeypatch):
-    """D2: a carried-forward entry's stale/staleAsOf flags must survive the JSON
+    """A carried-forward entry's stale/staleAsOf flags must survive the JSON
     serialization seam (save_snapshot -> load_snapshot), so the widget can read them
     on a cold-start cache paint."""
     monkeypatch.setattr(backend, "SNAPSHOT_PATH", tmp_path / "last_snapshot.json")
     cached = _cached_provider("Claude", [{"label": "Session", "percent": 40}], ts_offset=60.0)
     failing = {"label": "Claude", "status": "api-error", "limits": []}
-    carried = backend.carry_forward_provider_last_good(failing, cached)
+    carried = backend.carry_forward_provider_last_good(failing, cached, "claude")
     assert carried["stale"] is True
 
     snapshot = {"timestamp": _iso(0.0), "ok": True, "providers": {"claude": carried}}
@@ -1159,11 +1157,11 @@ def _iso(offset_seconds: float = 0.0) -> str:
     return ts.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _cached_provider(label, limits, *, status="ok", ts_offset=0.0, extra=None):
+def _cached_provider(label, limits, *, status="ok", ts_offset=0.0, extra=None, key=None):
     entry = {"label": label, "status": status, "limits": limits}
     if extra:
         entry.update(extra)
-    return {"timestamp": _iso(ts_offset), "providers": {label.lower(): entry}}
+    return {"timestamp": _iso(ts_offset), "providers": {key or label.lower(): entry}}
 
 
 def test_carry_forward_transient_within_window_freezes_last_good():
@@ -1172,7 +1170,7 @@ def test_carry_forward_transient_within_window_freezes_last_good():
     good_limits = [{"label": "Session", "percent": 40}]
     cached = _cached_provider("Claude", good_limits, ts_offset=60.0)
     failing = {"label": "Claude", "status": "unauthorized", "limits": [], "message": "403"}
-    out = backend.carry_forward_provider_last_good(failing, cached)
+    out = backend.carry_forward_provider_last_good(failing, cached, "claude")
     assert out["status"] == "ok"
     assert out["limits"] == good_limits
     assert out["stale"] is True
@@ -1184,7 +1182,7 @@ def test_carry_forward_preserves_creditBalance_and_tier():
         "Claude", [{"label": "Session", "percent": 40}], ts_offset=30.0,
         extra={"tier": "Pro", "creditBalance": {"amount": 5.0}})
     failing = {"label": "Claude", "status": "api-error", "limits": []}
-    out = backend.carry_forward_provider_last_good(failing, cached)
+    out = backend.carry_forward_provider_last_good(failing, cached, "claude")
     assert out["tier"] == "Pro"
     assert out["creditBalance"] == {"amount": 5.0}
 
@@ -1194,7 +1192,7 @@ def test_carry_forward_beyond_window_surfaces_original_error():
     must surface after the grace window)."""
     cached = _cached_provider("Claude", [{"label": "Session", "percent": 40}], ts_offset=1000.0)
     failing = {"label": "Claude", "status": "unauthorized", "limits": []}
-    out = backend.carry_forward_provider_last_good(failing, cached, max_stale_seconds=900)
+    out = backend.carry_forward_provider_last_good(failing, cached, "claude", max_stale_seconds=900)
     assert out is failing
     assert out["status"] == "unauthorized"
 
@@ -1203,25 +1201,25 @@ def test_carry_forward_noop_for_non_transient_status():
     cached = _cached_provider("Claude", [{"label": "Session", "percent": 40}], ts_offset=10.0)
     for status in ("ok", "missing-cookies", "cookies-ready", "api-empty"):
         prov = {"label": "Claude", "status": status, "limits": []}
-        assert backend.carry_forward_provider_last_good(prov, cached) is prov
+        assert backend.carry_forward_provider_last_good(prov, cached, "claude") is prov
 
 
 def test_carry_forward_noop_when_provider_already_has_limits():
     cached = _cached_provider("Claude", [{"label": "Session", "percent": 40}], ts_offset=10.0)
     prov = {"label": "Claude", "status": "timeout", "limits": [{"label": "Session", "percent": 1}]}
-    assert backend.carry_forward_provider_last_good(prov, cached) is prov
+    assert backend.carry_forward_provider_last_good(prov, cached, "claude") is prov
 
 
 def test_carry_forward_noop_when_cache_missing_or_degraded():
     failing = {"label": "Claude", "status": "unauthorized", "limits": []}
     # No cache at all.
-    assert backend.carry_forward_provider_last_good(dict(failing), None)["status"] == "unauthorized"
+    assert backend.carry_forward_provider_last_good(dict(failing), None, "claude")["status"] == "unauthorized"
     # Cache present but the matching entry is itself degraded (no live status).
     degraded = _cached_provider("Claude", [], status="api-error", ts_offset=10.0)
-    assert backend.carry_forward_provider_last_good(dict(failing), degraded)["status"] == "unauthorized"
+    assert backend.carry_forward_provider_last_good(dict(failing), degraded, "claude")["status"] == "unauthorized"
     # Cache present but has no entry for this provider.
     other = _cached_provider("Gemini", [{"label": "Session", "percent": 5}], ts_offset=10.0)
-    assert backend.carry_forward_provider_last_good(dict(failing), other)["status"] == "unauthorized"
+    assert backend.carry_forward_provider_last_good(dict(failing), other, "claude")["status"] == "unauthorized"
 
 
 def test_carry_forward_staleAsOf_does_not_ratchet():
@@ -1238,13 +1236,13 @@ def test_carry_forward_staleAsOf_does_not_ratchet():
                                  "limits": [{"label": "Session", "percent": 40}]}},
     }
     failing = {"label": "Claude", "status": "unauthorized", "limits": []}
-    carried1 = backend.carry_forward_provider_last_good(dict(failing), cached1)
+    carried1 = backend.carry_forward_provider_last_good(dict(failing), cached1, "claude")
     assert carried1["staleAsOf"] == original_ts
 
     # Run 2: the carried-forward entry becomes the cache, but with a FRESH top-level timestamp
     # (as save_snapshot would stamp). staleAsOf must ride through unchanged.
     cached2 = {"timestamp": _iso(0.0), "providers": {"claude": carried1}}
-    carried2 = backend.carry_forward_provider_last_good(dict(failing), cached2)
+    carried2 = backend.carry_forward_provider_last_good(dict(failing), cached2, "claude")
     assert carried2["staleAsOf"] == original_ts  # NOT reset to the fresh cache timestamp
 
     # Now push the original past the window: even with a brand-new cache timestamp, age is
@@ -1253,14 +1251,13 @@ def test_carry_forward_staleAsOf_does_not_ratchet():
     carried_expired = dict(carried1)
     carried_expired["staleAsOf"] = expired_origin
     cached3 = {"timestamp": _iso(0.0), "providers": {"claude": carried_expired}}
-    out = backend.carry_forward_provider_last_good(dict(failing), cached3, max_stale_seconds=900)
+    out = backend.carry_forward_provider_last_good(dict(failing), cached3, "claude", max_stale_seconds=900)
     assert out["status"] == "unauthorized"  # window expired off the original fetch time
 
 
 # --- diagnostics.timings -----------------------------------------------------------
 # The refresh is a one-shot on a 5-minute timer; a phase that quietly grows costs battery
-# and disk on every tick with nothing in the snapshot to show it. That is how the
-# 2026-06-07 cost-scan regression stayed invisible until it started tripping the deadline.
+# and disk on every tick with nothing in the snapshot to show it.
 
 @pytest.mark.asyncio
 async def test_build_snapshot_reports_phase_timings():
@@ -1302,7 +1299,7 @@ def test_carry_forward_drops_cached_cost_summary():
     cached = _cached_provider("Claude", [{"label": "Session", "percent": 40}], ts_offset=60.0,
                               extra={"costSummary": {"cost30d": 1.0}, "creditBalance": {"amount": 5}})
     failing = {"label": "Claude", "status": "unauthorized", "limits": [], "message": "403"}
-    out = backend.carry_forward_provider_last_good(failing, cached)
+    out = backend.carry_forward_provider_last_good(failing, cached, "claude")
     assert out["stale"] is True
     assert "costSummary" not in out
     assert out["creditBalance"] == {"amount": 5}   # network data IS carried
@@ -1501,7 +1498,7 @@ async def test_grok_bot_runs_with_the_background_flag():
 @pytest.mark.asyncio
 async def test_grok_bot_transient_failure_carries_the_last_good_bar():
     good = [{"label": "Weekly", "percent": 30.0}]
-    cached = _cached_provider("Grok Bot", good, ts_offset=60.0)
+    cached = _cached_provider("Grok Bot", good, ts_offset=60.0, key="grokbot")
     failing = {"label": "Grok Bot", "status": "api-error", "limits": [], "message": "HTTP 503"}
     res, _, _ = await _grokbot_snapshot(no_network=False, grok_bot_result=failing, cached=cached)
     gb = res["providers"]["grokbot"]
@@ -1630,3 +1627,48 @@ async def test_pre_upgrade_price_cache_is_refetched_at_once():
              patch("pricing_data.refresh_pricing", record_refresh):
             await backend.build_snapshot(args)
         assert bool(refreshed) is expect_refresh, version
+
+
+@pytest.mark.asyncio
+async def test_build_snapshot_starts_the_cost_scan_before_the_provider_fetches():
+    """The overlap contract: the cost scan is launched at the top of build_snapshot, so it is
+    already running when the first provider fetch begins (a scan launched after the provider
+    group, or only after the awaits, would serialize the two)."""
+    import threading
+    cost_started = threading.Event()
+    seen = {}
+
+    def spy_compute(deadline=None):
+        cost_started.set()
+        return {}
+
+    async def fast_threaded(func, *a, **k):
+        return {"status": "ok", "limits": []}
+
+    async def fake_codex_rpc(timeout):
+        # First provider fetch: the scan must get going without waiting for this to finish.
+        for _ in range(100):
+            if cost_started.is_set():
+                break
+            await asyncio.sleep(0.01)
+        seen["started_before_provider_done"] = cost_started.is_set()
+        return {"status": "ok", "label": "Codex", "limits": []}
+
+    async def fake_claude(cookies, timeout, prev=None):
+        return {"status": "ok", "limits": []}
+
+    async def noop_pricing(*a, **k):
+        return
+
+    args = MagicMock()
+    args.no_network = False
+    args.timeout = 0.5
+    with patch("backend.load_config", return_value={}), \
+         patch("backend.collect_browser_sessions", return_value=([], {})), \
+         patch("backend.run_threaded_provider", side_effect=fast_threaded), \
+         patch("backend.run_codex_rpc", side_effect=fake_codex_rpc), \
+         patch("backend.run_claude_api", side_effect=fake_claude), \
+         patch("backend.compute_local_cost_summaries", side_effect=spy_compute), \
+         patch("pricing_data.refresh_pricing", noop_pricing):
+        await backend.build_snapshot(args)
+    assert seen.get("started_before_provider_done") is True

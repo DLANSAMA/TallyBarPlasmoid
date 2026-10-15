@@ -1,10 +1,7 @@
-"""Provider-specific API callers and data acquisition logic.
-
-Each provider (Gemini, Claude, Codex/OpenAI, Antigravity) has its own fetch
-path that returns a normalised provider dict suitable for the QML UI.
-"""
+"""Antigravity provider: local language server, Cloud Code API and token-ledger capture."""
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import glob
 import json
@@ -27,38 +24,24 @@ from accounting import (
     now_iso,
 )
 from http_helpers import scrub_credentials
-from io_helpers import atomic_write_text
+from io_helpers import atomic_write_text, clamp_to_deadline, deadline_passed
 from parsers import (
     parse_antigravity_limits,
     parse_antigravity_quota_summary,
 )
 
 
-# Hosts that receive an Authorization: Bearer header or the OAuth refresh-token body. A 3xx
-# from any of these is treated as an attack/misconfig, never followed.
-# NOTE: kept only for the test monkeypatch seam and documentation; the actual gate lives in
-# _is_credentialed_google_host, which also matches channel-prefixed Cloud Code hosts (see below).
+# Host suffixes that receive an Authorization: Bearer header or the OAuth refresh-token body.
+# A 3xx from any matching host is treated as an attack/misconfig, never followed. The match is
+# a plain endswith, so the channel-prefixed Cloud Code hosts (daily-cloudcode-pa, ...) are
+# covered; over-blocking only turns a redirect into an HTTPError.
 _CREDENTIALED_GOOGLE_HOSTS = ("oauth2.googleapis.com", "cloudcode-pa.googleapis.com")
 
 
 def _is_credentialed_google_host(host: str) -> bool:
-    """True for any host that receives Google OAuth/Cloud-Code credentials and must never
-    have a 3xx followed (the redirect would copy the Bearer header / refresh-token body
-    cross-origin). Matches ``oauth2.googleapis.com`` (exact or dot-suffix) and ANY host
-    ending ``cloudcode-pa.googleapis.com`` — a plain endswith (no dot boundary) so the
-    channel-prefixed live hosts ``daily-cloudcode-pa`` / ``autopush-cloudcode-pa`` /
-    ``staging-cloudcode-pa`` are covered (antigravity_cloudcode_host() returns e.g.
-    ``daily-cloudcode-pa.googleapis.com`` on this machine — the char before ``cloudcode``
-    is ``-``, not ``.``, so the old dot-suffix gate missed it). Over-blocking is fail-safe:
-    a wrongly refused redirect just raises HTTPError into the existing scrubbed handling.
-    Any hosts monkeypatched into _CREDENTIALED_GOOGLE_HOSTS (tests) are also honoured."""
-    if not host:
-        return False
-    if host == "oauth2.googleapis.com" or host.endswith(".oauth2.googleapis.com"):
-        return True
-    if host.endswith("cloudcode-pa.googleapis.com"):
-        return True
-    return any(host == h or host.endswith("." + h) for h in _CREDENTIALED_GOOGLE_HOSTS)
+    """True for a host that receives Google OAuth/Cloud-Code credentials, so a 3xx from it
+    must not be followed (the redirect would copy the credential cross-origin)."""
+    return bool(host) and host.endswith(_CREDENTIALED_GOOGLE_HOSTS)
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -91,12 +74,8 @@ urllib.request.install_opener(_NO_REDIRECT_OPENER)
 
 ANTIGRAVITY_MODEL_LABELS = ("Gemini", "Others")
 ANTIGRAVITY_REMOTE_BASE_URL = "https://cloudcode-pa.googleapis.com"
-# agy's Cloud Code host varies by build channel — this machine's agy hits the DAILY host, and
-# prod vs daily return DIFFERENT quota numbers, so we must call whichever host agy uses or the
-# percentages won't match /usage. The host isn't in any config (it's baked into the agy binary),
-# so antigravity_cloudcode_host() detects it from agy's own request logs, defaulting to prod.
 ANTIGRAVITY_CLOUDCODE_LOG_DIR = Path.home() / ".gemini" / "antigravity-cli" / "log"
-# agy CSRF tokens recovered from the commands agy runs, keyed by agy pid (see _find_agy_csrf_token).
+# agy CSRF tokens recovered from the commands agy runs, keyed by agy pid + process start time (see _find_agy_csrf_token).
 ANTIGRAVITY_CLI_SESSIONS_PATH = Path.home() / ".tallybar" / "antigravity" / "cli_sessions.json"
 _ANTIGRAVITY_CLOUDCODE_HOST_RE = re.compile(r"https://([A-Za-z0-9.-]*cloudcode-pa\.googleapis\.com)")
 ANTIGRAVITY_BINARY_SCAN_CHUNK_BYTES = 10 * 1024 * 1024  # 10 MiB window when scanning the language-server binary for OAuth client pairs
@@ -104,9 +83,6 @@ ANTIGRAVITY_BINARY_SCAN_OVERLAP_BYTES = 1024  # carry-over so an OAuth id/secret
 
 
 
-# ---------------------------------------------------------------------------
-# Antigravity local language server
-# ---------------------------------------------------------------------------
 
 def _parse_language_server_cmdline(cmd_str: str, args: list[str]) -> tuple[str, str] | None:
     """If a process cmdline is an Antigravity language server, return its (csrf_token, scheme)."""
@@ -286,11 +262,10 @@ def _scan_antigravity_processes() -> list[tuple[int, str, str]]:
 
     There can be more than one — the standalone Desktop app and the IDE each spawn their own
     language server with its own loaded conversations and its own CSRF token, and every running
-    Antigravity CLI (``agy``) serves the same API in-process (token-less). Querying all of them
+    Antigravity CLI (``agy``) serves the same API in-process. Querying all of them
     is what lets token capture cover every surface, not just whichever process is found first.
     Real language servers sort before agy processes so account-level calls that take the first
-    process keep preferring the Desktop/IDE server when one is up, then token-less entries
-    last. Only the current user's processes are considered (``_owned_by_current_user``).
+    process keep preferring the Desktop/IDE server when one is up. Only the current user's processes are considered (``_owned_by_current_user``).
     """
     found: dict[int, tuple[int, str, str]] = {}
     agy_pids: set[int] = set()
@@ -374,7 +349,6 @@ def antigravity_ports(pid: int) -> tuple[list[int], str]:
         pass
 
     lsof_error = ""
-    # Fallback to lsof
     lsof = shutil.which("lsof")
     if lsof:
         try:
@@ -419,7 +393,7 @@ def antigravity_ports_from_proc(pid: int) -> list[int]:
     for proc_file in (f"/proc/{pid}/net/tcp", f"/proc/{pid}/net/tcp6"):
         try:
             with open(proc_file, "r", encoding="ascii") as handle:
-                next(handle, None)  # header
+                next(handle, None)
                 for line in handle:
                     parts = line.split()
                     if len(parts) < 10:
@@ -457,7 +431,7 @@ def post_local_json(url: str, token: str, timeout: float) -> tuple[int, Any]:
         "Connect-Protocol-Version": "1",
     }
     if token:
-        headers["X-Codeium-Csrf-Token"] = token  # agy's in-process server is token-less
+        headers["X-Codeium-Csrf-Token"] = token
     request = urllib.request.Request(url, data=body, method="POST", headers=headers)
     context = ssl.create_default_context()
     if url.startswith("https://127.0.0.1") or url.startswith("https://localhost"):
@@ -484,7 +458,6 @@ _LS_RPC_METADATA = {
 
 
 def _as_int(value: Any) -> int:
-    # The RPC reports token counts as strings ("24078"); coerce safely.
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -544,7 +517,7 @@ def _post_local_rpc(url: str, token: str, body: dict[str, Any], timeout: float) 
         "Connect-Protocol-Version": "1",
     }
     if token:
-        headers["X-Codeium-Csrf-Token"] = token  # agy's in-process server is token-less
+        headers["X-Codeium-Csrf-Token"] = token
     request = urllib.request.Request(
         url,
         data=json.dumps(body).encode("utf-8"),
@@ -560,12 +533,27 @@ def _post_local_rpc(url: str, token: str, body: dict[str, Any], timeout: float) 
         return int(response.status), json.loads(text)
 
 
+@dataclasses.dataclass
+class RpcHarvest:
+    """What ``collect_antigravity_rpc_usage`` found.
+
+    ``usage``: ``{cascadeId: [{stepKey, u, c, o, model_placeholder, api_provider, date}, ...]}``,
+    merged across every running language server (Desktop + IDE each own a disjoint set).
+    ``marks``: ``{cascadeId: lastModifiedTime}`` for every cascade successfully queried this run.
+    ``learned_names``: every ``MODEL_PLACEHOLDER_M<N>`` -> displayName pair the
+    ``GetAvailableModels`` call(s) returned, i.e. the exact picker names for every model
+    CURRENTLY on offer, not just ones with usage this run.
+    """
+    usage: dict[str, list[dict[str, Any]]] = dataclasses.field(default_factory=dict)
+    marks: dict[str, str] = dataclasses.field(default_factory=dict)
+    learned_names: dict[str, str] = dataclasses.field(default_factory=dict)
+
+
 def collect_antigravity_rpc_usage(
     timeout: float,
     known: "dict[str, str] | None" = None,
     deadline: "float | None" = None,
-    learned_names: "dict[str, str] | None" = None,
-) -> "tuple[dict[str, list[dict[str, Any]]], dict[str, str]]":
+) -> RpcHarvest:
     """Harvest per-generation token usage from the local Antigravity language server.
 
     This is the authoritative, format-stable source for Antigravity token telemetry: it reads
@@ -577,47 +565,28 @@ def collect_antigravity_rpc_usage(
     (``inputTokens`` / ``cacheReadTokens`` / ``outputTokens``) plus ``apiProvider`` and a
     ``MODEL_PLACEHOLDER_M<N>`` model id, so every generation is attributed to its real model.
 
-    Returns ``(usage, marks)`` where ``usage`` is ``{cascadeId: [{stepKey, u, c, o,
-    model_placeholder, api_provider, date}, ...]}`` (merged across every running language server —
-    Desktop + IDE each own a disjoint set) and ``marks`` is ``{cascadeId: lastModifiedTime}`` for
-    every cascade that was successfully queried this run (the caller persists these as watermarks so
-    unchanged cascades are skipped on the next refresh — see ``rpcWatermarks`` in the ledger).
+    Returns an ``RpcHarvest``. Its ``marks`` are persisted by the caller as watermarks so
+    unchanged cascades are skipped on the next refresh (see ``rpcWatermarks`` in the ledger).
 
-    **Incremental harvest contract:**
-    - ``known``: cascadeId → previously persisted ``lastModifiedTime``.  When the listed
-      ``lastModifiedTime`` matches the known value (exact equality, not ordering — equality makes a
-      clock regression on LS restart a harmless re-query rather than a silent permanent skip), the
-      metadata call is skipped and the mark is re-confirmed in ``marks``.  A missing or empty
-      ``lastModifiedTime`` always triggers a query (can't tell if it changed).
-    - Watermarks are set ONLY on a successful metadata response (status 200, dict body) — including
-      zero-usage conversations (so they stop being re-queried).  An exception, non-200, or deadline
-      skip leaves the cascade unmarked, so it will be retried on the next refresh rather than
-      having its generations silently lost.
-    - ``deadline``: wall-clock ``time.time()`` deadline for the whole harvest.  Checked before each
-      LS, each port probe, and each per-cascade metadata call; on expiry the function returns what
-      was harvested so far (partial result is fine — the persistent ledger + watermarks resume on
-      the next refresh, providing a self-healing ratchet: already-queried cascades leave the work
-      set regardless of iteration order).
+    Incremental: ``known`` (cascadeId → persisted ``lastModifiedTime``) skips unchanged cascades by
+    exact equality; a mark is set only on a successful metadata response; ``deadline`` (wall clock)
+    returns the partial harvest. → tests/test_rpc_watermarks.py
 
     Best-effort: any failure (LS not running, no port, RPC error) is skipped, so an empty result
     simply means the caller falls back to the on-disk scan.  Only conversations currently loaded in
     LS memory are returned (not the full on-disk history) — the persistent ledger keeps them after
     they unload.
 
-    ``learned_names``: optional output param (an existing dict this call MERGES into, not
-    returned — this keeps the function's return shape 2-tuple-compatible with the many existing
-    callers/mocks that unpack it as ``usage, marks``). When provided, populated with every
-    ``MODEL_PLACEHOLDER_M<N>`` -> displayName pair this run's ``GetAvailableModels`` call(s)
-    returned, across every language server queried — i.e. the exact picker names for every model
-    CURRENTLY on offer, not just ones with usage this run. The caller persists these so a model's
-    real name, once seen from a live language server, is remembered even after Antigravity closes
-    and heals any disk-scan entry whose enum isn't in the static ``_MODEL_ENUM_NAMES`` table yet.
+    The caller persists ``learned_names`` so a model's real name, once seen from a live language
+    server, is remembered even after Antigravity closes and heals any disk-scan entry whose enum
+    isn't in the static ``_MODEL_ENUM_NAMES`` table yet.
     """
     known = known or {}
     out: dict[str, list[dict[str, Any]]] = {}
     marks: dict[str, str] = {}
+    learned: dict[str, str] = {}
     for pid, token, scheme in find_antigravity_processes():
-        if deadline is not None and time.time() >= deadline:
+        if deadline_passed(deadline, inclusive=True):
             break
         ports, _ = antigravity_ports(pid)
         if not ports:
@@ -626,12 +595,10 @@ def collect_antigravity_rpc_usage(
         base = None
         summaries: Any = {}
         for port in ports:
-            if deadline is not None and time.time() >= deadline:
+            if deadline_passed(deadline, inclusive=True):
                 break
             for s in schemes:
-                per_call = min(timeout, 3.0)
-                if deadline is not None:
-                    per_call = max(0.1, min(per_call, deadline - time.time()))
+                per_call = clamp_to_deadline(min(timeout, 3.0), deadline)
                 try:
                     status, data = _post_local_rpc(
                         f"{s}://127.0.0.1:{port}{_LS_RPC_BASE}/GetAllCascadeTrajectories",
@@ -654,9 +621,7 @@ def collect_antigravity_rpc_usage(
         # has never seen. Best-effort: on failure records fall back to the enum map.
         display_names: dict[str, str] = {}
         try:
-            per_call = min(timeout, 3.0)
-            if deadline is not None:
-                per_call = max(0.1, min(per_call, deadline - time.time()))
+            per_call = clamp_to_deadline(min(timeout, 3.0), deadline)
             status, data = _post_local_rpc(
                 f"{base}{_LS_RPC_BASE}/GetAvailableModels", token, _LS_RPC_METADATA, per_call,
             )
@@ -668,22 +633,17 @@ def collect_antigravity_rpc_usage(
                         display_names[mid] = dn
         except Exception:
             display_names = {}
-        if learned_names is not None:
-            learned_names.update(display_names)
+        learned.update(display_names)
         for cascade_id, summary in summaries.items():
             if cascade_id in out:
-                continue  # already harvested from another language server
-            if deadline is not None and time.time() >= deadline:
+                continue
+            if deadline_passed(deadline, inclusive=True):
                 break
             lmt = str((summary.get("lastModifiedTime") if isinstance(summary, dict) else None) or "")
-            # Incremental skip: if we know this cascade and its lastModifiedTime hasn't changed,
-            # re-confirm the watermark without issuing a metadata call.
             if lmt and known.get(cascade_id) == lmt:
                 marks[cascade_id] = lmt
                 continue
-            per_call = min(timeout, 3.0)
-            if deadline is not None:
-                per_call = max(0.1, min(per_call, deadline - time.time()))
+            per_call = clamp_to_deadline(min(timeout, 3.0), deadline)
             try:
                 status, data = _post_local_rpc(
                     f"{base}{_LS_RPC_BASE}/GetCascadeTrajectoryGeneratorMetadata",
@@ -696,24 +656,19 @@ def collect_antigravity_rpc_usage(
             records: list[dict[str, Any]] = []
             for gen_index, gen in enumerate(data.get("generatorMetadata") or []):
                 if not isinstance(gen, dict):
-                    continue  # skip a malformed RPC item instead of aborting the whole harvest
+                    continue
                 try:
                     chat = gen.get("chatModel") or {}
                     usage = chat.get("usage") or {}
                     if not usage:
                         continue
                     step_indices = gen.get("stepIndices") or []
-                    # Per-generation ledger key (`<cascadeId>#<stepKey>`) must be STABLE across
-                    # polls and unique within the conversation. stepIndices[0] is both when present.
-                    # When it's absent, fall back to the generation's position in the list —
-                    # NOT len(records): that counted only usage-bearing siblings, so it shifted
-                    # across polls (double-count) and could equal a real stepIndices[0] (collision
-                    # → the gen silently dropped as "already seen"). Prefix "g" so the positional
-                    # key can never collide with a real integer stepIndices[0] key.
+                    # Ledger key `<cascadeId>#<stepKey>` must be stable across polls: stepIndices[0],
+                    # else `g<gen_index>` (the "g" can't collide with an integer).
+                    # → tests/test_rpc_watermarks.py::test_generation_keys_are_stable_when_a_usageless_generation_appears
                     step_key = str(int(step_indices[0])) if step_indices else f"g{gen_index}"
-                    # createdAt lives at chatModel.chatStartMetadata.createdAt (NOT on `gen`
-                    # directly — an earlier path read `gen.chatStartMetadata` and always got
-                    # "", so every generation fell back to today). It's a UTC instant; localise.
+                    # createdAt lives at chatModel.chatStartMetadata.createdAt (not on `gen`).
+                    # It's a UTC instant; localise.
                     created_raw = str((chat.get("chatStartMetadata") or {}).get("createdAt") or "")
                     created = _rpc_local_date(created_raw)
                     placeholder = usage.get("model") or ""
@@ -737,7 +692,7 @@ def collect_antigravity_rpc_usage(
             # Watermark only on success (including zero-usage conversations: marks them so they
             # stop being re-queried each refresh until they actually change).
             marks[cascade_id] = lmt
-    return out, marks
+    return RpcHarvest(out, marks, learned)
 
 
 def normalized_antigravity_lanes(limits: list[dict[str, Any]], include_missing: bool = False) -> list[dict[str, Any]]:
@@ -803,10 +758,6 @@ def choose_antigravity_result(
     return result
 
 
-
-# ---------------------------------------------------------------------------
-# Antigravity OAuth
-# ---------------------------------------------------------------------------
 
 def antigravity_oauth_credentials_path() -> Path:
     return Path.home() / ".tallybar" / "antigravity" / "oauth_creds.json"
@@ -886,10 +837,6 @@ def save_antigravity_credentials(path: Path, raw_data: dict[str, Any], credentia
         data = raw_data
     else:
         data = credentials
-    # Atomic 0600 write via the shared io_helpers recipe: unique 0600 mkstemp (no
-    # world/group-readable window for the OAuth credentials), fsync + dir-fsync so a
-    # torn write can't 0-byte the token file, parent chmod'd 0700 (dir listing would
-    # leak "this user authed Antigravity, last refreshed at T"), temp unlinked on failure.
     payload = json.dumps(data, indent=2, sort_keys=True)
     # Resolve through any symlink before the atomic os.replace: ~/.tallybar/antigravity/
     # oauth_creds.json is a symlink -> ~/.gemini/oauth_creds.json on live machines, and
@@ -1060,7 +1007,7 @@ def antigravity_cloudcode_host() -> str:
             continue
         hosts = _ANTIGRAVITY_CLOUDCODE_HOST_RE.findall(text)
         if hosts:
-            return hosts[-1]  # most recent occurrence
+            return hosts[-1]
     return default
 
 
@@ -1175,8 +1122,6 @@ def run_antigravity_remote_with_credentials(
             "pluginType": "GEMINI",
         }
     }
-    # Match agy's Cloud Code host (prod vs daily) for EVERY call — the token is the agy CLI token and
-    # the quota numbers are host-specific, so a mismatched host yields wrong percentages.
     base_url = f"https://{antigravity_cloudcode_host()}"
     status, code_assist = antigravity_bearer_json("/v1internal:loadCodeAssist", access_token, metadata, timeout, base_url=base_url)
     if status == 401:
@@ -1335,8 +1280,6 @@ def apply_google_one_credits(antigravity: dict[str, Any], google_one: dict[str, 
     """
     if not isinstance(antigravity, dict):
         return
-    # Drop the misleading plan-status monthly credit-pool bar regardless of the
-    # Google One result — the numbers behind it are the wrong metric.
     lanes = antigravity.get("limits")
     if isinstance(lanes, list):
         antigravity["limits"] = [
@@ -1348,7 +1291,6 @@ def apply_google_one_credits(antigravity: dict[str, Any], google_one: dict[str, 
     if isinstance(balance, dict):
         antigravity["creditBalance"] = balance
         return
-    # No Google One balance available: don't keep showing the wrong prompt/flow figure.
     existing = antigravity.get("creditBalance")
     if isinstance(existing, dict) and existing.get("source") == "antigravity-plan-status":
         antigravity.pop("creditBalance", None)

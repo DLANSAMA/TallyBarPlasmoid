@@ -15,8 +15,6 @@ from unittest.mock import patch
 
 import pytest
 
-# Mirror the existing tests: prepend the backend code dir so `import providers` works
-# the same way Plasma runs the script from that directory.
 sys.path.insert(0, str(Path(__file__).parent.parent / "io.github.dlansama.tallybar" / "contents" / "code"))
 
 import providers  # noqa: E402
@@ -37,13 +35,9 @@ def _cookie(host: str, name: str = "sess", value: str = "abc") -> BrowserCookie:
     )
 
 
-# ---------------------------------------------------------------------------
-# run_openai_cookie_api (providers/codex.py)
-# ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_openai_cookie_api_missing_cookies():
-    # No chatgpt.com/openai.com cookie -> missing_cookie_provider shape.
     res = await providers.codex.run_openai_cookie_api([_cookie("claude.ai")], timeout=1.0)
     assert res["status"] == "missing-cookies"
     assert res["label"] == "Codex"
@@ -52,7 +46,6 @@ async def test_openai_cookie_api_missing_cookies():
 
 @pytest.mark.asyncio
 async def test_openai_cookie_api_success():
-    # A usage payload extract_limits_from_json can read: usagePercent -> a limit row.
     usage = {"primary": {"usagePercent": 42, "reset": "in 3 hours"}}
     with patch("providers.codex.http_json_async", return_value=(200, usage)):
         res = await providers.codex.run_openai_cookie_api([_cookie("chatgpt.com")], timeout=1.0)
@@ -63,7 +56,6 @@ async def test_openai_cookie_api_success():
 
 @pytest.mark.asyncio
 async def test_openai_cookie_api_empty():
-    # 200 but no recognizable limits -> api-empty.
     with patch("providers.codex.http_json_async", return_value=(200, {"unrelated": True})):
         res = await providers.codex.run_openai_cookie_api([_cookie("openai.com")], timeout=1.0)
     assert res["status"] == "api-empty"
@@ -86,13 +78,9 @@ async def test_openai_cookie_api_server_error():
     assert "500" in res["message"]
 
 
-# ---------------------------------------------------------------------------
-# run_codex_rpc (providers/codex.py)
-# ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_codex_rpc_missing_cli():
-    # Patch shutil.which (used inside providers.codex) to report no codex binary.
     with patch("providers.codex.shutil.which", return_value=None):
         res = await providers.codex.run_codex_rpc(timeout=1.0)
     assert res["status"] == "missing-cli"
@@ -103,7 +91,7 @@ async def test_codex_rpc_missing_cli():
 class _FakeRpcChild:
     """Stand-in for JsonRpcChild: the handshake is a no-op and account/rateLimits/read
     returns a canned result, so run_codex_rpc's success mapping can be driven without a
-    real codex subprocess (previously only the missing-CLI path was tested)."""
+    real codex subprocess."""
     def __init__(self, rate_limits_result):
         self._result = rate_limits_result
         self.terminated = False
@@ -166,9 +154,7 @@ async def test_codex_rpc_empty_rate_limits_is_api_empty():
 
 class _FakeRpcChildRpcError:
     """Stand-in for JsonRpcChild whose account/rateLimits/read reply is a JSON-RPC
-    error shape ({"error": {...}}) rather than a result — regression test for the
-    'error' field never being inspected (a real app-server error was silently
-    reported as status "api-empty")."""
+    error shape ({"error": {...}}) rather than a result."""
     def __init__(self, error):
         self._error = error
         self.terminated = False
@@ -220,9 +206,6 @@ async def test_codex_rpc_error_shape_unauthenticated_maps_to_unauthorized():
     assert child.terminated is True
 
 
-# ---------------------------------------------------------------------------
-# run_claude_api (providers/claude.py)
-# ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_claude_api_missing_cookies():
@@ -274,7 +257,6 @@ async def test_claude_api_empty_when_no_usage():
 
 @pytest.mark.asyncio
 async def test_claude_api_unauthorized():
-    # The first /organizations call is rejected -> unauthorized, no further calls.
     with patch("providers.claude.http_json_async", return_value=(403, {})):
         res = await providers.claude.run_claude_api([_cookie("claude.ai")], timeout=1.0)
     assert res["status"] == "unauthorized"
@@ -282,7 +264,6 @@ async def test_claude_api_unauthorized():
 
 
 def test_claude_tier_from_credentials_valid(tmp_path, monkeypatch):
-    # subscriptionType "max" maps through normalize_tier -> "Max" (same as the API path).
     creds = tmp_path / ".claude" / ".credentials.json"
     creds.parent.mkdir(parents=True)
     creds.write_text(json.dumps({"claudeAiOauth": {"subscriptionType": "max",
@@ -292,7 +273,6 @@ def test_claude_tier_from_credentials_valid(tmp_path, monkeypatch):
 
 
 def test_claude_tier_from_credentials_rate_limit_fallback(tmp_path, monkeypatch):
-    # subscriptionType missing -> fall back to rateLimitTier ("default_claude_max_20x" -> "Max").
     creds = tmp_path / ".claude" / ".credentials.json"
     creds.parent.mkdir(parents=True)
     creds.write_text(json.dumps({"claudeAiOauth": {"rateLimitTier": "default_claude_max_20x"}}))
@@ -429,7 +409,7 @@ async def test_claude_api_throttles_credit_calls_when_prev_fresh():
         res = await providers.claude.run_claude_api([_cookie("claude.ai")], timeout=1.0, prev=prev)
 
     assert res["status"] == "ok"
-    # D3: the warm path hits EXACTLY the org list + usage_summary — no credits/overage,
+    # The warm path hits EXACTLY the org list + usage_summary — no credits/overage,
     # and no /usage fallback (usage_summary produced a limit). An EXACT-set assertion
     # (not just "credits not in seen") catches any newly-added call regressing the throttle.
     assert seen == {"organizations", "usage_summary"}
@@ -489,7 +469,7 @@ async def test_claude_api_fetches_credit_calls_when_prev_none():
 
 @pytest.mark.asyncio
 async def test_claude_api_throttles_when_credit_balance_unparseable():
-    # A3: /prepaid/credits answers 200 but has NO parseable prepaid balance (the common
+    # /prepaid/credits answers 200 but has NO parseable prepaid balance (the common
     # case for accounts without prepaid credits). The first refresh must still stamp an
     # amount-less sentinel creditBalance carrying fetchedAt, so the SECOND refresh within
     # CREDIT_REFRESH_SECONDS skips the two slow GETs entirely — and after the window they fire.
@@ -545,9 +525,6 @@ async def test_claude_api_throttles_when_credit_balance_unparseable():
     assert "overage_spend_limit" in seen3
 
 
-# ---------------------------------------------------------------------------
-# run_gemini_web (providers/gemini.py)
-# ---------------------------------------------------------------------------
 
 def test_gemini_web_missing_cookies():
     res = providers.gemini.run_gemini_web([_cookie("claude.ai")], timeout=1.0)
@@ -556,8 +533,7 @@ def test_gemini_web_missing_cookies():
 
 
 def test_gemini_web_unauthorized():
-    # http_text returns (status, body); a 401 on the usage page -> unauthorized. Force the
-    # token cache empty so this hits the full-scrape path regardless of machine cache state.
+    # Empty token cache -> the full-scrape path.
     with patch("providers.gemini._load_gemini_tokens", return_value=None), \
          patch("providers.gemini.http_text", return_value=(401, "")):
         res = providers.gemini.run_gemini_web([_cookie("gemini.google.com")], timeout=1.0)
@@ -680,9 +656,6 @@ def test_gemini_web_full_flow_caches_then_fast_path(tmp_path, monkeypatch):
     assert warm["limits"] == limits
 
 
-# ---------------------------------------------------------------------------
-# run_google_one_credits (providers/gemini.py)
-# ---------------------------------------------------------------------------
 
 def test_google_one_credits_missing_cookies():
     # offline / no one.google.com cookies -> missing-cookies, no credit balance.
@@ -692,9 +665,7 @@ def test_google_one_credits_missing_cookies():
 
 
 def test_google_one_credits_empty_without_tokens():
-    # Cookies match, page loads 200 but without RPC tokens -> api-empty. Force the token
-    # cache empty so this deterministically exercises the full-scrape path regardless of any
-    # real ~/.tallybar cache on the dev machine.
+    # Cookies match, page loads 200 but without RPC tokens -> api-empty; empty token cache -> full-scrape path.
     with patch("providers.gemini._load_google_one_tokens", return_value=None), \
          patch("providers.gemini.http_text", return_value=(200, "<html></html>")):
         res = providers.gemini.run_google_one_credits([_cookie("one.google.com")], timeout=1.0)
@@ -778,9 +749,6 @@ def test_google_one_credits_full_flow_caches_then_fast_path(tmp_path, monkeypatc
     assert warm["creditBalance"]["amount"] == 42
 
 
-# ---------------------------------------------------------------------------
-# run_antigravity_local / run_antigravity_remote (providers/antigravity.py)
-# ---------------------------------------------------------------------------
 
 def test_antigravity_local_not_running():
     # No language-server process found -> not-running fallback (no /proc touched).
@@ -994,7 +962,7 @@ def test_antigravity_oauth_pairs_from_data():
 # ---------------------------------------------------------------------------
 
 def test_apply_google_one_credits_replaces_pool_and_sets_balance():
-    # [AUDIT-4a] With a Google One result carrying a creditBalance dict, the
+    # With a Google One result carrying a creditBalance dict, the
     # provider's creditBalance is overwritten from Google One and the
     # misleading "Monthly credit pool" lane is stripped from limits.
     antigravity = {
@@ -1026,7 +994,7 @@ def test_apply_google_one_credits_replaces_pool_and_sets_balance():
 
 
 def test_apply_google_one_credits_none_clears_plan_status_balance():
-    # [AUDIT-4b] Documented offline behaviour: when Google One could not be
+    # Documented offline behaviour: when Google One could not be
     # fetched (google_one is None), an existing plan-status creditBalance is
     # dropped rather than left showing the wrong prompt/flow figure — and the
     # "Monthly credit pool" lane is still removed.
@@ -1066,9 +1034,6 @@ def test_apply_google_one_credits_none_keeps_non_plan_status_balance():
     assert antigravity["limits"] == []
 
 
-# ---------------------------------------------------------------------------
-# run_grok_local (providers/grok.py)
-# ---------------------------------------------------------------------------
 
 def test_run_grok_local_not_running(tmp_path):
     from providers import grok as grok_mod
@@ -1246,9 +1211,6 @@ def test_grok_billing_period_follows_new_period_without_percent(tmp_path):
     assert end == dt.datetime.fromisoformat(new_end)
 
 
-# ---------------------------------------------------------------------------
-# grok_billing_period (providers/grok.py)
-# ---------------------------------------------------------------------------
 
 def _billing_event_line(start: str, end: str, percent: float = 91.0) -> str:
     """Build a single-line billing event in the real log format."""
@@ -1285,7 +1247,6 @@ def test_grok_billing_period_returns_aware_datetimes(tmp_path):
     start, end = result
     assert start.tzinfo is not None
     assert end.tzinfo is not None
-    # Times must match the ISO strings in the event.
     assert start == dt.datetime.fromisoformat(start_iso)
     assert end   == dt.datetime.fromisoformat(end_iso)
     assert start < end
@@ -1324,9 +1285,6 @@ def test_grok_billing_period_event_without_period_start(tmp_path):
     assert result is None
 
 
-# ---------------------------------------------------------------------------
-# compute_local_cost_summaries billing-week wiring (providers/cost.py)
-# ---------------------------------------------------------------------------
 
 def test_compute_local_cost_summaries_passes_billing_week_to_grok(tmp_path):
     """compute_local_cost_summaries passes the grok_billing_period start/end to
@@ -1369,10 +1327,8 @@ def test_compute_local_cost_summaries_grok_billing_period_exception_is_swallowed
          patch("accounting.local_codex_token_summary", return_value=None), \
          patch("accounting.local_gemini_token_summary", return_value=None), \
          patch("providers.cost.antigravity_ledger_cost_summary", return_value=None):
-        # Must not raise
         summaries = cost_mod.compute_local_cost_summaries()
 
-    # All summaries computed (all None here, but no exception).
     assert "grok" in summaries
 
 
@@ -1400,9 +1356,7 @@ def _grok_billing_log(tmp_path, ts_iso):
 
 def test_grok_fetched_at_is_the_capture_time_not_the_read_time(tmp_path):
     """The weekly bar is xAI's own number, but it only reaches the log when the CLI
-    runs — so its age is the last session's age, not our refresh's. Stamping
-    now_iso() claimed a freshness we never had (observed: 15.3h old while the UI
-    read "Updated just now")."""
+    runs — so its age is the last session's age, not our refresh's. Stamping now_iso() would claim a freshness we never had."""
     import datetime as dt
     from providers import grok as grok_mod
 
@@ -1439,8 +1393,6 @@ def test_grok_without_a_timestamp_falls_back_and_is_not_marked_stale(tmp_path):
     assert res["fetchedAt"]                 # falls back to now
     assert res.get("stale") is not True     # unknown age is not evidence of staleness
 
-
-# --- An ENDED billing period no longer shows last period's percentage ---
 
 def test_run_grok_local_zeroes_bar_after_period_ends(tmp_path):
     """The billing event is only logged when the grok CLI runs. After a quiet week the newest
@@ -2180,3 +2132,19 @@ def test_grok_bot_decrypts_with_the_chromium_safe_storage_password(tmp_path):
 def test_grok_bot_store_path_lives_under_config():
     # conftest rehomes it per test; the shape is what the app uses (Electron userData).
     assert grok_bot.GROK_BOT_SECRETS_PATH.parts[-3:] == (".config", "Grok Bot", "sand-secrets.json")
+
+
+@pytest.mark.parametrize("limits", [[{"label": "Session", "percent": 12.0, "unit": "%"}], []])
+def test_gemini_web_result_never_carries_a_tier(monkeypatch, limits):
+    """gemini.google.com never reports the subscription tier; it arrives only through
+    apply_cost_summaries' propagation from Antigravity's GetUserStatus."""
+    monkeypatch.setattr(providers.gemini, "_load_gemini_tokens", lambda: ("AT", "BL", "SID"))
+    monkeypatch.setattr(providers.gemini, "_save_gemini_tokens", lambda *a: None)
+    with patch("providers.gemini.http_text", return_value=(200, "<html></html>")), \
+         patch("providers.gemini.extract_embedded_config_value", return_value="X"), \
+         patch("providers.gemini.post_gemini_batchexecute", return_value=(200, "payload")), \
+         patch("providers.gemini.parse_batchexecute_payload", return_value={"tier": "Ultra", "_": 1}), \
+         patch("providers.gemini.parse_gemini_usage_info", return_value=limits):
+        res = providers.gemini.run_gemini_web([_cookie("gemini.google.com")], timeout=1.0)
+    assert res["status"] == ("ok" if limits else "api-empty")
+    assert "tier" not in res

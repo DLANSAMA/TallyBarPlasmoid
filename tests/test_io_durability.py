@@ -1,4 +1,4 @@
-"""Tests for the 2026-05-31 external-audit hardening: the shared fsync_dir helper,
+"""Tests for the shared fsync_dir helper,
 the atomic 0600 OAuth-credential write (mkstemp), and the Gemini in-fetch
 timeout classification."""
 
@@ -56,9 +56,8 @@ def test_gemini_is_timeout_exc():
 
 
 def test_no_duplicate_atomic_write_definitions():
-    # The fsync/atomic-write recipe must live ONLY in
-    # io_helpers — guard against a future re-introduction of a local copy in the
-    # writers. backend's _atomic_write_text must BE the shared helper, not a fork.
+    # backend's _atomic_write_text must BE the shared helper, not a fork.
+    # (os.fsync / mkstemp outside io_helpers: tests/test_enforced_rules.py)
     import accounting
     import backend
     import pricing_data
@@ -82,10 +81,8 @@ def test_atomic_write_text_perms_and_no_leftovers(tmp_path):
 
 @pytest.mark.asyncio
 async def test_to_daemon_thread_burst_runs_concurrently():
-    # Regression: a bounded worker pool once replaced thread-per-call and serialized a
-    # whole burst onto ONE worker whenever an idle worker already existed (its stale
-    # idle-count check never spawned a second) — 8 x 0.5s tasks took 4.0s, not 0.5s.
-    # In the backend that turns slow-but-healthy providers into spurious "timeout"s.
+    # A burst of 8 x 0.5s tasks must run concurrently (not serialize onto one worker), or
+    # slow-but-healthy providers turn into spurious "timeouts".
     import asyncio
     import threading
     import time

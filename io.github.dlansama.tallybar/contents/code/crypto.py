@@ -1,7 +1,4 @@
-"""OpenSSL EVP crypto primitives and KDE KWallet D-Bus client.
-
-These are low-level building blocks used by the cookie-decryption layer.
-"""
+"""OpenSSL EVP crypto primitives and KDE KWallet D-Bus client."""
 from __future__ import annotations
 
 import ctypes

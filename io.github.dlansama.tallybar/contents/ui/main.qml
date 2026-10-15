@@ -86,18 +86,13 @@ PlasmoidItem {
         return "'" + String(text).replace(/\0/g, "").replace(/'/g, "'\"'\"'") + "'";
     }
 
-    // The plasmoid ships no config/main.xml declaring a pythonPath key, so the interpreter
-    // is NOT user-configurable today -- it's fixed to the system python3 (3.11+ required;
-    // the backend relies on asyncio.TaskGroup/asyncio.timeout). Splicing a user-controlled
-    // value in here unquoted (unlike the shellQuote'd backend path below) would be a shell
-    // injection vector if this were ever wired up to real config, so don't reintroduce it
-    // without also shellQuote()-ing it.
+    // A constant, never built from config: it is spliced into the shell command unquoted.
+    // → tests/test_enforced_rules.py::test_python_exec_is_a_constant
     property string pythonExec: "/usr/bin/env python3"
     // Per-provider timeout handed to the backend (--timeout). The backend's refresh can take
     // up to backend.refresh_worst_case_seconds(timeout) = 3*timeout + 2 (38s at 12) plus
-    // interpreter startup, so the watchdog below must sit above that — at 25s it abandoned
-    // slow-but-healthy refreshes and dropped their result. tests/test_backend.py pins the
-    // relation (test_refresh_watchdog_covers_backend_worst_case).
+    // interpreter startup, so the watchdog below must sit above that.
+    // → tests/test_backend.py::test_refresh_watchdog_covers_backend_worst_case
     readonly property int backendTimeoutSeconds: 12
     readonly property int refreshWatchdogMs: 45000
 
@@ -252,7 +247,7 @@ PlasmoidItem {
 
     // A foreground refresh (no --background) so a locked KWallet pops its native
     // unlock dialog; the normal onNewData path paints full data once the user unlocks.
-    // Guarded by the same `loading` flag. The 25s refreshWatchdog may fire while the dialog
+    // Guarded by the same `loading` flag. The refreshWatchdog may fire while the dialog
     // is still up — that just re-enables the button (a fresh click retries), which is fine.
     function refreshForeground() {
         if (root.loading)
@@ -374,11 +369,8 @@ PlasmoidItem {
             if (root.lastError === "" && exitCode === 0) {
                 try {
                     const parsed = JSON.parse(stdout);
-                    // configSaving covers "a write is still in flight"; configWriteSeq covers
-                    // "a write started before this refresh but already completed mid-flight"
-                    // (configSaving alone misses that window — see configWriteSeq's
-                    // declaration above). Either way this refresh's own parsed.config was read
-                    // from disk before the write landed, so keep the newer in-memory one.
+                    // A write in flight or landed mid-refresh: this refresh's parsed.config
+                    // predates it, so keep the newer in-memory one.
                     const configWriteLandedMidRefresh = root.configWriteSeq !== root.configSeqAtRefreshStart;
                     if ((root.configSaving || configWriteLandedMidRefresh) && root.telemetry && root.telemetry.config) {
                         parsed.config = root.telemetry.config;
@@ -507,10 +499,6 @@ PlasmoidItem {
                     const parsed = JSON.parse(stdout);
                     if (parsed && parsed.config) {
                         root.telemetry = root.telemetryWithConfig(parsed.config);
-                        // Bump the write generation so a slower, already-in-flight refresh that
-                        // started before this write (and so is carrying a stale, pre-write
-                        // parsed.config) knows to preserve this newer config instead of
-                        // clobbering it once it lands — see configWriteSeq's declaration above.
                         root.configWriteSeq++;
                         // Re-sync after a config write too (the fetch paths already do):
                         // if the user just hid the SELECTED provider, this re-points
@@ -544,7 +532,6 @@ PlasmoidItem {
         vertical: Plasmoid.formFactor === PlasmaCore.Types.Vertical
         selectedProvider: root.selectedProvider
         telemetry: root.telemetry
-        tabs: root.activeProviders
         onToggleRequested: () => {
             root.expanded = !root.expanded;
         }

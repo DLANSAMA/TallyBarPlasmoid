@@ -52,7 +52,7 @@ def test_usage_split_anthropic_keeps_reads_and_writes_apart():
     usage = {"input_tokens": 1000, "output_tokens": 200, "cache_read_input_tokens": 5000,
              "cache_creation_input_tokens": 400,
              "cache_creation": {"ephemeral_1h_input_tokens": 100, "ephemeral_5m_input_tokens": 300}}
-    with patch("accounting.model_pricing", return_value=_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_PRICES):
         s = accounting.usage_split(usage, "claude-sonnet-4-5")
         assert s.cost == accounting.usage_cost_usd(usage, "claude-sonnet-4-5")
     assert s.tokens == 6600
@@ -66,7 +66,7 @@ def test_usage_split_openai_peels_cached_out_of_input():
     # Codex and Grok: cached ⊂ input, reasoning ⊂ output.
     usage = {"input_tokens": 10000, "cached_input_tokens": 4000, "output_tokens": 1000,
              "reasoning_output_tokens": 200, "total_tokens": 11000}
-    with patch("accounting.model_pricing", return_value=_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_PRICES):
         s = accounting.usage_split(usage, "gpt-5")
         assert s.cost == accounting.usage_cost_usd(usage, "gpt-5")
     assert s.tokens == 11000
@@ -78,7 +78,7 @@ def test_usage_split_gemini_adds_thoughts_and_tool():
     # Gemini: cached ⊂ input; thoughts bill as output and the tool-use prompt as input.
     usage = {"input": 10000, "output": 800, "cached": 3000, "thoughts": 200, "tool": 500,
              "total": 11500}
-    with patch("accounting.model_pricing", return_value=_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_PRICES):
         s = accounting.usage_split(usage, "gemini-3.5-flash")
         assert s.cost == accounting.usage_cost_usd(usage, "gemini-3.5-flash")
     assert s.type_tokens == (7500, 1000, 3000, 0)
@@ -97,7 +97,7 @@ def test_usage_split_prices_every_type_at_the_request_prompt_tier():
                    "cache_creation_input_tokens": 2000}
     short_prompt = {"input_tokens": 1000, "output_tokens": 100, "cache_read_input_tokens": 50_000,
                     "cache_creation_input_tokens": 2000}
-    with patch("accounting.model_pricing", return_value=tiered):
+    with patch("accounting.pricing.model_pricing", return_value=tiered):
         long_split = accounting.usage_split(long_prompt, "claude-haiku-5-5")
         short_split = accounting.usage_split(short_prompt, "claude-haiku-5-5")
         assert long_split.cost == accounting.usage_cost_usd(long_prompt, "claude-haiku-5-5")
@@ -112,7 +112,7 @@ def test_nested_cache_writes_bill_but_do_not_count_as_tokens():
     # would change what a cache holds without a parse-version bump.
     usage = {"input_tokens": 10, "output_tokens": 5, "cache_creation_input_tokens": 0,
              "cache_creation": {"ephemeral_1h_input_tokens": 400}}
-    with patch("accounting.model_pricing", return_value=_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_PRICES):
         s = accounting.usage_split(usage, "claude-sonnet-4-5")
         assert s.cost == accounting.usage_cost_usd(usage, "claude-sonnet-4-5")
     assert s.tokens == accounting.usage_token_total(usage) == 15
@@ -126,7 +126,7 @@ def test_request_cost_adds_its_lanes_in_order():
     # lane, and this record is one where the two differ in the last bit.
     prices = {"input": 0.1, "output": 0.5, "cache_read": 0.01}
     usage = {"input_tokens": 12000, "cached_input_tokens": 7, "output_tokens": 150000}
-    with patch("accounting.model_pricing", return_value=prices):
+    with patch("accounting.pricing.model_pricing", return_value=prices):
         cost = accounting.usage_cost_usd(usage, "claude-haiku-5-5")
         split = accounting.usage_split(usage, "claude-haiku-5-5")
     assert cost == split.cost == (11993 * 0.1 + 150000 * 0.5 + 7 * 0.01) / 1e6
@@ -134,7 +134,7 @@ def test_request_cost_adds_its_lanes_in_order():
 
 def test_usage_split_keeps_a_bare_total_unsplit():
     # A Codex event carrying only total_tokens has no type to put its tokens in.
-    with patch("accounting.model_pricing", return_value=_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_PRICES):
         s = accounting.usage_split({"total_tokens": 500}, "gpt-5")
     assert (s.tokens, s.cost, s.type_tokens) == (500, 0.0, (0, 0, 0, 0))
     acc = accounting.empty_type_split()
@@ -211,14 +211,14 @@ def _grok(root):
 @pytest.mark.parametrize("build", [_claude, _codex, _gemini, _grok],
                          ids=["claude", "codex", "gemini", "grok"])
 def test_type_split_adds_up_in_every_window(tmp_path, build):
-    with patch("accounting.model_pricing", return_value=_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_PRICES):
         summary = build(tmp_path)
     assert summary is not None
     _assert_split_adds_up(summary)
 
 
 def test_claude_window_split_values(tmp_path):
-    with patch("accounting.model_pricing", return_value=_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_PRICES):
         s = _claude(tmp_path)
     # One request per window step: today 1, 7 days 2, 30 days 3.
     for window, n in (("today", 1), ("7d", 2), ("30d", 3)):
@@ -231,7 +231,7 @@ def test_claude_window_split_values(tmp_path):
 
 
 def test_codex_split_reports_a_bare_total_as_unsplit(tmp_path):
-    with patch("accounting.model_pricing", return_value=_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_PRICES):
         s = _codex(tmp_path)
     assert s["tokensToday"] == 11500
     assert _row(s, "today", "input") == (6000, pytest.approx(0.018))
@@ -264,7 +264,7 @@ def test_grok_split_includes_archived_days(tmp_path):
     accounting.GROK_ARCHIVE_PATH.parent.mkdir(parents=True, exist_ok=True)
     accounting.GROK_ARCHIVE_PATH.write_text(json.dumps(archive), encoding="utf-8")
 
-    with patch("accounting.model_pricing", return_value=_PRICES):
+    with patch("accounting.pricing.model_pricing", return_value=_PRICES):
         s = accounting.local_grok_token_summary(now=_NOW)
 
     _assert_split_adds_up(s)
@@ -298,7 +298,7 @@ def test_antigravity_split_adds_up_in_every_window(tmp_path, monkeypatch):
     (tmp_path / "ledger.json").write_text(json.dumps({
         "trackingStarted": today.isoformat(), "entries": entries}))
     # Never reach a live Antigravity language server from a unit test.
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")

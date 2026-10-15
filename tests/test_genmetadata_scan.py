@@ -66,7 +66,7 @@ def _wire(monkeypatch, tmp_path, conv_dir):
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", (conv_dir,))
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
 
 
 def _set_mtime(path, isodate):
@@ -164,7 +164,7 @@ def test_rpc_takeover_purges_at_keys(monkeypatch, tmp_path):
     rpc = {"cas": [{"stepKey": "0", "date": "2026-06-09", "hour": 10,
                     "u": 1, "c": 0, "o": 1, "model_placeholder": "MODEL_PLACEHOLDER_M26",
                     "api_provider": "ANTHROPIC_VERTEX"}]}
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: (rpc, {"cas": "t1"}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest(rpc, {"cas": "t1"}))
     second = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
     assert "cas@0.0" not in second["entries"]    # disk @ key purged on RPC takeover
     assert "cas#0" in second["entries"]
@@ -180,7 +180,7 @@ def test_rpc_covered_stem_skips_genmetadata_scan(monkeypatch, tmp_path):
     rpc = {"cas": [{"stepKey": "0", "date": "2026-06-09", "hour": 10,
                     "u": 1, "c": 0, "o": 1, "model_placeholder": "MODEL_PLACEHOLDER_M26",
                     "api_provider": "ANTHROPIC_VERTEX"}]}
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: (rpc, {"cas": "t1"}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest(rpc, {"cas": "t1"}))
     res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
     assert "cas@0.0" not in res["entries"] and "cas#0" in res["entries"]
 
@@ -214,8 +214,7 @@ def test_genmetadata_deadline_abandons_scan(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_cli_conversations_dir_in_scan_roots():
-    # The agy CLI writes plaintext trajectory DBs since 2026-06-02 — its dir must be scanned
-    # (before this, ~99% of CLI token volume was invisible: only the statusLine push captured).
+    # The agy CLI writes plaintext trajectory DBs — its dir must be scanned.
     assert any(p.parent.name == "antigravity-cli" for p in costmod.ANTIGRAVITY_CONVERSATION_DIRS)
 
 
@@ -329,7 +328,7 @@ def test_cli_stem_stays_rpc_owned_while_listed_live(monkeypatch, tmp_path):
     }))
     # agy alive: cascade listed (watermark re-confirmed), no new usage harvested.
     monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage",
-                        lambda *a, **k: ({}, {"sess": "2026-06-08T10:00:00Z"}))
+                        lambda *a, **k: agmod.RpcHarvest({}, {"sess": "2026-06-08T10:00:00Z"}))
     res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
     assert "sess#0" in res["entries"]
     assert not any(":" in k for k in res["entries"])
@@ -455,7 +454,7 @@ def test_scan_memo_does_not_block_ownership_flip(monkeypatch, tmp_path):
 
 
 def test_dominant_enum_picks_max_token_record():
-    # Guard: a single blob is one model in practice (verified 748/748 on-disk), so
+    # Guard: a single blob is one model in practice, so
     # this equals found[0]. But IF records ever mixed models, the summed entry attributes to
     # the DOMINANT (max-token) model, not whichever parsed first.
     assert costmod._dominant_enum([]) == 0
@@ -492,8 +491,7 @@ def test_undated_generation_record_counted_once_unit():
 
 
 def test_undated_generation_blob_ingested_once(monkeypatch, tmp_path):
-    """End to end: the undated fallback used to take _pb_find_usage's two copies and store
-    u=400/o=160 for a 200/80 generation."""
+    """End to end: an undated generation stores u=200/o=80, not _pb_find_usage's two copies."""
     conv = tmp_path / "convs"
     conv.mkdir()
     _make_db(conv / "cas.db", gen=[(0, _undated_generation_blob(model=1026, u=200, o=80, c=30))])
@@ -579,7 +577,7 @@ def test_rpc_takeover_purges_dated_at_keys(monkeypatch, tmp_path):
     rpc = {"cas": [{"stepKey": "0", "date": "2026-06-09", "hour": 10,
                     "u": 1, "c": 0, "o": 1, "model_placeholder": "MODEL_PLACEHOLDER_M26",
                     "api_provider": "ANTHROPIC_VERTEX"}]}
-    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: (rpc, {"cas": "t1"}))
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest(rpc, {"cas": "t1"}))
     e = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)["entries"]
     assert "cas@0.0" not in e and "cas@12.3" not in e
     assert "cas#0" in e and "casx@0.0" in e   # another stem is untouched

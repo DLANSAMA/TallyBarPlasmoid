@@ -51,7 +51,7 @@ async def test_stdout_recovers_after_buffer_truncation():
     fut = asyncio.get_running_loop().create_future()
     child.pending[1] = fut  # set before the loop runs the reader task (no await yet)
 
-    result = await asyncio.wait_for(fut, timeout=2.0)  # would hang pre-fix
+    result = await asyncio.wait_for(fut, timeout=2.0)
     assert result["result"]["ok"] is True
     await child.stdout_task
 

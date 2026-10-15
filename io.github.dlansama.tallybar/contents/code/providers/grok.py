@@ -23,19 +23,15 @@ from parsers import parse_grok_billing_config, relative_reset
 
 GROK_HOME = Path.home() / ".grok"
 GROK_LOG = GROK_HOME / "logs" / "unified.jsonl"
-# Reverse-scan the unified log in chunks looking for billing events.
-# Billing is logged at session start; a long agent session can push that line
-# far from EOF (multi-MB), so a fixed "last 512KB" window is load-bearing-wrong.
-# Chunked reverse scan finds the newest hit without re-reading the whole file
-# in the common case (event near the end) while still covering older sessions.
+# Billing is logged at session start, so a long session buries it far (multi-MB) from EOF:
+# scan backwards in chunks rather than a fixed tail window.
+# → tests/test_providers.py::test_run_grok_local_finds_billing_buried_under_large_tail
 _BILLING_CHUNK_BYTES = 256 * 1024
 # The weekly bar is xAI's OWN creditUsagePercent, but it only lands in the log when
 # the grok CLI actually runs — so its age is the age of the last session, not of our
-# refresh. Observed 15.3h old while the widget read "Updated just now". Past this
-# threshold the provider marks itself `stale`, which the UI already renders as a
-# "(cached)" suffix on the subtitle. One hour: the widget refreshes every 5 minutes,
-# so an hour-old vendor number is meaningfully not "just now" — but short enough
-# thresholds would tag a perfectly good reading on every quiet afternoon.
+# refresh. Past this threshold the provider marks itself `stale`, which the UI renders
+# as a "(cached)" suffix on the subtitle. One hour: meaningfully not "just now", yet long
+# enough not to tag a perfectly good reading on every quiet afternoon.
 _BILLING_STALE_AFTER_SECONDS = 3600
 _BILLING_MSG = "billing: fetched credits config"
 # The live reading: the endpoint the grok CLI itself calls at session start, with the
@@ -44,7 +40,6 @@ _BILLING_MSG = "billing: fetched credits config"
 # until the token lapses and the log reading covers the rest.
 _BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
 _LIVE_SOURCE = "grok-billing-api"
-# A token this close to expiry is left alone: it could lapse in flight.
 _TOKEN_EXPIRY_MARGIN_SECONDS = 60
 
 
@@ -61,7 +56,6 @@ def _parse_billing_line(line: str) -> dict[str, Any] | None:
 
 
 def _period_start_iso(event: dict[str, Any]) -> str:
-    """Return ``currentPeriod.start`` (or billingPeriodStart) from a raw event, else ``\"\"``."""
     ctx = event.get("ctx") if isinstance(event.get("ctx"), dict) else None
     if not isinstance(ctx, dict):
         return ""
@@ -93,20 +87,19 @@ def _iter_billing_events_reverse(log_path: Path) -> Iterator[dict[str, Any]]:
     try:
         with log_path.open("rb") as handle:
             end = size
-            carry = b""  # incomplete line from the previous (higher) chunk
+            carry = b""
             while end > 0:
                 start = max(0, end - _BILLING_CHUNK_BYTES)
                 handle.seek(start)
                 chunk = handle.read(end - start)
                 data = chunk + carry
-                # When mid-file, the first partial line belongs to the next-lower chunk.
                 if start > 0:
                     nl = data.find(b"\n")
                     if nl < 0:
                         carry = data
                         end = start
                         continue
-                    carry = data[:nl + 1]  # remainder for the next iteration
+                    carry = data[:nl + 1]
                     data = data[nl + 1:]
                 else:
                     carry = b""
@@ -117,12 +110,21 @@ def _iter_billing_events_reverse(log_path: Path) -> Iterator[dict[str, Any]]:
                     parsed = _parse_billing_line(line)
                     if parsed is not None:
                         hits.append(parsed)
-                # Newest within this chunk first.
                 for event in reversed(hits):
                     yield event
                 end = start
     except OSError:
         return
+
+
+def _opens_new_period(percentless: dict[str, Any], explicit: dict[str, Any]) -> bool:
+    """True when the percent-less event's period starts strictly after the explicit-percent
+    event's, i.e. 0% is real rather than a gap in the log."""
+    new_start = _period_start_iso(percentless)
+    old_start = _period_start_iso(explicit)
+    # ISO-8601 timestamps with a fixed offset compare lexicographically in chronological
+    # order; real Grok logs use +00:00 throughout.
+    return bool(new_start and old_start and new_start > old_start)
 
 
 def _latest_billing_event(log_path: Path) -> dict[str, Any] | None:
@@ -146,24 +148,17 @@ def _latest_billing_event(log_path: Path) -> dict[str, Any] | None:
         return None
 
     pending_period_only: dict[str, Any] | None = None
-    pending_start = ""
 
     for event in _iter_billing_events_reverse(log_path):
         parsed = parse_grok_billing_config(event)
         if parsed is None:
             continue
         if parsed.get("percentExplicit"):
-            if pending_period_only is not None and pending_start:
-                older_start = _period_start_iso(event)
-                # ISO-8601 timestamps with a fixed offset compare lexicographically
-                # in chronological order — real Grok logs use +00:00 throughout.
-                if older_start and pending_start > older_start:
-                    return pending_period_only
+            if pending_period_only is not None and _opens_new_period(pending_period_only, event):
+                return pending_period_only
             return event
-        # Period window present but no explicit percent (defaults to 0% in parse).
         if pending_period_only is None:
             pending_period_only = event
-            pending_start = _period_start_iso(event)
 
     return pending_period_only
 
@@ -230,12 +225,7 @@ def grok_billing_period(log_path: Path | None = None,
     return (new_start, new_end)
 
 
-# ---------------------------------------------------------------------------
-# Main provider entry-point
-# ---------------------------------------------------------------------------
-
 def _billing_event_age_seconds(ts_iso: str) -> float | None:
-    """Age in seconds of a billing event's own timestamp, or None if unusable."""
     stamp = _parse_period_ts(ts_iso)
     if stamp is None:
         return None
@@ -316,13 +306,8 @@ def _live_billing_event(
         if end is None or end <= dt.datetime.now(dt.timezone.utc):
             return None
     if not parsed.get("percentExplicit") and log_event is not None:
-        # The same rule as _latest_billing_event: a reading without a percent is 0%
-        # only when it opens a NEW period; mid-period it would hide the last real one.
         logged = parse_grok_billing_config(log_event)
-        log_start = _period_start_iso(log_event)
-        if (logged or {}).get("percentExplicit") and not (
-            log_start and _period_start_iso(event) > log_start
-        ):
+        if (logged or {}).get("percentExplicit") and not _opens_new_period(event, log_event):
             return None
     return event
 
@@ -396,7 +381,6 @@ def run_grok_local(
         if live is not None:
             event, source = live, _LIVE_SOURCE
     if event is None:
-        # Auth present but no billing lines yet — still a useful degraded state.
         auth = home / "auth.json"
         if auth.is_file():
             result["message"] = "Logged in; no credit usage snapshot in recent logs"
@@ -413,8 +397,7 @@ def run_grok_local(
         return result
 
     # fetchedAt is when the NUMBER was captured (by the CLI into the log, or by our live
-    # request), not when we read the file — stamping now_iso() on a log reading claimed
-    # a freshness we never had.
+    # request), not when we read the file.
     captured_at = str(event.get("ts") or "").strip()
     result.update(
         status="ok",

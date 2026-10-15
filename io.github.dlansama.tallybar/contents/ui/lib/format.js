@@ -1,12 +1,9 @@
 // Shared compact token-count formatter — the SINGLE source for the "13.4M tok" style strings.
 //
-// Imported by FullRepresentation.qml (`import "lib/format.js" as Fmt`) for the graph labels,
-// tooltips, the cost subtitle and the All-AI row. It MUST stay behaviourally identical to
-// accounting.compact_token_count (Python), which prints the same strings on the backend cost
-// lines. The two are cross-checked across a shared golden table in
-// tests/test_compact_count_parity.py (Python asserts its own formatter; a `node` step runs
-// THIS exact file). Carry at the 1000-of-a-unit boundary (999.5K -> 1M), trim trailing zeros
-// (13.0M -> 13M), half-up rounding (Math.round, matching Python int(x + 0.5)).
+// Must match accounting.compact_token_count (Python), which prints the same strings on the
+// backend cost lines: carry at the 1000-of-a-unit boundary (999.5K -> 1M), trim trailing
+// zeros, half-up rounding (Math.round, matching Python int(x + 0.5)).
+// → tests/test_compact_count_parity.py
 //
 // The trailing CommonJS export exists only so the node parity test can require() this file;
 // QML ignores it (`module` is undefined there, so `typeof module` evaluates to "undefined").
@@ -68,18 +65,15 @@ function compactCount(value) {
     return amount.toString();
 }
 
-// Per-provider accent fallback — the SINGLE source shared by CompactRepresentation and
-// FullRepresentation (they previously each hard-coded an identical map that could drift).
-// Used only before telemetry arrives / when the backend omits accentColor; PlasmaCore.Theme
-// does not exist in Plasma 6, so these fixed values stand in. Keep in sync with the backend
-// accents (backend.py provider_accent).
+// Per-provider accent fallback for before telemetry arrives / a missing accentColor.
+// Must match the backend accents. → tests/test_enforced_rules.py::test_qml_provider_accents_match_backend
 function providerAccent(providerKey) {
     if (providerKey === "claude") return "#c07f63";
     if (providerKey === "gemini") return "#2f74f5";
     if (providerKey === "antigravity") return "#30b795";
     if (providerKey === "grok") return "#1d9bf0";
     if (providerKey === "grokbot") return "#e6e6e6";
-    return "#218df4"; // codex / default
+    return "#218df4";
 }
 
 // Resolve the first installed family from an Apple-first preference list (both

@@ -19,11 +19,7 @@ def as_dict(value: Any, default: Any = None) -> dict[str, Any]:
     """Narrow an arbitrary payload value to a dict.
 
     Returns ``value`` when it is a dict, else ``default`` when THAT is a dict,
-    else ``{}``. Replaces the repeated
-    ``d.get("k") if isinstance(d.get("k"), dict) else {}`` idiom, which called
-    ``.get`` twice and which mypy cannot narrow (the isinstance guard is on a
-    *different* expression than the value), producing the bulk of this tree's
-    type errors. Behaviour is identical; the type is not.
+    else ``{}``.
     """
     if isinstance(value, dict):
         return value
@@ -58,9 +54,7 @@ def relative_reset(value: str) -> str:
 def first_number(data: dict[str, Any], keys: tuple[str, ...]) -> float | None:
     for key in keys:
         value = data.get(key)
-        # Reject bool explicitly: isinstance(True, int) is True, so without this a
-        # boolean flag colliding with a numeric key would be silently read as 1.0/0.0
-        # (mirrors the guard already in parse_google_one_credits).
+        # isinstance(True, int) is True: a boolean flag must not read as 1.0/0.0.
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             return float(value)
     return None
@@ -288,7 +282,6 @@ def parse_agy_usage(text: str) -> dict[str, dict[str, Any]]:
     while i < n:
         name = lines[i].strip()
         bar = lines[i + 1] if i + 1 < n else ""
-        # A model block is a name line whose next line is the segmented bar.
         if name and ("█" in bar or "░" in bar):
             status = lines[i + 2].strip() if i + 2 < n else ""
             remaining: float | None = None
@@ -518,7 +511,7 @@ def parse_claude_usage(data: Any) -> list[dict[str, Any]]:
             continue
         group = suffix.lower()
         if group in seen_model_groups:
-            continue  # snake_case/camelCase duplicate of an already-captured model
+            continue
         seen_model_groups.add(group)
         model_windows.append((group.replace("_", " ").title(), value))
 
@@ -645,7 +638,7 @@ def parse_claude_usage(data: Any) -> list[dict[str, Any]]:
         # therefore key the scaling decision off whether EITHER side matched a
         # *_credits / *credit_limit* alias and apply it to BOTH.  No live capture of a
         # dp-less mixed pair (cents consumed + dollar limit) exists; this is hardening
-        # toward the code's stated intent at lines 596-599.
+        # toward the intent of the per-field alias match above.
         _pair_is_cents = consumed_is_cents or limit_is_cents
 
         def _scale_money(raw: float | None) -> float | None:
@@ -778,10 +771,8 @@ def parse_antigravity_limits(data: Any) -> list[dict[str, Any]]:
         lambda value: "gpt" in value or "openai" in value,
     )
 
-    # Antigravity exposes a separate quota per model, but the UI only needs two
-    # bars: the Gemini family (Pro + Flash) and everything else (Claude +
-    # GPT OSS). Each group reports the usage of its most-consumed member — the
-    # tightest constraint — since the underlying quotas reset together.
+    # Each group reports its most-consumed member — the tightest constraint —
+    # since the underlying quotas reset together.
     def group(
         display: str,
         members: list[tuple[tuple[str, str, float, str] | None, str]],
@@ -811,8 +802,6 @@ def parse_antigravity_limits(data: Any) -> list[dict[str, Any]]:
             "reset": relative_reset(best[3]),
             "unit": "%",
         }
-        # A faint "Claude · GPT"-style subtitle disambiguates the catch-all
-        # group; the underlying models that are actually present drive it.
         if show_sublabel and present_short:
             row["sublabel"] = " · ".join(present_short)
         return row
@@ -853,8 +842,6 @@ def parse_antigravity_quota_summary(data: Any) -> list[dict[str, Any]]:
         if not isinstance(grp, dict):
             continue
         display = str(grp.get("displayName") or "").lower()
-        # Map the API group name to TallyBar's short lane label. "Gemini Models" -> "Gemini";
-        # "Claude and GPT models" (bucketId prefix "3p") -> "Claude · GPT".
         if "gemini" in display:
             short = "Gemini"
         elif "claude" in display or "gpt" in display or "3p" in display:
@@ -876,7 +863,6 @@ def parse_antigravity_quota_summary(data: Any) -> list[dict[str, Any]]:
                 continue
             window = str(bucket.get("window") or "").lower()
             if window not in ("5h", "weekly"):
-                # Fall back to the bucketId suffix ("gemini-5h" / "3p-weekly") if window is absent.
                 bid = str(bucket.get("bucketId") or "").lower()
                 window = "5h" if bid.endswith("5h") else "weekly" if bid.endswith("weekly") else ""
                 if not window:
@@ -1032,21 +1018,17 @@ def parse_grok_billing_config(event: Any) -> dict[str, Any] | None:
 
     has_period = bool(period_info.get("start") or period_info.get("end") or reset_iso)
     if percent is None:
-        # Fresh week / incomplete snapshot: treat as 0% only when the period
-        # window is present so we still know the reset time.
         if not has_period:
             return None
         percent = 0.0
 
-    # Label: SuperGrok weekly pool is the primary bar users care about.
-    # Avoid the words "credits"/"monthly"/"extra" — enrich_ui_formatting marks
-    # those as isExtraUsage for Claude prepaid / on-demand lanes. "Weekly" also
-    # matches _is_weekly_metric for pace-detail clearing.
+    # Avoid "credits"/"monthly"/"extra": enrich_ui_formatting flags those as extra usage.
+    # → tests/test_accounting.py::test_grok_billing_label_is_never_flagged_as_extra_usage
     period_type = str(period_info.get("type") or "").upper()
     if "WEEK" in period_type:
         label = "Weekly"
     elif "MONTH" in period_type:
-        label = "Plan"  # not "Monthly" — see isExtraUsage heuristic above
+        label = "Plan"
     else:
         label = "Usage"
 
@@ -1068,3 +1050,31 @@ def parse_grok_billing_config(event: Any) -> dict[str, Any] | None:
         "period": period_info or None,
         "percentExplicit": percent_explicit,
     }
+
+
+def fresh_credit_balance(
+    prev: Any, max_age_seconds: float, source: str | None = None
+) -> dict[str, Any] | None:
+    """The previous provider dict's ``creditBalance`` iff it is a dict (of ``source``, when
+    given) whose ``fetchedAt`` is under ``max_age_seconds`` old; else None. None-safe, and a
+    negative age (clock jump) is not fresh."""
+    if not isinstance(prev, dict):
+        return None
+    cb = prev.get("creditBalance")
+    if not isinstance(cb, dict):
+        return None
+    if source is not None and cb.get("source") != source:
+        return None
+    fetched = cb.get("fetchedAt")
+    if not isinstance(fetched, str) or not fetched:
+        return None
+    try:
+        ts = dt.datetime.fromisoformat(fetched.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=dt.timezone.utc)
+    age = (dt.datetime.now(dt.timezone.utc) - ts).total_seconds()
+    if age < 0 or age >= max_age_seconds:
+        return None
+    return cb

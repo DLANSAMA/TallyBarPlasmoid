@@ -466,7 +466,7 @@ def run_grok_bot(
 
     try:
         status, body = post(GROK_BOT_USAGE_URL, max(0.5, deadline - time.monotonic()))
-    except Exception as exc:  # noqa: BLE001 - the message is built from the class only, never str(exc)
+    except Exception as exc:  # never str(exc) → tests/test_providers.py::test_grok_bot_timeout_and_network_errors
         if _is_timeout(exc):
             return fail("timeout", f"{GROK_BOT_LABEL} telemetry timed out")
         if isinstance(exc, urllib.error.URLError):
@@ -494,7 +494,7 @@ def run_grok_bot(
         if usage.get("hasNonZeroIncludedLimit") is True and remaining >= 1.5:
             try:
                 period_status, period_body = post(GROK_BOT_PERIOD_URL, remaining - 0.5)
-            except Exception:  # noqa: BLE001 - optional row
+            except Exception:
                 period_status, period_body = 0, ""
             if period_status == 200:
                 on_demand = map_grok_bot_on_demand(_json_object(period_body) if isinstance(period_body, str) else None)
