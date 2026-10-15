@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 from typing import Any, NamedTuple
 
 from pricing_data import get_pricing as _get_pricing
@@ -22,14 +21,6 @@ def model_pricing(model: str | None) -> dict[str, float]:
     See pricing_data.py for the fetch/cache/fallback chain.
     """
     return _get_pricing(model)
-
-
-def _get_pricing_fn():
-    """Support test patching on accounting.model_pricing transparently."""
-    acct = sys.modules.get("accounting")
-    if acct is not None and hasattr(acct, "model_pricing"):
-        return acct.model_pricing
-    return model_pricing
 
 
 def _provider_family_for_model(model: str | None) -> str | None:
@@ -55,13 +46,13 @@ def _family_default_pricing(model: str | None) -> dict[str, float]:
     family = _provider_family_for_model(model)
     if family is None:
         return {}
-    return _get_pricing_fn()(DEFAULT_MODEL_FOR_PROVIDER[family])
+    return model_pricing(DEFAULT_MODEL_FOR_PROVIDER[family])
 
 
 def has_catalog_price(model: str | None) -> bool:
     """True when ``model`` resolves to a price of its own (live catalog or embedded
     fallback). False means usage_cost_usd bills it at its family's default rate instead."""
-    return bool(_get_pricing_fn()(model))
+    return bool(model_pricing(model))
 
 
 def prompt_tier_prices(prices: dict[str, float], prompt_tokens: float) -> dict[str, float]:
@@ -153,7 +144,7 @@ def _cost_terms(n: dict[str, int], model: str | None) -> list[tuple[int, float]]
     """``(USAGE_TYPES index, cost x 1e6)`` per billed lane of one request, in the order
     usage_cost_usd has always summed them (so its total stays bit-identical). Empty when
     the model has no price."""
-    prices = _get_pricing_fn()(model)
+    prices = model_pricing(model)
     if not prices and model:
         prices = _family_default_pricing(model)
     if not prices:

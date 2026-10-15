@@ -13,10 +13,10 @@ from typing import Any
 
 from io_helpers import atomic_write_text
 from parsers import as_dict
+from . import pricing as _pricing
 from .formatting import parse_timestamp
 from .pricing import (
     DEFAULT_MODEL_FOR_PROVIDER,
-    _get_pricing_fn,
     has_catalog_price,
     slim_usage,
     usage_split,
@@ -964,7 +964,7 @@ def _grok_archive_split(rec: dict[str, Any], tokens: int, cost: float) -> dict[s
         return acc
     typed = {"input": int(rec.get("in") or 0), "output": int(rec.get("out") or 0),
              "cacheRead": int(rec.get("cached") or 0)}
-    prices = _get_pricing_fn()(DEFAULT_MODEL_FOR_PROVIDER["grok"])
+    prices = _pricing.model_pricing(DEFAULT_MODEL_FOR_PROVIDER["grok"])
     rates = {"input": prices.get("input", 0.0), "output": prices.get("output", 0.0),
              "cacheRead": prices.get("cache_read", prices.get("input", 0.0))}
     weights = {key: typed[key] * rates[key] for key in typed}
