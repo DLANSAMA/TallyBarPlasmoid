@@ -1152,6 +1152,31 @@ def run_antigravity_remote_with_credentials(
     summary_status, summary = antigravity_bearer_json(
         "/v1internal:retrieveUserQuotaSummary", access_token, {}, timeout, base_url=base_url)
     summary_lanes = parse_antigravity_quota_summary(summary) if summary_status == 200 else []
+    prod_url = "https://cloudcode-pa.googleapis.com"
+    if summary_lanes and base_url != prod_url and not any(
+            lane.get("label") == "Gemini" for lane in summary_lanes):
+        # The daily host's summary can omit the Gemini group entirely (live 2026-10-15: only
+        # "Claude and GPT models") while prod still returns it with both windows, and the
+        # Antigravity apps show prod's Gemini lanes. Take the groups daily is missing from prod;
+        # daily's own lanes keep priority for the groups it does return.
+        prod_status, prod_summary = antigravity_bearer_json(
+            "/v1internal:retrieveUserQuotaSummary", access_token, {}, timeout, base_url=prod_url)
+        if prod_status == 200:
+            have = {lane.get("label") for lane in summary_lanes}
+            missing = [lane for lane in parse_antigravity_quota_summary(prod_summary)
+                       if lane.get("label") not in have]
+            summary_lanes = missing + summary_lanes
+    if summary_lanes and not any(lane.get("label") == "Gemini" for lane in summary_lanes):
+        # No host's summary carries the Gemini group, while fetchAvailableModels still carries
+        # the Gemini models' shared quota. Add that one lane in front; it has no window label
+        # because the per-model quota doesn't name one.
+        project_id = antigravity_project_id(code_assist)
+        status, models = antigravity_bearer_json(
+            "/v1internal:fetchAvailableModels", access_token,
+            {"project": project_id} if project_id else {}, timeout, base_url=base_url)
+        gemini = [lane for lane in (parse_antigravity_limits(models) if status == 200 else [])
+                  if lane.get("label") == "Gemini"]
+        summary_lanes = gemini[:1] + summary_lanes
     if summary_lanes:
         result.update(
             status="ok",

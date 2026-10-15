@@ -863,6 +863,74 @@ def test_antigravity_remote_with_credentials_success(tmp_path):
     assert len(res["limits"]) == 2  # one group x (5h, weekly)
 
 
+def test_antigravity_summary_without_gemini_group_takes_gemini_from_available_models(tmp_path):
+    # Live 2026-10-15: the summary lists only "Claude and GPT models"; the Gemini lane comes
+    # from fetchAvailableModels' per-model quota instead of disappearing.
+    summary = {"groups": [{"displayName": "Claude and GPT models", "buckets": [
+        {"bucketId": "3p-weekly", "window": "weekly",
+         "resetTime": "2099-06-28T03:18:59Z", "remainingFraction": 1},
+        {"bucketId": "3p-5h", "window": "5h",
+         "resetTime": "2099-06-24T01:03:34Z", "remainingFraction": 1},
+    ]}]}
+    models = {"models": {
+        "gemini-3-flash": {"quotaInfo": {"remainingFraction": 0.75,
+                                         "resetTime": "2099-06-24T00:33:30Z"}},
+        "claude-opus-5-5-high": {"quotaInfo": {"remainingFraction": 1,
+                                               "resetTime": "2099-06-24T01:03:34Z"}},
+    }}
+    base = _fake_urlopen(quota_summary=(200, summary))
+
+    def fake(request, timeout=None, context=None):
+        if "fetchAvailableModels" in request.full_url:
+            return _FakeHTTPResponse(200, models)
+        return base(request, timeout, context)
+
+    credentials = {"access_token": "tok-1", "expiry_date": int((time.time() + 3600) * 1000)}
+    with patch("urllib.request.urlopen", side_effect=fake):
+        res = providers.antigravity.run_antigravity_remote_with_credentials(
+            credentials, tmp_path / "creds.json", {}, "test-source", timeout=1.0,
+        )
+    assert res["limitsSource"] == "quota-summary"
+    assert [(lane["label"], lane.get("sublabel")) for lane in res["limits"]] == [
+        ("Gemini", None), ("Claude · GPT", "5-hour"), ("Claude · GPT", "Weekly")]
+    assert res["limits"][0]["percent"] == 25.0
+
+
+def test_antigravity_daily_summary_without_gemini_takes_the_group_from_prod(tmp_path):
+    # Live 2026-10-15: agy logs the daily host, whose summary dropped the Gemini group, while
+    # prod still returns it with both windows (what the Antigravity apps show).
+    claude_group = {"displayName": "Claude and GPT models", "buckets": [
+        {"window": "weekly", "resetTime": "2099-06-28T03:18:59Z", "remainingFraction": 1},
+        {"window": "5h", "resetTime": "2099-06-24T01:03:34Z", "remainingFraction": 1},
+    ]}
+    gemini_group = {"displayName": "Gemini Models", "buckets": [
+        {"window": "weekly", "resetTime": "2099-06-27T04:27:51Z", "remainingFraction": 0.5},
+        {"window": "5h", "resetTime": "2099-06-24T00:33:30Z", "remainingFraction": 0.75},
+    ]}
+    base = _fake_urlopen()
+    seen = []
+
+    def fake(request, timeout=None, context=None):
+        url = request.full_url
+        seen.append(url)
+        if "retrieveUserQuotaSummary" in url:
+            groups = [claude_group] if "daily-" in url else [gemini_group, claude_group]
+            return _FakeHTTPResponse(200, {"groups": groups})
+        return base(request, timeout, context)
+
+    credentials = {"access_token": "tok-1", "expiry_date": int((time.time() + 3600) * 1000)}
+    with patch.object(providers.antigravity, "antigravity_cloudcode_host",
+                      return_value="daily-cloudcode-pa.googleapis.com"), \
+            patch("urllib.request.urlopen", side_effect=fake):
+        res = providers.antigravity.run_antigravity_remote_with_credentials(
+            credentials, tmp_path / "creds.json", {}, "test-source", timeout=1.0,
+        )
+    assert [(lane["label"], lane["sublabel"], lane["percent"]) for lane in res["limits"]] == [
+        ("Gemini", "5-hour", 25.0), ("Gemini", "Weekly", 50.0),
+        ("Claude · GPT", "5-hour", 0.0), ("Claude · GPT", "Weekly", 0.0)]
+    assert not any("fetchAvailableModels" in url for url in seen)
+
+
 def test_antigravity_remote_with_credentials_expired_token_refreshes(tmp_path):
     # Expired token -> refresh_antigravity_credentials exchanges the refresh_token for a new
     # access_token via oauth2.googleapis.com/token, persists it (save_antigravity_credentials),
