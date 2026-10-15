@@ -70,7 +70,7 @@ Runtime: stdlib-only (no third-party deps). `.venv` is for pytest only. Release:
 
 **`status` strings are the QML contract.** Values: `ok`, `missing-cookies`, `unauthorized`, `api-error`, `api-empty`, `timeout`, `not-running`, `wallet-locked`, etc. Adding a new status requires handling it in the UI too (FullRepresentation `emptyStateMessage`/`tabStatusBad`/`degradedText`). There is NO `parse-error` status — a parse failure re-uses `api-error`. A logged-OUT Google session (the `/usage` HTML renders but lacks the `SNlM0e` auth token while carrying a sign-in URL — `gemini._looks_signed_out`) is `unauthorized` with an actionable "sign in" message, NOT `api-empty`.
 
-**Cost scan is compute-concurrently / apply-after, double-bounded — don't serialize or collapse it.** Kicked off at the very top of `build_snapshot` (overlaps network fetches), applied only after a clean `await cost_scan`. Timeout → `cost_summary_timeout` diagnostic, scan skipped entirely. A second cooperative deadline threads through `compute_local_cost_summaries(deadline)`. Tests patch `backend.compute_local_cost_summaries` (not `apply_local_cost_summaries`).
+**Cost scan is compute-concurrently / apply-after, double-bounded — don't serialize or collapse it.** Kicked off at the very top of `build_snapshot` (overlaps network fetches), applied only after a clean `await cost_scan`. Timeout → `cost_summary_timeout` diagnostic, scan skipped entirely. A second cooperative deadline threads through `compute_local_cost_summaries(deadline)`. Tests patch `backend.compute_local_cost_summaries` (not `apply_cost_summaries`).
 
 **`diagnostics.timings` reports per-phase wall clock (ms) in every snapshot** — `cookies`, `providers`, `cost_scan`, `total`. Read it before guessing where a slow refresh goes.
 
@@ -137,7 +137,7 @@ Runtime: stdlib-only (no third-party deps). `.venv` is for pytest only. Release:
 
 **Provider quirks — don't "fix" these:**
 - `apply_google_one_credits` *replaces* Antigravity's Code Assist credits with the real Ultra/Pro AI pool; drops bar when offline. Don't restore the plan-status figure. The one.google.com RPC is throttled: a <300s-old `google-one-ai` balance from the previous snapshot is carried forward and the RPC skipped entirely (`gemini.google_one_credit_fresh`, mirrors Claude's `CREDIT_REFRESH_SECONDS`; the carried `fetchedAt` is NOT re-stamped, so the carry is age-bounded — keep both halves: skip the task AND re-apply the carried balance at the apply site, else the credit bar drops).
-- Gemini/Antigravity tier is never hardcoded — only Antigravity's `GetUserStatus` has it; `apply_local_cost_summaries` propagates it to Gemini.
+- Gemini/Antigravity tier is never hardcoded — only Antigravity's `GetUserStatus` has it; `apply_cost_summaries` propagates it to Gemini.
 - Claude's `usage_summary` is probed first; a definite miss (404/410, or 200 with no limits) is stamped as `usageSummaryUnavailableSince` on the provider dict and later refreshes go straight to `/usage` for `USAGE_SUMMARY_RETRY_SECONDS` (24h) before re-probing. Transient 403/429/5xx never stamp it — a Cloudflare blip must not switch the probe off. → `tests/test_providers.py::test_usage_summary_*`.
 - Codex's `planType` is nested INSIDE the `rateLimits` payload, and lane durations vary by plan (a free account's primary lane is a 30-day window) — label by the payload's window, never assume primary = 5h.
 - Antigravity RPC key: `stepIndices[0]` else `g<gen_index>` — NOT `len(records)` (shifts across polls → double-count/silent-drop).

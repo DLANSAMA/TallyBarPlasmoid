@@ -188,7 +188,7 @@ def test_relaxed_gate_shows_cli_when_ide_not_running(cli_paths, monkeypatch, tmp
     _run_capture(monkeypatch, REAL_PAYLOAD)
 
     providers = {"antigravity": {"label": "Antigravity", "status": "not-running", "limits": []}}
-    costmod.apply_local_cost_summaries(providers)
+    costmod.apply_cost_summaries(providers, costmod.compute_local_cost_summaries())
     assert "costSummary" in providers["antigravity"]
 
 
@@ -367,7 +367,7 @@ def test_no_summary_without_tokens(cli_paths, monkeypatch, tmp_path):
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ide_ledger.json")
     providers = {"antigravity": {"label": "Antigravity", "status": "ok", "limits": []}}
-    costmod.apply_local_cost_summaries(providers)
+    costmod.apply_cost_summaries(providers, costmod.compute_local_cost_summaries())
     assert "costSummary" not in providers["antigravity"]  # subscription price NOT shown
 
 

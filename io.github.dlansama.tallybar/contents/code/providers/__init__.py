@@ -5,7 +5,7 @@ from .codex import run_openai_cookie_api, run_codex_rpc
 from .antigravity import choose_antigravity_result, run_antigravity_remote, run_antigravity_local, apply_google_one_credits
 from .grok import run_grok_local
 from .grok_bot import run_grok_bot
-from .cost import apply_local_cost_summaries, compute_local_cost_summaries, apply_cost_summaries
+from .cost import compute_local_cost_summaries, apply_cost_summaries
 
 __all__ = [
     "GEMINI_DOMAINS",
@@ -23,7 +23,6 @@ __all__ = [
     "apply_google_one_credits",
     "run_grok_local",
     "run_grok_bot",
-    "apply_local_cost_summaries",
     "compute_local_cost_summaries",
     "apply_cost_summaries",
 ]

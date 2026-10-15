@@ -289,7 +289,7 @@ def run_gemini_web(cookies: list[BrowserCookie], timeout: float) -> dict[str, An
     )
     # Tier is NOT hardcoded: gemini.google.com never returns the subscription tier.
     # The real Google AI tier (Ultra/Pro/Free) is resolved from the shared Google
-    # account in apply_local_cost_summaries() and propagated here.
+    # account in apply_cost_summaries() and propagated here.
     return result
 
 

@@ -1180,10 +1180,3 @@ def apply_cost_summaries(providers: dict[str, dict[str, Any]],
     # CLI token data can exist while the IDE is closed (status != ok).
     if providers.get("antigravity") is not None:
         _attach_summary(providers, "antigravity", summaries)
-
-
-def apply_local_cost_summaries(providers: dict[str, dict[str, Any]], deadline: float | None = None) -> None:
-    """Compute + merge the local cost summaries in one synchronous call; ``build_snapshot``
-    calls the two halves separately so the compute can overlap the network fetches."""
-    apply_cost_summaries(providers, compute_local_cost_summaries(deadline))
-
