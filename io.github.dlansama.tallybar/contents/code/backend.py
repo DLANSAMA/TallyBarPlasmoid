@@ -110,6 +110,9 @@ DEFAULT_NOTIFY_THRESHOLDS = (90, 100)
 # each dip and the critical popup re-fires every few minutes. Re-arm only when usage drops
 # meaningfully below the threshold — a genuine window reset drops to ~0 and always re-arms.
 _THRESHOLD_REARM_GAP = 10
+_WEEKLY_REARM_GAP = 5
+# The projected-budget alert re-arms once the projection falls below this share of the budget.
+_PROJECTED_REARM_RATIO = 0.95
 # Monthly-budget alert levels, as a percent of total spend (not per-limit usage %).
 _BUDGET_THRESHOLDS = (80, 100)
 
@@ -404,7 +407,7 @@ def compute_notifications(providers: dict[str, Any], config: dict[str, Any],
                                     "body": f"{label} weekly window is at {pct:.0f}% used.",
                                 })
                             now_fired.add(wkey)
-                        elif pct < _WEEKLY_ALERT_THRESHOLD - 5:
+                        elif pct < _WEEKLY_ALERT_THRESHOLD - _WEEKLY_REARM_GAP:
                             now_fired.discard(wkey)
                     # Arm each threshold this limit currently exceeds; re-arm only below
                     # t - _THRESHOLD_REARM_GAP, holding the armed state in the gap band.
@@ -481,7 +484,7 @@ def compute_notifications(providers: dict[str, Any], config: dict[str, Any],
                 # crosses the budget while actual spend is still under it — the real-spend 100%
                 # alert above owns the crossing once mtd reaches budget. Calendar-pace projection
                 # (all_ai_projected_month_cost). Hysteresis: arm at projected >= budget, re-arm
-                # (discard) only once projected falls back below 95% of budget, so a projection
+                # (discard) only once projected falls back below _PROJECTED_REARM_RATIO of budget, so a projection
                 # hovering at the boundary doesn't flap. Day-of-month < 3 → projection == mtd, so
                 # the arm condition (projected >= budget while mtd < budget) can't trip early.
                 proj_key = "budget|all|projected"
@@ -503,9 +506,9 @@ def compute_notifications(providers: dict[str, Any], config: dict[str, Any],
                                      f"({elapsed_pct:.0f}% of month elapsed)."),
                         })
                     now_fired.add(proj_key)
-                elif projected < budget * 0.95:
+                elif projected < budget * _PROJECTED_REARM_RATIO:
                     now_fired.discard(proj_key)
-                # else (95%–100% of budget, or mtd >= budget): hold the current armed state.
+                # else (between the re-arm ratio and 100% of budget, or mtd >= budget): hold the current armed state.
             if now_fired != previously_fired:
                 _save_notify_state(now_fired)
         finally:
@@ -846,10 +849,10 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     prev_claude = prev_providers.get("claude") if isinstance(prev_providers, dict) else None
     prev_antigravity = prev_providers.get("antigravity") if isinstance(prev_providers, dict) else None
     # Google One AI credit-pool throttle: reuse the previous snapshot's balance when it was
-    # fetched < GOOGLE_ONE_REFRESH_SECONDS (300s) ago, skipping the authenticated
+    # fetched < GOOGLE_ONE_REFRESH_SECONDS ago, skipping the authenticated
     # one.google.com batchexecute RPC entirely. Mirrors the Claude CREDIT_REFRESH_SECONDS
     # carry-forward (providers/claude.py). The carried fetchedAt is deliberately NOT
-    # re-stamped, so the carry is bounded at 300s of age (not indefinite).
+    # re-stamped, so the carry is bounded at GOOGLE_ONE_REFRESH_SECONDS of age (not indefinite).
     carried_g1 = google_one_credit_fresh(prev_antigravity)
 
     # Kick off the local cost scan NOW so its CPU/disk work (parsing ~/.claude, ~/.codex,
@@ -1006,14 +1009,6 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     def get_task_result(task: asyncio.Task | None, fallback: dict[str, Any], label: str) -> dict[str, Any]:
         if task is None:
             return fallback
-        # Defensive backstop: by the time we get here the `async with TaskGroup`
-        # block has exited, so __aexit__ has already awaited every child — each task
-        # is guaranteed done() (result, exception, or cancelled). This branch is
-        # therefore unreachable in practice; kept only to fail safe if that ever changes.
-        if not task.done():
-            status = "timeout" if to_expired else "api-error"
-            msg = f"{label} telemetry timed out" if to_expired else f"{label} telemetry failed"
-            return {**fallback, "status": status, "message": msg}
         if task.cancelled():
             status = "timeout" if to_expired else "api-error"
             msg = f"{label} telemetry timed out" if to_expired else f"{label} telemetry cancelled"
