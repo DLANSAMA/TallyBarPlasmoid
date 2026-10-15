@@ -1203,6 +1203,27 @@ def _screen_locked() -> bool:
     return proc.stdout.decode("utf-8", "replace").strip().split() == ["b", "true"]
 
 
+def _cached_or_minimal_snapshot() -> dict[str, Any]:
+    return load_snapshot() or {"ok": False, "timestamp": now_iso(), "providers": {}}
+
+
+def _degraded_snapshot(detail: str, *, notifications: bool = True) -> dict[str, Any]:
+    """The last cached snapshot (or a minimal one) flagged ``diagnostics.fatal``; never saved to disk."""
+    snap = _cached_or_minimal_snapshot()
+    if notifications:
+        snap["notifications"] = []
+    snap.setdefault("diagnostics", {})["fatal"] = scrub_credentials(detail)[:160]
+    return snap
+
+
+def _exc_detail(exc: BaseException) -> str:
+    return f"{exc.__class__.__name__}: {str(exc)}"
+
+
+def _dump_json(obj: Any, pretty: bool) -> str:
+    return json.dumps(obj, indent=2 if pretty else None, separators=None if pretty else (",", ":"))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="TallyBar Plasma telemetry backend")
     parser.add_argument("--once", action="store_true", help="print one JSON telemetry snapshot")
@@ -1244,16 +1265,11 @@ def main() -> int:
         except (KeyboardInterrupt, SystemExit):
             raise
         except BaseException as exc:
-            # Mirrors the --once tail guard below: fall back to the last cached snapshot (or an
-            # empty one) so cost_export still has something to project.
-            snapshot = load_snapshot() or {"ok": False, "timestamp": now_iso(), "providers": {}}
-            snapshot.setdefault("diagnostics", {})["fatal"] = scrub_credentials(f"{exc.__class__.__name__}: {str(exc)}")[:160]
+            snapshot = _degraded_snapshot(_exc_detail(exc), notifications=False)
             fatal = True
         export = cost_export(snapshot)
-        print(json.dumps(export, indent=2 if args.pretty else None, separators=None if args.pretty else (",", ":")))
-        # Non-zero exit when the cost scan was degraded (timed out) OR the fatal fallback above
-        # fired, so a shell consumer can detect either case even without parsing the "degraded"
-        # flag out of the JSON.
+        print(_dump_json(export, args.pretty))
+        # Non-zero when the scan was degraded or the fatal fallback fired.
         return 3 if (fatal or export.get("degraded")) else 0
 
     if args.set_refresh_interval is not None:
@@ -1277,10 +1293,10 @@ def main() -> int:
     # the widget keeps showing last-known values (the staleness line explains the age);
     # do NOT save_snapshot (mustn't clobber last-known-good) and emit no notifications.
     if args.background and _screen_locked():
-        cached = load_snapshot() or {"ok": False, "timestamp": now_iso(), "providers": {}}
+        cached = _cached_or_minimal_snapshot()
         cached["notifications"] = []
         cached.setdefault("diagnostics", {})["refresh_skipped"] = "screen-locked"
-        print(json.dumps(cached, indent=2 if args.pretty else None, separators=None if args.pretty else (",", ":")))
+        print(_dump_json(cached, args.pretty))
         return 0
 
     # Best-effort sweep of orphaned atomic-write temps so ~/.tallybar can't slowly fill with
@@ -1312,14 +1328,9 @@ def main() -> int:
     except (KeyboardInterrupt, SystemExit):
         raise
     except BaseException as exc:
-        # build_snapshot should always RETURN a snapshot, but a BaseException escaping it would
-        # leave stdout EMPTY and the widget's JSON.parse would fail. Emit the last cached
-        # snapshot (or a minimal degraded one). Don't touch the cold-start cache here — a
-        # fatal must never clobber last-known-good.
-        fallback = load_snapshot() or {"ok": False, "timestamp": now_iso(), "providers": {}}
-        fallback["notifications"] = []
-        fallback.setdefault("diagnostics", {})["fatal"] = scrub_credentials(f"{exc.__class__.__name__}: {str(exc)}")[:160]
-        print(json.dumps(fallback, indent=2 if args.pretty else None, separators=None if args.pretty else (",", ":")))
+        # A BaseException escaping build_snapshot must still leave parseable JSON on stdout,
+        # and must never clobber the last-known-good cache.
+        print(_dump_json(_degraded_snapshot(_exc_detail(exc)), args.pretty))
         return 0
     # Always print the fresh snapshot, but only overwrite the cold-start cache when it has
     # live data OR the existing cache is itself degraded/absent. The cache write and
@@ -1341,14 +1352,10 @@ def main() -> int:
         snapshot["notifications"] = []
         snapshot.setdefault("diagnostics", {})["post_snapshot_error"] = scrub_credentials(f"{exc.__class__.__name__}: {str(exc)}")[:160]
     try:
-        out = json.dumps(snapshot, indent=2 if args.pretty else None, separators=None if args.pretty else (",", ":"))
+        out = _dump_json(snapshot, args.pretty)
     except (TypeError, ValueError) as exc:
-        # A non-JSON-serializable value that slipped into the snapshot must not leave the
-        # widget with empty stdout: fall back to the disk cache, which is JSON by construction.
-        fallback = load_snapshot() or {"ok": False, "timestamp": now_iso(), "providers": {}}
-        fallback["notifications"] = []
-        fallback.setdefault("diagnostics", {})["fatal"] = scrub_credentials(f"snapshot-serialize: {str(exc)}")[:160]
-        out = json.dumps(fallback, indent=2 if args.pretty else None, separators=None if args.pretty else (",", ":"))
+        # A non-serializable value must not leave stdout empty; the disk cache is JSON by construction.
+        out = _dump_json(_degraded_snapshot(f"snapshot-serialize: {str(exc)}"), args.pretty)
     print(out)
     return 0
 
