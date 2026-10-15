@@ -466,7 +466,7 @@ def run_grok_bot(
 
     try:
         status, body = post(GROK_BOT_USAGE_URL, max(0.5, deadline - time.monotonic()))
-    except Exception as exc:  # the message is built from the class only, never str(exc)
+    except Exception as exc:  # never str(exc) → tests/test_providers.py::test_grok_bot_timeout_and_network_errors
         if _is_timeout(exc):
             return fail("timeout", f"{GROK_BOT_LABEL} telemetry timed out")
         if isinstance(exc, urllib.error.URLError):

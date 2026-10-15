@@ -842,11 +842,9 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     prev_providers = cached_snapshot.get("providers") if isinstance(cached_snapshot, dict) else None
     prev_claude = prev_providers.get("claude") if isinstance(prev_providers, dict) else None
     prev_antigravity = prev_providers.get("antigravity") if isinstance(prev_providers, dict) else None
-    # Google One AI credit-pool throttle: reuse the previous snapshot's balance when it was
-    # fetched < GOOGLE_ONE_REFRESH_SECONDS ago, skipping the authenticated
-    # one.google.com batchexecute RPC entirely. Mirrors the Claude CREDIT_REFRESH_SECONDS
-    # carry-forward (providers/claude.py). The carried fetchedAt is deliberately NOT
-    # re-stamped, so the carry is bounded at GOOGLE_ONE_REFRESH_SECONDS of age (not indefinite).
+    # Reuse a Google One balance younger than GOOGLE_ONE_REFRESH_SECONDS and skip the RPC; its
+    # fetchedAt is not re-stamped, so the carry stays age-bounded.
+    # → tests/test_backend.py::test_build_snapshot_google_one_carried_when_fresh
     carried_g1 = google_one_credit_fresh(prev_antigravity)
 
     # Kick off the local cost scan NOW so its CPU/disk work (parsing ~/.claude, ~/.codex,
