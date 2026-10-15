@@ -9,11 +9,45 @@ Item {
     property var root
     property var cost: root.costSummary() || ({})
     property bool hasRealCost: root.hasCostSummary()
-    property bool hasBreakdown: String(costSection.cost.breakdown || "").trim().length > 0
+    property string breakdownLine: root.costBreakdownText()
+    property bool hasBreakdown: costSection.breakdownLine.length > 0
     // Output tokens the backend estimated because the log had no final usage for them
     // (subagent turns from some Claude Code versions). Explained on hover only, so the
     // section's height — mirrored by costSectionHeight() — never changes.
     property real estimatedOutputTokens: Number(costSection.cost.estimatedOutputTokens || 0)
+    readonly property string estimateNote: costSection.estimatedOutputTokens > 0
+        ? i18n("Includes about %1 estimated output tokens: some subagent messages were logged without their final usage.", Fmt.compactCount(costSection.estimatedOutputTokens))
+        : ""
+    // The window whose line the pointer is on: "today", "7d", or "30d" (the breakdown line
+    // under the 30-day line belongs to it); "" over the title.
+    readonly property string hoverWindow: {
+        if (!costMouse.containsMouse || !costSection.hasRealCost)
+            return "";
+        const y = costMouse.mouseY;
+        if (y >= monthText.y - 3)
+            return "30d";
+        if (weekText.visible && y >= weekText.y - 3)
+            return "7d";
+        return y >= todayText.y - 3 ? "today" : "";
+    }
+    // Hovering a line shows that window by type (hover only, so the height never changes);
+    // the estimate note rides with the 30-day figures it is part of.
+    readonly property string tipText: {
+        const split = costSection.hoverWindow.length > 0 ? root.costTypeTooltip(costSection.hoverWindow) : "";
+        if (costSection.estimateNote.length === 0 || costSection.hoverWindow === "today" || costSection.hoverWindow === "7d")
+            return split;
+        return split.length > 0 ? split + "\n\n" + costSection.estimateNote : costSection.estimateNote;
+    }
+    // Under the line it describes, so it never covers it.
+    readonly property real tipY: {
+        if (costSection.hoverWindow === "today")
+            return todayText.y + todayText.height + 4;
+        if (costSection.hoverWindow === "7d")
+            return weekText.y + weekText.height + 4;
+        if (costSection.hoverWindow === "30d")
+            return (breakdownText.visible ? breakdownText.y + breakdownText.height : monthText.y + monthText.height) + 4;
+        return costTitle.y + costTitle.height + 4;
+    }
 
     Layout.fillWidth: true
     Layout.preferredHeight: visible ? root.costSectionHeight() : 0
@@ -73,9 +107,6 @@ Item {
         cursorShape: Qt.PointingHandCursor
         hoverEnabled: true
         activeFocusOnTab: true
-        QQC2.ToolTip.delay: 450
-        QQC2.ToolTip.text: i18n("Includes about %1 estimated output tokens: some subagent messages were logged without their final usage.", Fmt.compactCount(costSection.estimatedOutputTokens))
-        QQC2.ToolTip.visible: costMouse.containsMouse && costSection.estimatedOutputTokens > 0
         onClicked: {
             root.toggleCostPopout();
         }
@@ -85,6 +116,15 @@ Item {
                 root.toggleCostPopout();
             }
         }
+    }
+
+    QQC2.ToolTip {
+        parent: costSection
+        x: Math.round((costSection.width - width) / 2)
+        y: costSection.tipY
+        delay: 450
+        text: costSection.tipText
+        visible: costMouse.containsMouse && costSection.tipText.length > 0
     }
 
     // Visible keyboard-focus indicator, invisible unless costMouse has focus.
@@ -157,9 +197,9 @@ Item {
         elide: Text.ElideRight
         font.family: root.uiFont
         font.pixelSize: 11
-        // Per-type token breakdown (Input · Output · Cached) for the 30-day window.
+        // 30-day tokens by type: Input · Output · Cache reads · Cache writes.
         textFormat: Text.PlainText
-        text: String(costSection.cost.breakdown || "")
+        text: costSection.breakdownLine
         visible: costSection.hasBreakdown
     }
 }

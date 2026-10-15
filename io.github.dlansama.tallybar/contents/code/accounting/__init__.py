@@ -19,6 +19,8 @@ from .formatting import (
 )
 from .pricing import (
     DEFAULT_MODEL_FOR_PROVIDER,
+    USAGE_TYPES,
+    UsageSplit,
     _explicit_total,
     _family_default_pricing,
     _get_pricing,
@@ -30,11 +32,14 @@ from .pricing import (
     usage_cost_usd,
     usage_token_breakdown,
     usage_token_total,
+    usage_split,
     usage_token_total_and_breakdown,
 )
 from .buckets import (
+    breakdown_from_split,
     bucket_add,
     buckets_model_costs,
+    empty_type_split,
     empty_hourly_token_buckets,
     empty_monthly_token_buckets,
     empty_weekly_token_buckets,
@@ -43,6 +48,10 @@ from .buckets import (
     monthly_token_usage,
     token_summary,
     trailing_week_days,
+    type_breakdown,
+    type_split_add,
+    type_split_merge,
+    type_split_rows,
     weekly_token_usage,
 )
 from .log_parsers import (
@@ -125,6 +134,9 @@ __all__ = [
     "prompt_tier_prices",
     "slim_usage",
     "usage_cost_usd",
+    "usage_split",
+    "UsageSplit",
+    "USAGE_TYPES",
     "_explicit_total",
     "usage_token_total",
     "usage_token_total_and_breakdown",
@@ -134,6 +146,12 @@ __all__ = [
     "empty_hourly_token_buckets",
     "empty_monthly_token_buckets",
     "bucket_add",
+    "empty_type_split",
+    "type_split_add",
+    "type_split_merge",
+    "type_split_rows",
+    "type_breakdown",
+    "breakdown_from_split",
     "buckets_model_costs",
     "weekly_token_usage",
     "monthly_token_usage",

@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any
 
 from accounting import (
+    UsageSplit,
+    breakdown_from_split,
     compact_token_count,
     cost_breakdown_line,
     default_provider,
@@ -28,6 +30,7 @@ from accounting import (
     buckets_model_costs,
     empty_hourly_token_buckets,
     empty_monthly_token_buckets,
+    empty_type_split,
     empty_weekly_token_buckets,
     exact_usd,
     hourly_token_usage,
@@ -36,6 +39,8 @@ from accounting import (
     monthly_token_usage,
     prompt_tier_prices,
     trailing_week_days,
+    type_breakdown,
+    type_split_add,
     weekly_token_usage,
 )
 from io_helpers import atomic_write_text, flock_with_timeout
@@ -975,7 +980,7 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
             _price_cache[key] = chosen
         return _price_cache[key]
 
-    def cost_of(e: dict[str, int], per_call: bool = True) -> float:
+    def cost_of(e: dict[str, int], per_call: bool = True) -> tuple[float, tuple[float, float, float]]:
         p = _prices_for(e)
         if per_call:
             # Prompt-length tier (Gemini 3.1 Pro bills prompts over 200K higher): one call's
@@ -1002,12 +1007,18 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
         # scan agree to the digit), so any per-namespace deflation makes a conversation's
         # cost depend on which path captured it — and change when CLI ownership flips.
         # → tests/test_cli_usage.py::test_cache_read_billed_per_call_*
-        return (e.get("u", 0) * in_rate + e.get("c", 0) * cache_rate
-                + e.get("o", 0) * out_rate) / 1_000_000.0
+        #
+        # Returns the cost and its (input, output, cache-read) parts; the ledger records
+        # no cache writes.
+        u_cost = e.get("u", 0) * in_rate
+        c_cost = e.get("c", 0) * cache_rate
+        o_cost = e.get("o", 0) * out_rate
+        return ((u_cost + c_cost + o_cost) / 1_000_000.0,
+                (u_cost / 1_000_000.0, o_cost / 1_000_000.0, c_cost / 1_000_000.0))
 
     today_cost = month_cost = 0.0
     today_tok = month_tok = 0
-    month_in = month_out = month_cached = 0
+    split_today, split_week, split_month = empty_type_split(), empty_type_split(), empty_type_split()
     model_costs: dict[str, dict[str, Any]] = {}  # per-model 30-day cost/tokens for the breakdown
     daily = empty_weekly_token_buckets(current)
     monthly_buckets = empty_monthly_token_buckets(current)
@@ -1035,10 +1046,13 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
         # A "cli:" entry is the statusLine's CUMULATIVE session total: its u + c adds up
         # every call's prompt and says nothing about any one call's size, and the capture
         # keeps no per-call record to tier from — so it bills at the base rates.
-        c = cost_of(e, per_call=not key.startswith("cli:") and e.get("n", 1) == 1)
+        c, (u_cost, o_cost, c_cost) = cost_of(e, per_call=not key.startswith("cli:") and e.get("n", 1) == 1)
         # Token VOLUME = total tokens processed = uncached input + cached re-read + output
         # (industry standard: volume includes cache reads; cost bills them discounted).
         tok = e.get("u", 0) + cached + e.get("o", 0)  # o = total output (see cost_of)
+        # By type: input lane = uncached input; output lane = total output; cache reads.
+        split = UsageSplit(tok, c, (e.get("u", 0), e.get("o", 0), cached, 0),
+                           (u_cost, o_cost, c_cost, 0.0))
         # Enum map first (mirrors _prices_for): heals fallback-attributed entries
         # retroactively once a new placeholder enum gets mapped. Then collapse to the
         # display FAMILY — the single choke point that keeps the 30-day breakdown and
@@ -1051,20 +1065,19 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
         if d >= m30_iso:
             month_cost += c
             month_tok += tok
-            # input lane = uncached input; output lane = total output; cached = cache reads
-            month_in += e.get("u", 0)
-            month_out += e.get("o", 0)
-            month_cached += cached
+            type_split_add(split_month, split)
             slot = model_costs.setdefault(str(mname), {"cost": 0.0, "tokens": 0})
             slot["cost"] += c
             slot["tokens"] += tok
         if d in daily:
             bucket_add(daily[d], tok, c, mname)
+            type_split_add(split_week, split)
         if d in monthly_buckets and monthly_buckets[d].get("inMonth"):
             bucket_add(monthly_buckets[d], tok, c, mname)
         if d == today_iso:
             today_cost += c
             today_tok += tok
+            type_split_add(split_today, split)
             h = e.get("h")
             if isinstance(h, int) and 0 <= h <= 23:
                 bucket_add(hourly[h], tok, c, mname)
@@ -1108,8 +1121,9 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
         "modelBreakdown": model_breakdown_rows(model_costs),
         "modelBreakdown7d": model_breakdown_rows(buckets_model_costs(daily)),
         "modelBreakdown1d": model_breakdown_rows(daily.get(today_iso, {}).get("models")),
+        "typeBreakdown": type_breakdown(split_today, split_week, split_month),
     }
-    line = cost_breakdown_line(month_in, month_out, month_cached)
+    line = cost_breakdown_line(*breakdown_from_split(split_month))
     if line:
         result["breakdown"] = line
     return result

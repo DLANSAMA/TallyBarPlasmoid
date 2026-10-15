@@ -63,6 +63,7 @@ Item {
     readonly property int costFooterSpacing: 5
     readonly property int costBurnRowHeight: 18
     readonly property int costModelRowHeight: 16
+    readonly property int costTypeRowHeight: 16
     // Extra-usage section height — single source shared by the section's own
     // Layout.preferredHeight AND metricsBodyHeight()'s mirror, so the two can't drift
     // (the documented foot-gun; the metric rows + cost section are already single-sourced
@@ -74,6 +75,9 @@ Item {
         let h = 360;
         if (Number(cost.burnRatePerDay || 0) > 0)
             h += root.costBurnRowHeight + root.costFooterSpacing;   // burn line (= 23)
+        const types = root.costTypeRows(root.costTypePeriod()).length;
+        if (types > 0)    // separator (3 top margin + 1 + 5 spacing) + "BY TYPE" header (19) + N type rows (21 each)
+            h += 9 + 19 + types * (root.costTypeRowHeight + root.costFooterSpacing);
         const models = root.costModelBreakdown().length;
         if (models > 0)   // separator + "TOP MODELS" header (= 6 + 18) + N model rows (21 each)
             h += 6 + 18 + models * (root.costModelRowHeight + root.costFooterSpacing);
@@ -1137,9 +1141,91 @@ Item {
     function costSectionHeight() {
         if (!root.hasCostSection())
             return 0;
+        return 107 + (root.costBreakdownText().length > 0 ? 20 : 0);
+    }
+
+    // Usage by type, from the backend's typeBreakdown: uncached input, output, cache reads,
+    // cache writes, then "unsplit" — tokens a provider's own total held beyond its typed
+    // parts. Display order.
+    readonly property var costTypeKinds: ["input", "output", "cacheRead", "cacheWrite", "unsplit"]
+
+    function costTypeLabel(kind) {
+        if (kind === "input")
+            return i18n("Uncached input");
+        if (kind === "output")
+            return i18n("Output");
+        if (kind === "cacheRead")
+            return i18n("Cache reads");
+        if (kind === "cacheWrite")
+            return i18n("Cache writes");
+        return i18n("Not split by type");
+    }
+
+    // One window's ("today" / "7d" / "30d") types that hold anything, in display order, as
+    // [{kind, tokens, cost}]. Empty for a snapshot cached before the split existed.
+    function costTypeRows(windowKey) {
         const cost = root.costSummary() || ({});
-        const hasBreak = String(cost.breakdown || "").trim().length > 0;
-        return 107 + (hasBreak ? 20 : 0);
+        const split = cost.typeBreakdown ? cost.typeBreakdown[windowKey] : null;
+        const rows = [];
+        if (!split)
+            return rows;
+        for (let i = 0; i < root.costTypeKinds.length; ++i) {
+            const kind = root.costTypeKinds[i];
+            const slot = split[kind];
+            if (!slot)
+                continue;
+            const tokens = Number(slot.tokens || 0);
+            const usd = Number(slot.cost || 0);
+            if (tokens > 0 || usd > 0)
+                rows.push({ "kind": kind, "tokens": tokens, "cost": usd });
+        }
+        return rows;
+    }
+
+    // The popout's by-type window follows the Day / Week / Month switch, like Top models.
+    function costTypePeriod() {
+        if (root.costGraphMode === "day")
+            return "today";
+        return root.costGraphMode === "week" ? "7d" : "30d";
+    }
+
+    // The cost section's 30-day line: tokens by type, cache reads and writes apart. A
+    // snapshot cached before the split keeps the backend's lumped "breakdown" line.
+    function costBreakdownText() {
+        const rows = root.costTypeRows("30d");
+        if (rows.length === 0) {
+            const cost = root.costSummary() || ({});
+            return String(cost.breakdown || "").trim();
+        }
+        const parts = [];
+        for (let i = 0; i < rows.length; ++i) {
+            if (rows[i].tokens <= 0)
+                continue;
+            const n = Fmt.compactCount(rows[i].tokens);
+            if (rows[i].kind === "input")
+                parts.push(i18n("Input %1", n));
+            else if (rows[i].kind === "output")
+                parts.push(i18n("Output %1", n));
+            else if (rows[i].kind === "cacheRead")
+                parts.push(i18n("Cache reads %1", n));
+            else if (rows[i].kind === "cacheWrite")
+                parts.push(i18n("Cache writes %1", n));
+        }
+        return parts.join(" · ");
+    }
+
+    // Hover text for one of the cost section's Today / 7-day / 30-day lines: that window
+    // by type, in dollars and tokens.
+    function costTypeTooltip(windowKey) {
+        const rows = root.costTypeRows(windowKey);
+        if (rows.length === 0)
+            return "";
+        const lines = [windowKey === "today" ? i18n("Today by type")
+            : (windowKey === "7d" ? i18n("Last 7 days by type") : i18n("Last 30 days by type"))];
+        for (let i = 0; i < rows.length; ++i)
+            lines.push(i18n("%1: %2 · %3 tok", root.costTypeLabel(rows[i].kind),
+                root.compactUsd(rows[i].cost), Fmt.compactCount(rows[i].tokens)));
+        return lines.join("\n");
     }
 
     function compactUsd(value) {

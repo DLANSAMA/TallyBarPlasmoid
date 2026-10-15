@@ -823,6 +823,63 @@ epsilon: 0.01
 
                 }
 
+                // Usage by type (uncached input, output, cache reads, cache writes) for the
+                // window the Day / Week / Month switch shows.
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.topMargin: 3
+                    Layout.preferredHeight: 1
+                    color: root.separatorColor(0.1)
+                    visible: root.costTypeRows(root.costTypePeriod()).length > 0
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    color: root.mutedTextColor(0.55)
+                    font.family: root.uiFont
+                    font.pixelSize: 10
+                    font.weight: Font.DemiBold
+                    textFormat: Text.PlainText
+                    text: root.costTypePeriod() === "today"
+                        ? i18n("BY TYPE · TODAY")
+                        : (root.costTypePeriod() === "7d"
+                            ? i18n("BY TYPE · 7 DAYS")
+                            : i18n("BY TYPE · 30 DAYS"))
+                    visible: root.costTypeRows(root.costTypePeriod()).length > 0
+                }
+
+                Repeater {
+                    model: root.costTypeRows(root.costTypePeriod())
+
+                    delegate: RowLayout {
+                        required property var modelData
+
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: root.costTypeRowHeight  // mirrored in drawerHeightFor()
+                        spacing: 10
+
+                        Text {
+                            Layout.fillWidth: true
+                            color: root.primaryTextColor(0.86)
+                            elide: Text.ElideRight
+                            font.family: root.uiFont
+                            font.pixelSize: 11
+                            textFormat: Text.PlainText
+                            text: root.costTypeLabel(modelData.kind)
+                        }
+
+                        Text {
+                            color: root.mutedTextColor(0.72)
+                            font.family: root.uiFont
+                            font.pixelSize: 11
+                            horizontalAlignment: Text.AlignRight
+                            textFormat: Text.PlainText
+                            text: root.compactUsd(Number(modelData.cost || 0)) + " · "
+                                + i18n("%1 tok", Fmt.compactCount(Number(modelData.tokens || 0)))
+                        }
+                    }
+                }
+
                 // Per-model cost attribution (top models by Today / 7-day / 30-day spend).
                 Rectangle {
                     Layout.fillWidth: true

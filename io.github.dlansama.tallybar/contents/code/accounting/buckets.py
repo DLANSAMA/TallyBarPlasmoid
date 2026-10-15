@@ -5,7 +5,7 @@ import datetime as dt
 from typing import Any
 
 from .formatting import compact_token_count, exact_usd
-from .pricing import cost_breakdown_line
+from .pricing import USAGE_TYPES, UsageSplit, cost_breakdown_line
 
 
 def empty_weekly_token_buckets(current: dt.datetime) -> dict[str, dict[str, Any]]:
@@ -67,6 +67,66 @@ def bucket_add(bucket: dict[str, Any], tokens: int, cost: float, model: Any) -> 
     slot = bucket.setdefault("models", {}).setdefault(str(model), {"cost": 0.0, "tokens": 0})
     slot["cost"] += cost
     slot["tokens"] += tokens
+
+
+# The keys of one window's type split: USAGE_TYPES, then "unsplit" for tokens a record's
+# own total holds beyond its typed parts (usage_split) — reported, never guessed at.
+_SPLIT_KEYS = (*USAGE_TYPES, "unsplit")
+
+
+def empty_type_split() -> dict[str, dict[str, Any]]:
+    """A ``{type: {tokens, cost}}`` accumulator for one window (Today, 7 days, 30 days)."""
+    return {key: {"tokens": 0, "cost": 0.0} for key in _SPLIT_KEYS}
+
+
+def type_split_add(acc: dict[str, dict[str, Any]], split: UsageSplit) -> None:
+    """Add one request to a window's type split. Called exactly where the request's
+    ``tokens``/``cost`` go into that window's total, the split adds up to the total."""
+    for key, tokens, cost in zip(USAGE_TYPES, split.type_tokens, split.type_costs):
+        acc[key]["tokens"] += tokens
+        acc[key]["cost"] += cost
+    extra = split.tokens - sum(split.type_tokens)
+    if extra > 0:
+        acc["unsplit"]["tokens"] += extra
+    # The cost is always typed: every billed lane is one of USAGE_TYPES.
+
+
+def type_split_merge(acc: dict[str, dict[str, Any]], other: dict[str, Any] | None) -> None:
+    """Add a stored (serialized or accumulator) split into ``acc``."""
+    for key in _SPLIT_KEYS:
+        slot = (other or {}).get(key)
+        if isinstance(slot, dict):
+            acc[key]["tokens"] += int(slot.get("tokens") or 0)
+            acc[key]["cost"] += float(slot.get("cost") or 0.0)
+
+
+def type_split_rows(acc: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Serialize one window's split: every USAGE_TYPES key (zeros included, so the
+    contract is fixed), plus "unsplit" only when it holds anything."""
+    out: dict[str, dict[str, Any]] = {}
+    for key in _SPLIT_KEYS:
+        slot = acc.get(key) or {}
+        tokens = int(slot.get("tokens") or 0)
+        cost = round(float(slot.get("cost") or 0.0), 6)
+        if key == "unsplit" and tokens <= 0 and cost <= 0.0:
+            continue
+        out[key] = {"tokens": tokens, "cost": cost}
+    return out
+
+
+def type_breakdown(today: dict[str, dict[str, Any]], week: dict[str, dict[str, Any]],
+                   month: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """The summary's ``typeBreakdown``: each window's split, keyed like the totals
+    (``costToday``/``cost7d``/``cost30d``)."""
+    return {"today": type_split_rows(today), "7d": type_split_rows(week),
+            "30d": type_split_rows(month)}
+
+
+def breakdown_from_split(month: dict[str, dict[str, Any]]) -> tuple[int, int, int]:
+    """The 30-day ``(input, output, cached)`` triple of the ``breakdown`` line, where
+    cached is cache reads and writes together."""
+    return (int(month["input"]["tokens"]), int(month["output"]["tokens"]),
+            int(month["cacheRead"]["tokens"]) + int(month["cacheWrite"]["tokens"]))
 
 
 def weekly_token_usage(buckets: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -162,7 +222,11 @@ def token_summary(
     model_costs_7d: dict[str, dict[str, Any]] | None = None,
     model_costs_1d: dict[str, dict[str, Any]] | None = None,
     estimated_output_tokens: int = 0,
+    type_split: dict[str, dict[str, dict[str, Any]]] | None = None,
 ) -> dict[str, Any] | None:
+    """Assemble a provider's cost summary. ``type_split`` holds the "today", "7d" and
+    "30d" accumulators (empty_type_split); it becomes ``typeBreakdown`` and, unless
+    ``breakdown`` is given, the 30-day ``breakdown`` line."""
     if month_tokens <= 0 and today_tokens <= 0:
         return None
 
@@ -189,6 +253,11 @@ def token_summary(
         "modelBreakdown7d": model_rows_7d,
         "modelBreakdown1d": model_rows_1d,
     }
+    if type_split is not None:
+        raw["typeBreakdown"] = type_breakdown(type_split["today"], type_split["7d"],
+                                              type_split["30d"])
+        if breakdown is None:
+            breakdown = breakdown_from_split(type_split["30d"])
     if estimated_output_tokens > 0:
         # Output tokens in the 30-day totals that were estimated rather than read from a
         # logged usage figure; the cost section explains them in a tooltip.

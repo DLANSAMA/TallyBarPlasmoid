@@ -14,8 +14,17 @@ Notable changes to TallyBar. Format follows
   history yet.
 - Existing setups get the new tab without touching Settings. A provider tab you had
   turned off stays off.
+- Cost now shows what the tokens went on: uncached input, output, cache reads and
+  cache writes, each in tokens and dollars, for Codex, Claude, Gemini, Grok and
+  Antigravity. Hover the Today, Last 7 days or Last 30 days line in a tab's cost section
+  for that window's split. The cost popout lists it under "By type" for the window the
+  Day / Week / Month switch shows. Codex, Gemini and Grok count prompt tokens served
+  from cache as cache reads, so their input line is the uncached part only. Antigravity
+  reports no cache writes. `backend.py --cost` carries the split as `typeBreakdown`.
 
 ### Changed
+- The line under a tab's cost totals names cache reads and cache writes separately
+  instead of one "Cached" figure.
 - The cost popout's "Top models" list now follows the Day / Week / Month switch: Day
   lists today's models, Week the last 7 days, Month the last 30. It always showed 30
   days before.
