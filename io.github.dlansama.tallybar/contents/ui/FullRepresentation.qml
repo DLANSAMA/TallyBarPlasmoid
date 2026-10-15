@@ -54,7 +54,6 @@ Item {
     readonly property real drawerWidth: 312
     // The cost popout sizes to its footer content (chartArea is fixed at 150) so a sparse
     // provider (no burn rate, no per-model data — e.g. Gemini web) doesn't leave dead glass.
-    // 360 = header + tabs + chart + the 3 Today/7d/30d rows; +23 for the burn line; +per-model.
     // Per-section pixel heights of the cost-popout footer, shared by the footer rows
     // themselves AND drawerHeightFor()'s deterministic height mirror so the two cannot drift
     // (the same metricsBodyHeight() mirror foot-gun CLAUDE.md documents — but with a single
@@ -64,6 +63,14 @@ Item {
     readonly property int costBurnRowHeight: 18
     readonly property int costModelRowHeight: 16
     readonly property int costTypeRowHeight: 16
+    // Header + tabs + chart + the three Today/7d/30d rows.
+    readonly property int costDrawerBaseHeight: 360
+    // "BY TYPE": separator (3 top margin + 1 + 5 spacing) plus the header.
+    readonly property int costTypeSeparatorHeight: 9
+    readonly property int costTypeHeaderHeight: 19
+    // "TOP MODELS": separator plus the header.
+    readonly property int costModelSeparatorHeight: 6
+    readonly property int costModelHeaderHeight: 18
     // Extra-usage section height — single source shared by the section's own
     // Layout.preferredHeight AND metricsBodyHeight()'s mirror, so the two can't drift
     // (the documented foot-gun; the metric rows + cost section are already single-sourced
@@ -72,15 +79,15 @@ Item {
 
     function drawerHeightFor() {
         const cost = root.costSummary() || ({});
-        let h = 360;
+        let h = root.costDrawerBaseHeight;
         if (Number(cost.burnRatePerDay || 0) > 0)
-            h += root.costBurnRowHeight + root.costFooterSpacing;   // burn line (= 23)
+            h += root.costBurnRowHeight + root.costFooterSpacing;
         const types = root.costTypeRows(root.costTypePeriod()).length;
-        if (types > 0)    // separator (3 top margin + 1 + 5 spacing) + "BY TYPE" header (19) + N type rows (21 each)
-            h += 9 + 19 + types * (root.costTypeRowHeight + root.costFooterSpacing);
+        if (types > 0)
+            h += root.costTypeSeparatorHeight + root.costTypeHeaderHeight + types * (root.costTypeRowHeight + root.costFooterSpacing);
         const models = root.costModelBreakdown().length;
-        if (models > 0)   // separator + "TOP MODELS" header (= 6 + 18) + N model rows (21 each)
-            h += 6 + 18 + models * (root.costModelRowHeight + root.costFooterSpacing);
+        if (models > 0)
+            h += root.costModelSeparatorHeight + root.costModelHeaderHeight + models * (root.costModelRowHeight + root.costFooterSpacing);
         return h;
     }
     readonly property real drawerHeight: root.drawerHeightFor()
@@ -1128,11 +1135,13 @@ Item {
 
     // SINGLE source for the cost section's height — used by BOTH the section's own
     // Layout.preferredHeight AND the metricsBodyHeight() mirror, so the two can never
-    // diverge (the documented scrollbar foot-gun). Base 107, +20 for the breakdown line.
+    // diverge (the documented scrollbar foot-gun).
+    readonly property int costSectionBaseHeight: 107
+    readonly property int costBreakdownLineHeight: 20
     function costSectionHeight() {
         if (!root.hasCostSection())
             return 0;
-        return 107 + (root.costBreakdownText().length > 0 ? 20 : 0);
+        return root.costSectionBaseHeight + (root.costBreakdownText().length > 0 ? root.costBreakdownLineHeight : 0);
     }
 
     // Usage by type, from the backend's typeBreakdown: uncached input, output, cache reads,
@@ -1285,12 +1294,11 @@ Item {
         return total + (parts.length - 1) * 8;
     }
 
-    // Chrome around the scrollable body: top margin 6 + dock 58 + 8 + hero 50
-    // + 8 + flickable top margin 10 + 8 + footer + bottom margin 10 = 158 + footer.
-    // 158 = fixed chrome (margins + dock + hero + flickable margins + footer rules); the
-    // footer height (incl. the All-AI total row) lives in actionFooterHeight(); the degraded
-    // banner, when shown, adds its own fixed strip (24) + one ColumnLayout gap (8) above the body.
-    readonly property real popupChromeHeight: 158 + root.actionFooterHeight() + (root.degradedText().length > 0 ? 32 : 0)
+    // Chrome around the scrollable body, excluding the footer (actionFooterHeight()).
+    readonly property int popupChromeFixedHeight: 6 + 58 + 8 + 50 + 8 + 10 + 8 + 10
+    // The degraded banner, when shown: its own strip plus one ColumnLayout gap above the body.
+    readonly property int degradedBannerHeight: 24 + 8
+    readonly property real popupChromeHeight: root.popupChromeFixedHeight + root.actionFooterHeight() + (root.degradedText().length > 0 ? root.degradedBannerHeight : 0)
     readonly property real popupScreenCap: Math.max(440, root.availableScreenHeight - 96)
     readonly property real popupFitHeight: Math.max(360, Math.min(root.popupScreenCap, root.popupChromeHeight + root.metricsBodyHeight() + 6))
 
