@@ -22,6 +22,10 @@ from parsers import (
 
 
 OPENAI_COOKIE_DOMAINS = ("chatgpt.com", "openai.com")
+# A malformed stream can't grow the RPC read buffer past _RPC_BUFFER_CAP chars; on overflow
+# the newest _RPC_BUFFER_KEEP are kept.
+_RPC_BUFFER_CAP = 16_000_000
+_RPC_BUFFER_KEEP = 4_000_000
 OPENAI_ACCOUNT_CHECK_URL = "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27"
 
 
@@ -109,9 +113,8 @@ class JsonRpcChild:
                 if not chunk:
                     break
                 buffer += chunk.decode("utf-8", errors="replace")
-                # Cap buffer to prevent memory exhaustion from malformed streams
-                if len(buffer) > 16_000_000:
-                    buffer = buffer[-4_000_000:]
+                if len(buffer) > _RPC_BUFFER_CAP:
+                    buffer = buffer[-_RPC_BUFFER_KEEP:]
                     # A blind tail-slice can cut mid-message, leaving an undecodable
                     # partial at the head that raw_decode fails on forever (the parser then
                     # never recovers and the RPC hangs until timeout). Messages are newline-
