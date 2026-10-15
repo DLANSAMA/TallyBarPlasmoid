@@ -1098,7 +1098,7 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
     # "Last 7 days" = the daily buckets summed, so it matches the Week graph's bars exactly.
     week_tok = sum(b["tokens"] for b in daily.values())
     week_cost = sum(b["cost"] for b in daily.values())
-    burn_rate = week_cost / trailing_week_days()  # trailing-7-day average $/day (unbiased)
+    burn_rate = week_cost / trailing_week_days(current)  # trailing-7-day average $/day (unbiased)
     result = {
         "title": "Cost (if pay-per-use)",
         "today": f"Today: {exact_usd(today_cost)} · {compact_token_count(today_tok)} tok",

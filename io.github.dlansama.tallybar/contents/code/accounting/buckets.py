@@ -170,9 +170,12 @@ def hourly_token_usage(buckets: dict[int, dict[str, Any]]) -> list[dict[str, Any
     ]
 
 
-def trailing_week_days() -> float:
-    """Effective number of days in the trailing 7-day burn window."""
-    _now = dt.datetime.now()
+def trailing_week_days(now: dt.datetime | None = None) -> float:
+    """Effective number of days in the trailing 7-day burn window: six whole days plus
+    the part of today gone by at ``now`` (local time; default the real clock). A summary
+    passes its own ``now``, so a summary computed for a fixed moment has one burn rate
+    rather than one that moves with the wall clock between calls."""
+    _now = now if now is not None else dt.datetime.now()
     elapsed = (_now.hour * 3600 + _now.minute * 60 + _now.second) / 86400.0
     return 6.0 + elapsed
 
@@ -223,10 +226,12 @@ def token_summary(
     model_costs_1d: dict[str, dict[str, Any]] | None = None,
     estimated_output_tokens: int = 0,
     type_split: dict[str, dict[str, dict[str, Any]]] | None = None,
+    now: dt.datetime | None = None,
 ) -> dict[str, Any] | None:
     """Assemble a provider's cost summary. ``type_split`` holds the "today", "7d" and
     "30d" accumulators (empty_type_split); it becomes ``typeBreakdown`` and, unless
-    ``breakdown`` is given, the 30-day ``breakdown`` line."""
+    ``breakdown`` is given, the 30-day ``breakdown`` line. ``now`` is the summarizer's
+    own local time, which the burn rate's partial day is measured from."""
     if month_tokens <= 0 and today_tokens <= 0:
         return None
 
@@ -235,7 +240,7 @@ def token_summary(
     hour_history = hourly or []
     week_tokens = sum(int(d.get("tokens", 0)) for d in history)
     week_cost = sum(float(d.get("cost", 0.0)) for d in history)
-    burn_rate = week_cost / trailing_week_days()
+    burn_rate = week_cost / trailing_week_days(now)
     model_rows = model_breakdown_rows(model_costs)
     model_rows_7d = model_breakdown_rows(model_costs_7d)
     model_rows_1d = model_breakdown_rows(model_costs_1d)

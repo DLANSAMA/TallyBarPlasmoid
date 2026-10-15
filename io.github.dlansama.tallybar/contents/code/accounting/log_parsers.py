@@ -682,6 +682,7 @@ def local_claude_token_summary(
             bucket_add(hourly[timestamp.hour], tokens, cost, model)
 
     summary = token_summary(today_tokens, month_tokens, "local-claude-logs", today_cost, month_cost, tier,
+                            now=current,
                             type_split={"today": split_today, "7d": split_week, "30d": split_month},
                             daily=weekly_token_usage(daily),
                             monthly=monthly_token_usage(monthly_buckets),
@@ -757,6 +758,7 @@ def local_codex_token_summary(
             bucket_add(hourly[timestamp.hour], tokens, cost, model)
 
     return token_summary(today_tokens, month_tokens, "local-codex-logs", today_cost, month_cost, tier,
+                         now=current,
                          type_split={"today": split_today, "7d": split_week, "30d": split_month},
                          daily=weekly_token_usage(daily),
                          monthly=monthly_token_usage(monthly_buckets),
@@ -935,6 +937,7 @@ def local_grok_token_summary(
             pass
 
     summary = token_summary(today_tokens, month_tokens, "local-grok-logs", today_cost, month_cost, tier,
+                            now=current,
                             type_split={"today": split_today, "7d": split_week, "30d": split_month},
                             daily=weekly_token_usage(daily),
                             monthly=monthly_token_usage(monthly_buckets),
@@ -1149,6 +1152,7 @@ def local_gemini_token_summary(
             bucket_add(hourly[timestamp.hour], tokens, cost, model)
 
     return token_summary(today_tokens, month_tokens, "local-gemini-logs", today_cost, month_cost, tier,
+                         now=current,
                          type_split={"today": split_today, "7d": split_week, "30d": split_month},
                          daily=weekly_token_usage(daily),
                          monthly=monthly_token_usage(monthly_buckets),

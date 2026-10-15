@@ -964,6 +964,22 @@ def test_parse_cache_rebuilds_on_corruption_and_version_bump(tmp_path):
             assert accounting.local_claude_token_summary(projects_dir=proj, now=_NOW, cache_dir=cache) == truth
 
 
+def test_burn_rate_is_measured_from_the_summary_now_not_the_wall_clock(tmp_path):
+    # The burn rate's partial day comes from the summary's own `now`. It used to read the
+    # real clock, so two summaries for one fixed moment differed whenever the calls
+    # straddled a second boundary (the parse-cache tests above flaked on projectedMonthlyCost).
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "s.jsonl").write_text(json.dumps(_claude_rec("r1", 5000)) + "\n", encoding="utf-8")
+    local = _NOW.astimezone()
+    days = 6 + (local.hour * 3600 + local.minute * 60 + local.second) / 86400
+    with patch("accounting.model_pricing", return_value=_FLAT_PRICES):
+        s = accounting.local_claude_token_summary(projects_dir=proj, now=_NOW, cache_dir=None)
+    assert s["cost7d"] == 1.75
+    assert s["burnRatePerDay"] == round(1.75 / days, 6)
+    assert accounting.trailing_week_days(local) == days
+
+
 def test_parse_cache_codex_transparent(tmp_path):
     # Same transparency guarantee for the Codex summarizer (whose extractor also tracks
     # the active model per file — cached records must carry the resolved model).

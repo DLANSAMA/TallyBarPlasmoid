@@ -1345,8 +1345,8 @@ def test_antigravity_summary_burn_rate_uses_unbiased_denominator(tmp_path, monke
     # (easier: patch trailing_week_days and verify it is consulted).
     called_with = []
 
-    def fake_twd():
-        v = accounting.trailing_week_days.__wrapped__() if hasattr(accounting.trailing_week_days, "__wrapped__") else accounting.trailing_week_days()
+    def fake_twd(now=None):
+        v = accounting.trailing_week_days(now)
         called_with.append(v)
         return v
 
