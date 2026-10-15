@@ -20,42 +20,42 @@ def parse_timestamp(value: Any) -> dt.datetime | None:
     return parsed.astimezone()
 
 
+_COUNT_TIERS = ((1_000, "K"), (1_000_000, "M"), (1_000_000_000, "B"))
+
+
+def _format_in_tier(amount: int, div: int, suffix: str) -> tuple[str, int | None]:
+    """Render `amount` in one unit tier; the second item is the rounded amount to
+    re-render one tier up when the text would otherwise reach the next boundary."""
+    n = amount / div
+    carried = int(n + 0.5) * div
+    if suffix == "K":
+        rounded = int(n + 0.5)
+        return f"{rounded}K", carried if rounded >= 1000 else None
+    if n >= 100:
+        rounded = int(n + 0.5)
+        return f"{rounded}{suffix}", carried if rounded >= 1000 else None
+    if n >= 10:
+        formatted = f"{n:.1f}".rstrip("0").rstrip(".")
+        return f"{formatted}{suffix}", carried if float(formatted) >= 100 else None
+    formatted = f"{n:.2f}".rstrip("0").rstrip(".")
+    return f"{formatted}{suffix}", carried if float(formatted) >= 10 else None
+
+
 def compact_token_count(value: int | float) -> str:
     # Mirror the QML compactCount() exactly — carry at the 1000-of-a-unit boundary
     # (999.5K -> 1M) and trim trailing zeros (13.0M -> 13M, 1.20M -> 1.2M) — so a token
     # count renders identically in the Python cost lines and the QML bars/tooltips/graphs.
     # JS Math.round is half-UP, so use int(x + 0.5) rather than Python's half-even round().
     amount = max(0, int(float(value) + 0.5))
-    largest_div = 1_000_000_000
-    for div, suffix in ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K")):
-        if amount >= div:
-            # At the largest unit there is no bigger tier to escalate into: recursing
-            # here (as the smaller tiers do below) lands on amount == round(n)*div, a
-            # numeric fixed point once n itself is an integer >= 1000 — which recurses
-            # forever (RecursionError) instead of ever escaping. So a value at/above its
-            # own carry boundary is formatted directly against this (largest) unit.
-            can_carry = div != largest_div
-            n = amount / div
-            if suffix == "K":
-                rounded = int(n + 0.5)
-                if can_carry and rounded >= 1000:
-                    return compact_token_count(int(amount / 1000 + 0.5) * 1000)
-                return f"{rounded}K"
-            if n >= 100:
-                rounded = int(n + 0.5)
-                if can_carry and rounded >= 1000:
-                    return compact_token_count(int(amount / div + 0.5) * div)
-                return f"{rounded}{suffix}"
-            if n >= 10:
-                formatted = f"{n:.1f}".rstrip("0").rstrip(".")
-                if can_carry and float(formatted) >= 100:
-                    return compact_token_count(int(amount / div + 0.5) * div)
-                return f"{formatted}{suffix}"
-            formatted = f"{n:.2f}".rstrip("0").rstrip(".")
-            if can_carry and float(formatted) >= 10:
-                return compact_token_count(int(amount / div + 0.5) * div)
-            return f"{formatted}{suffix}"
-    return str(amount)
+    while True:
+        tiers = [t for t in _COUNT_TIERS if amount >= t[0]]
+        if not tiers:
+            return str(amount)
+        div, suffix = tiers[-1]
+        text, carried = _format_in_tier(amount, div, suffix)
+        if carried is None or div == _COUNT_TIERS[-1][0]:
+            return text
+        amount = carried
 
 
 def exact_usd(amount: float) -> str:
