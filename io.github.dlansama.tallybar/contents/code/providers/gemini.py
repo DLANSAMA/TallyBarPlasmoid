@@ -287,7 +287,7 @@ def run_gemini_web(cookies: list[BrowserCookie], timeout: float) -> dict[str, An
         message="Read gemini.google.com/usage metrics RPC" if limits else "Gemini usage RPC returned no recognizable limits",
         limits=limits,
     )
-    # gemini.google.com never returns the tier; apply_local_cost_summaries propagates it.
+    # gemini.google.com never returns the tier; apply_cost_summaries propagates it.
     # → tests/test_providers.py::test_gemini_web_result_never_carries_a_tier
     return result
 

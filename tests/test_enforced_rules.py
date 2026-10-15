@@ -82,7 +82,7 @@ def test_introductory_price_has_not_expired(model, end):
     assert any(k == model for k, _ in pricing_data._FALLBACK_PRICING), f"{model} row missing"
     assert date.today() <= date.fromisoformat(end), (
         f"{model}: introductory rate ended {end}. Update its row in pricing_data._FALLBACK_PRICING "
-        "to the list rate and fix/remove its INTRO_RATE_ENDS entry (master-plan B-5).")
+        "to the list rate and fix/remove its INTRO_RATE_ENDS entry.")
 
 
 # 8 -------------------------------------------------------------------------

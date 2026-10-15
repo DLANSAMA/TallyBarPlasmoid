@@ -53,10 +53,6 @@ PRICING_CACHE_VERSION = 2
 _RELEVANT_PROVIDERS = frozenset(("anthropic", "openai", "gemini", "xai"))
 
 
-# Embedded fallback — a snapshot of per-MTok pricing that ships with the code. The fetched
-# LiteLLM data is the source of truth; these rows bill a first run / offline, and
-# _with_fallback_supplement appends them for any key the live catalog lacks.
-
 # Last day each introductory Gemini rate in _FALLBACK_PRICING applies (ISO date). After it the
 # row must be updated to the list rate (see the comment on those rows); a test fails then.
 INTRO_RATE_ENDS: dict[str, str] = {
@@ -66,6 +62,9 @@ INTRO_RATE_ENDS: dict[str, str] = {
     "gemini-3.8-flash": "2026-12-31",
 }
 
+# Embedded fallback — a snapshot of per-MTok pricing that ships with the code. The fetched
+# LiteLLM data is the source of truth; these rows bill a first run / offline, and
+# _with_fallback_supplement appends them for any key the live catalog lacks.
 _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
     # Anthropic Claude. cache_write is the 5-minute write rate (1.25x input);
     # cache_write_1h is the 1-hour write rate (2x input). LiteLLM is the source of truth;

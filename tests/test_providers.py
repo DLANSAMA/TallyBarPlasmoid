@@ -2137,7 +2137,7 @@ def test_grok_bot_store_path_lives_under_config():
 @pytest.mark.parametrize("limits", [[{"label": "Session", "percent": 12.0, "unit": "%"}], []])
 def test_gemini_web_result_never_carries_a_tier(monkeypatch, limits):
     """gemini.google.com never reports the subscription tier; it arrives only through
-    apply_local_cost_summaries' propagation from Antigravity's GetUserStatus."""
+    apply_cost_summaries' propagation from Antigravity's GetUserStatus."""
     monkeypatch.setattr(providers.gemini, "_load_gemini_tokens", lambda: ("AT", "BL", "SID"))
     monkeypatch.setattr(providers.gemini, "_save_gemini_tokens", lambda *a: None)
     with patch("providers.gemini.http_text", return_value=(200, "<html></html>")), \

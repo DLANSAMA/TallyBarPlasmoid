@@ -466,10 +466,12 @@ def _step_keys(generations: list) -> list[str]:
 
 
 def test_generation_keys_are_stable_when_a_usageless_generation_appears():
-    base = [_gen(7), _gen_no_step(), _gen(9)]
-    with_extra = base + [{"stepIndices": [11], "chatModel": {}}]      # no usage: skipped
-    assert _step_keys(base) == ["7", "g1", "9"]
-    assert _step_keys(with_extra) == _step_keys(base)
+    # An earlier stepless generation has no usage on the first poll and gains it on the next:
+    # the later one keeps its key, so it is neither billed twice nor dropped.
+    first = [_gen(7), {"chatModel": {}}, _gen_no_step()]
+    second = [_gen(7), _gen_no_step(), _gen_no_step()]
+    assert _step_keys(first) == ["7", "g2"]
+    assert _step_keys(second) == ["7", "g1", "g2"]
 
 
 def test_step_index_keys_ignore_list_position_and_never_collide_with_g_keys():
