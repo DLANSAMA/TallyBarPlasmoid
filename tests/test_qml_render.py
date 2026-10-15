@@ -28,10 +28,15 @@ SHOTS = REPO / "tests" / "render-baselines"
 # developer's desktop kdeglobals, so switching desktop icon themes broke the widget shots).
 SHOT_DAY = re.search(r"^SHOT_DAY := (\S+)$", (REPO / "Makefile").read_text(), re.M).group(1)
 CURSOR_PX = re.search(r"^CURSOR_PX := (\d+)", (REPO / "Makefile").read_text(), re.M).group(1)
-SHOT_ENV = dict(QML_XHR_ALLOW_FILE_READ="1", QT_FORCE_STDERR_LOGGING="1",
-                QT_QPA_PLATFORM="offscreen", QT_QUICK_BACKEND="software",
-                XDG_ICON_THEME="breeze-dark", QT_QPA_PLATFORMTHEME="kde",
-                XDG_CONFIG_HOME=str(REPO / "tools" / "preview" / "xdg-config"))
+def _shot_env() -> dict:
+    mk = (REPO / "Makefile").read_text()
+    qml_env = re.search(r"^QML_ENV := (.+)$", mk, re.M).group(1)
+    shot = re.search(r"^SHOT_ENV := ((?:.*\\\n)*.*)$", mk, re.M).group(1)
+    shot = shot.replace("\\\n", " ").replace("$(QML_ENV)", qml_env).replace("$(CURDIR)", str(REPO))
+    return dict(tok.split("=", 1) for tok in shot.split())
+
+
+SHOT_ENV = _shot_env()
 
 
 def _delegate_blocks(src: str):

@@ -56,6 +56,15 @@ _RELEVANT_PROVIDERS = frozenset(("anthropic", "openai", "gemini", "xai"))
 # LiteLLM data is the source of truth; these rows bill a first run / offline, and
 # _with_fallback_supplement appends them for any key the live catalog lacks.
 
+# Last day each introductory Gemini rate in _FALLBACK_PRICING applies (ISO date). After it the
+# row must be updated to the list rate (see the comment on those rows); a test fails then.
+INTRO_RATE_ENDS: dict[str, str] = {
+    "gemini-4-argon": "2026-11-30",
+    "gemini-3.6-flash": "2026-12-31",
+    "gemini-3.7-flash": "2026-12-31",
+    "gemini-3.8-flash": "2026-12-31",
+}
+
 _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
     # Anthropic Claude. cache_write is the 5-minute write rate (1.25x input);
     # cache_write_1h is the 1-hour write rate (2x input) — usage_cost_usd splits
@@ -125,6 +134,7 @@ _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
     ("gpt-4o-mini",          {"input":  0.15, "output":  0.60, "cache_read":  0.075}),
     ("gpt-4o",               {"input":  2.50, "output": 10.00, "cache_read":  1.25}),
     # Google Gemini
+    # Introductory rates end on the dates in INTRO_RATE_ENDS (a test fails once one passes).
     # Rates from ai.google.dev/gemini-api/docs/pricing (2026-10-01). Every Flash version
     # needs its own exact key ("gemini-3.5-flash" would otherwise family-match
     # "gemini-3.5-flash-lite"). 3.6/3.7/3.8 Flash are on an introductory rate through
