@@ -1,15 +1,13 @@
 # TallyBar QML preview + screenshot harness
 
-Two small tools that run the widget's UI without a Plasma session:
+Small tools that run the widget's UI without a Plasma session:
 
 | File                  | Purpose                                                        |
 |-----------------------|----------------------------------------------------------------|
 | `harness.qml`         | Interactive preview window (`make preview`)                     |
-| `screenshot.qml`      | Offscreen PNG renderer (`make screenshots`)                     |
-| `mock-telemetry.json` | The fixture both of them render                                 |
-
-Both read the same fixture, so the preview and the screenshots published in the
-README can't drift apart.
+| `screenshot.qml`      | Offscreen PNG renderer (`make screenshots`, `make render-baselines`) |
+| `demo_gif.py`         | Pointer cursors for a walk, and the GIF stitcher for `make screenshots` |
+| `mock-telemetry.json` | The fixture the preview and the render baselines use            |
 
 ## Preview
 
@@ -27,14 +25,23 @@ property — the same property `main.qml` binds in the real applet.
 ## Screenshots
 
 ```bash
-make screenshots       # re-renders docs/screenshots/*.png
+make screenshots       # README images, docs/screenshots/*.png + cost-demo.gif, from live usage
+make render-baselines  # test baselines, tests/render-baselines/*.png, from the fixture
 ```
 
-Runs fully offscreen — no display, no Plasma, and no real usage data: the PNGs
-are rendered from `mock-telemetry.json`, so nothing from the developer's own
-`~/.tallybar` ledger can leak into a committed image. `screenshot.qml` slides the
-fixture's fixed reference week onto the current one before rendering, so a
-committed screenshot never shows "Updated 180d ago" or a stale month grid.
+Both run fully offscreen, with no display and no Plasma.
+
+`make screenshots` runs the backend once, the way the widget does
+(`--once --background`), into a temp file and renders that snapshot as-is
+(`snapshot=`). The README images therefore show the developer's REAL usage and
+spend, and they are published: open every PNG, and step through the GIF, before
+committing them. They differ on every run, so no test compares them.
+
+`make render-baselines` renders `mock-telemetry.json` instead. `screenshot.qml`
+slides the fixture's fixed reference week onto `SHOT_DAY`, so the baselines are
+byte-stable and `tests/test_qml_render.py` can compare against them. One of them,
+`cost-day-hover.png`, is the Day tab with a pointer resting on its busiest bar
+(`walk=hover`, below): its tooltip must show.
 
 Arguments (positional `key=value`, after `--`):
 
@@ -44,7 +51,12 @@ Arguments (positional `key=value`, after `--`):
 | `component=` | `FullRepresentation` | also accepts `CompactRepresentation` |
 | `provider=`  | `claude`             | which provider tab is selected       |
 | `scale=`     | `2`                  | pixel ratio the grab renders at      |
-| `today=`     | the real today       | day the fixture's week/month buckets are rebased onto (`make screenshots` pins `SHOT_DAY`) |
+| `today=`     | the real today       | day the fixture's week/month buckets are rebased onto (`make render-baselines` pins `SHOT_DAY`) |
+| `snapshot=`  | none (the fixture)   | absolute path of a backend snapshot to render as-is instead; `today=` is ignored |
+| `graphMode=` | `week`               | `CostPopout` only: `day`, `week` or `month` tab |
+| `walk=`      | none                 | `CostPopout` only: drive a pointer through the flyout first — `hover` or `tour` (see *Pointer walks*) |
+| `demo=`      | none                 | with a walk: absolute dir to write one frame per tick into, instead of one PNG |
+| `cursors=`   | none                 | with a walk: absolute dir holding `cursors.json` + the pointer PNGs (`demo_gif.py cursors`) |
 
 Four environment variables are required and set by the Makefile:
 
@@ -59,16 +71,50 @@ Four environment variables are required and set by the Makefile:
   stop matching the committed PNGs whenever you switch themes.
 
 Renders are byte-stable across days and machines' desktop settings only with both
-`today=` and `XDG_CONFIG_HOME` pinned — `tests/test_qml_render.py` compares the
-committed PNGs byte for byte under exactly that environment.
+`today=` and `XDG_CONFIG_HOME` pinned — `tests/test_qml_render.py` compares
+`tests/render-baselines/` byte for byte under exactly that environment.
 
 `QT_FORCE_STDERR_LOGGING=1` is also set: without it Qt routes `console.log` to
 the journal and the terminal stays silent, which makes a failed render look like
 a silent success.
 
+## Pointer walks and the demo GIF
+
+`walk=` moves a pointer through the cost flyout before grabbing. The moves,
+presses and releases go through QtTest's `TestEvent`, so the widget's own
+`MouseArea` hover and click code runs, timers and all; a walk exercises the real
+tooltip, not a picture of one.
+
+- `hover` jumps from the bar beside the Day tab's busiest bar straight onto it,
+  without crossing the gap between them, and rests until the tooltip shows. That
+  jump is the move that used to leave the tooltip hidden, which is why it is a
+  render baseline.
+- `tour` rests on each tab's busiest bar until its tooltip shows, clicks it open
+  to the per-model breakdown, then moves on to the next tab (Day, Week, Month,
+  back to Day). It runs about 16 seconds.
+
+Offscreen Qt has no cursor, so `screenshot.qml` draws one: Breeze's arrow, and its
+pointing hand while the pointer is over anything with a pointing-hand
+`cursorShape`, plus a ring for a moment after each click. `demo_gif.py cursors`
+reads both from the installed Xcursor theme at `CURSOR_PX` (48) and writes them as
+PNGs with their hotspots.
+
+With `demo=`, every tick (about 50 ms) writes a frame named `f-<n>-<ms>.png`,
+where `<ms>` is when it was grabbed. `demo_gif.py assemble` shows each frame until
+the next one's time, so the GIF plays at real speed even though frames land
+unevenly, and pads every frame to the tallest (the flyout changes height between
+tabs). Frames are opaque on purpose: demo mode paints a solid canvas behind the
+card, because ffmpeg's GIF encoder stores only the changed pixels of opaque
+frames but every frame whole once there is transparency (19 MB instead of about
+0.7 MB).
+
+Walks need three things the plain renders don't: the `QtTest` QML module
+(`qt6-declarative`), the Breeze cursor theme (`breeze`), and, for the GIF,
+`ffmpeg`. The hover render test skips when the cursor theme is missing.
+
 ## Limitations
 
-**`CostPopout.qml` CAN be screenshotted** — `make screenshots` writes all three of
+**`CostPopout.qml` CAN be screenshotted** — both targets write all three of
 its tabs (`component=CostPopout graphMode=day|week|month`). It took two
 non-obvious steps, both now handled in `screenshot.qml`:
 
@@ -111,4 +157,4 @@ numbers:
 python3 io.github.dlansama.tallybar/contents/code/backend.py --once --no-network --pretty
 ```
 
-Keep the numbers synthetic. These files are published.
+Keep the numbers synthetic: the fixture is published with the repo.

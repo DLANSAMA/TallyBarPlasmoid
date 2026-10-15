@@ -26,6 +26,9 @@ Notable changes to TallyBar. Format follows
   reading in the CLI's log, as before.
 
 ### Fixed
+- A cost-popout bar's tooltip no longer fails to appear when the pointer moves straight
+  from one bar onto the next. It happened most in the Day view, whose bars sit 2 px
+  apart: the tooltip stayed hidden until the pointer left the bar and came back.
 - Antigravity's newer models (Gemini 4 Argon, Gemini 3.5 Flash Lite, Claude Opus 5.5
   and Sonnet 5.5, and the Gemini 3.8 Flash it runs subagents on) are named and priced
   on a fresh install. They used to show as "Model M…" and bill at Gemini 3.1 Pro rates

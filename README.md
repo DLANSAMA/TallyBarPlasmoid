@@ -28,6 +28,10 @@ as a month heat grid. Clicking any bar or day expands it into a per-model breakd
   <img src="docs/screenshots/cost-month.png" alt="Cost flyout, Month tab: a calendar heat grid of daily spend for the current month" width="230">
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/cost-demo.gif" alt="A pointer rests on the busiest bar of each cost flyout tab until its tooltip shows, then clicks it open to the per-model breakdown" width="312">
+</p>
+
 ## What it shows
 
 | Provider        | Quota / limits                                    | Where that comes from                                                  |
@@ -210,7 +214,8 @@ make test         # 530 tests
 make lint         # pyflakes (what CI runs)
 make check        # flake8 + Qt6 qmllint (fails on QML errors) + mypy
 make preview      # load a UI component in a standalone window, no Plasma needed
-make screenshots  # re-render docs/screenshots/ offscreen from a mock fixture
+make screenshots  # re-render docs/screenshots/ (PNGs + demo GIF) offscreen from this machine's live usage
+make render-baselines  # re-render the mock-fixture PNGs the render tests compare against
 make build        # package io.github.dlansama.tallybar.plasmoid
 ```
 

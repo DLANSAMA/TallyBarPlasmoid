@@ -34,7 +34,9 @@ make upgrade    # reinstall after changes — use this during dev
 make remove
 
 make pot                    # regenerate the translation template after adding i18n() strings
-make preview / screenshots  # offscreen render of the UI from tools/preview/mock-telemetry.json
+make preview                # the UI in a standalone window, from tools/preview/mock-telemetry.json
+make screenshots            # README PNGs + cost-demo.gif (docs/screenshots/) from a live backend snapshot: real spend, published — look at each
+make render-baselines       # tests/render-baselines/ from the mock fixture, byte-stable; what test_qml_render compares
 ```
 
 Runtime: stdlib-only (no third-party deps). `.venv` is for pytest only. Release: a `v*` tag triggers `.github/workflows/release-plasmoid.yml` → flake8 + qmllint + mypy + tests + `make build` + GitHub release asset.
@@ -186,9 +188,9 @@ Runtime: stdlib-only (no third-party deps). `.venv` is for pytest only. Release:
 - `flyoutAnchor.anchors.verticalCenterOffset: 160` — aligns card center with the Cost row.
 - `floating: true`, `animated: true`. `onActiveChanged → costDrawerOpen = false` (focus-out closes).
 - Month grid width is tuned through the single `fillFraction: 0.96` value — adjust only there and re-verify live.
-- Tooltip: hover shows two compact lines (date + total) ONLY — a deliberate design choice; don't add the breakdown to hover. **Click** a bar/month-day expands that bucket's tip with its per-model rows (backend per-bucket `models`, top-4 by cost — `bucket_add` + serializers in `accounting/buckets.py`); not a pin — exit or click-again collapses (`chartArea.expandedKey`). QVariantList caveat: bucket `models` crossing a Repeater fails `Array.isArray` — duck-type on `.length` (`withModelLines`). `chartTip` x AND y backstop-clamped to popout window bounds; >2-line tips left-align.
+- Tooltip: hover shows two compact lines (date + total) ONLY — a deliberate design choice; don't add the breakdown to hover. **Click** a bar/month-day expands that bucket's tip with its per-model rows (backend per-bucket `models`, top-4 by cost — `bucket_add` + serializers in `accounting/buckets.py`); not a pin — exit or click-again collapses (`chartArea.expandedKey`). A bucket's exit tears the tip down only while `chartArea.hoverKey` is still its own: when one move carries the pointer straight from a bar into the next (past the gap), Qt delivers the new bar's enter BEFORE the old bar's exit, and an unguarded exit stopped the timer the new bar had just started, so the tip never showed. → `tests/test_qml_render.py::test_cost_popout_tooltip_shows_after_a_jump_between_bars`. QVariantList caveat: bucket `models` crossing a Repeater fails `Array.isArray` — duck-type on `.length` (`withModelLines`). `chartTip` x AND y backstop-clamped to popout window bounds; >2-line tips left-align.
 
-**Verify UI changes by rendering them.** Tests, lint and qmllint can all pass on a UI that renders empty. After touching QML, render it (`make screenshots`, or the live widget) across tabs and an error-state fixture and compare against the previous render. → `tests/test_qml_render.py`.
+**Verify UI changes by rendering them.** Tests, lint and qmllint can all pass on a UI that renders empty. After touching QML, render it (`make render-baselines`, or the live widget) across tabs and an error-state fixture and compare against the previous render. → `tests/test_qml_render.py`.
 
 **Deploy:** `make upgrade` + `systemctl --user restart plasma-plasmashell.service`. Re-open the popup to see changes. Window placement can only be verified live (offscreen renders can't show it).
 

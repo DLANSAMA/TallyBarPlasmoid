@@ -230,6 +230,12 @@ PlasmaCore.PopupPlasmaWindow {
                     // pin: the tip still follows hover and hides on exit — leaving the
                     // bucket (or clicking it again) collapses back to the two base lines.
                     property string expandedKey: ""
+                    // The bucket the pointer is in (same keys). When the pointer jumps straight
+                    // from one bar into the next, past the gap between them, Qt delivers the new
+                    // bar's enter BEFORE the old bar's exit — so an exit only tears the tip down
+                    // while its bucket still owns it, else it stops the timer the new bar just
+                    // started and the tip never shows. Entering a bucket starts it collapsed.
+                    property string hoverKey: ""
 
                     Timer {
                         id: chartTipTimer
@@ -372,9 +378,9 @@ epsilon: 0.01
                                         if (chartArea.tipShown)
                                             chartArea.tipText = chartArea.pendingTip;
                                     }
-                                    onEntered: { updateTip(); chartTipHideTimer.stop(); chartTipTimer.restart(); }
+                                    onEntered: { chartArea.hoverKey = tipKey(); chartArea.expandedKey = ""; updateTip(); chartTipHideTimer.stop(); chartTipTimer.restart(); }
                                     onPositionChanged: updateTip()
-                                    onExited: { chartArea.expandedKey = ""; chartTipTimer.stop(); chartTipHideTimer.restart(); }
+                                    onExited: { if (chartArea.hoverKey !== tipKey()) return; chartArea.hoverKey = ""; chartArea.expandedKey = ""; chartTipTimer.stop(); chartTipHideTimer.restart(); }
                                     onClicked: (mouse) => {
                                         if (mouse.button === Qt.RightButton) {
                                             // Copy the full breakdown (date + total + per-model rows).
@@ -497,9 +503,9 @@ epsilon: 0.01
                                         if (chartArea.tipShown)
                                             chartArea.tipText = chartArea.pendingTip;
                                     }
-                                    onEntered: { updateTip(); chartTipHideTimer.stop(); chartTipTimer.restart(); }
+                                    onEntered: { chartArea.hoverKey = tipKey(); chartArea.expandedKey = ""; updateTip(); chartTipHideTimer.stop(); chartTipTimer.restart(); }
                                     onPositionChanged: updateTip()
-                                    onExited: { chartArea.expandedKey = ""; chartTipTimer.stop(); chartTipHideTimer.restart(); }
+                                    onExited: { if (chartArea.hoverKey !== tipKey()) return; chartArea.hoverKey = ""; chartArea.expandedKey = ""; chartTipTimer.stop(); chartTipHideTimer.restart(); }
                                     onClicked: (mouse) => {
                                         if (mouse.button === Qt.RightButton) {
                                             const base = root.hourTooltipText(hourColumn.modelData);
@@ -598,9 +604,9 @@ epsilon: 0.01
                                                 if (chartArea.tipShown)
                                                     chartArea.tipText = chartArea.pendingTip;
                                             }
-                                            onEntered: { updateTip(); chartTipHideTimer.stop(); chartTipTimer.restart(); }
+                                            onEntered: { chartArea.hoverKey = tipKey(); chartArea.expandedKey = ""; updateTip(); chartTipHideTimer.stop(); chartTipTimer.restart(); }
                                             onPositionChanged: updateTip()
-                                            onExited: { chartArea.expandedKey = ""; chartTipTimer.stop(); chartTipHideTimer.restart(); }
+                                            onExited: { if (chartArea.hoverKey !== tipKey()) return; chartArea.hoverKey = ""; chartArea.expandedKey = ""; chartTipTimer.stop(); chartTipHideTimer.restart(); }
                                             onClicked: (mouse) => {
                                                 if (mouse.button === Qt.RightButton) {
                                                     const base = root.monthCellTooltipText(modelData);

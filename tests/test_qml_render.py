@@ -11,19 +11,23 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 REPO = Path(__file__).parent.parent
 UI = REPO / "io.github.dlansama.tallybar" / "contents" / "ui"
-SHOTS = REPO / "docs" / "screenshots"
+# The expected renders of the mock fixture (`make render-baselines`). The README's
+# docs/screenshots/ are rendered from a live snapshot instead, so they can't be compared.
+SHOTS = REPO / "tests" / "render-baselines"
 # Mirrors the Makefile's SHOT_ENV + SHOT_DAY. Both are what make a render byte-stable: the
 # day pins where the fixture's week/month buckets land (rebasing onto the REAL today broke
 # the week/month comparisons every day after the screenshots were taken), and the repo-local
 # XDG_CONFIG_HOME pins the icon theme (the kde platform theme otherwise follows the
 # developer's desktop kdeglobals, so switching desktop icon themes broke the widget shots).
 SHOT_DAY = re.search(r"^SHOT_DAY := (\S+)$", (REPO / "Makefile").read_text(), re.M).group(1)
+CURSOR_PX = re.search(r"^CURSOR_PX := (\d+)", (REPO / "Makefile").read_text(), re.M).group(1)
 SHOT_ENV = dict(QML_XHR_ALLOW_FILE_READ="1", QT_FORCE_STDERR_LOGGING="1",
                 QT_QPA_PLATFORM="offscreen", QT_QUICK_BACKEND="software",
                 XDG_ICON_THEME="breeze-dark", QT_QPA_PLATFORMTHEME="kde",
@@ -65,9 +69,9 @@ def test_delegate_scanner_catches_the_original_bug():
 
 @pytest.mark.parametrize("provider", ["claude", "antigravity"])
 def test_offscreen_render_matches_committed_screenshot(provider, tmp_path):
-    # Local-only (needs qml6 + the QtQuick modules). The committed README screenshots ARE
-    # the expected render of the mock fixture, so a UI change that alters them must be a
-    # deliberate `make screenshots` that a human has LOOKED at — not a silent side effect.
+    # Local-only (needs qml6 + the QtQuick modules). The committed baselines ARE the
+    # expected render of the mock fixture, so a UI change that alters them must be a
+    # deliberate `make render-baselines` that a human has LOOKED at — not a silent side effect.
     qml6 = shutil.which("qml6")
     if qml6 is None or os.environ.get("CI"):
         pytest.skip("qml6/QtQuick not available; offscreen render test skipped")
@@ -80,7 +84,7 @@ def test_offscreen_render_matches_committed_screenshot(provider, tmp_path):
         pytest.skip(f"offscreen render unavailable here: {proc.stderr[-200:]}")
     assert "TypeError" not in proc.stderr and "ReferenceError" not in proc.stderr, proc.stderr[-600:]
     assert out.read_bytes() == (SHOTS / f"widget-{provider}.png").read_bytes(), (
-        f"offscreen render of '{provider}' no longer matches docs/screenshots/widget-{provider}.png. "
+        f"offscreen render of '{provider}' no longer matches tests/render-baselines/widget-{provider}.png. "
         "Open BOTH images and compare before regenerating."
     )
 
@@ -107,7 +111,38 @@ def test_cost_popout_render_matches_committed_screenshot(mode, tmp_path):
     assert "TypeError" not in proc.stderr and "ReferenceError" not in proc.stderr, proc.stderr[-600:]
     assert out.read_bytes() == (SHOTS / f"cost-{mode}.png").read_bytes(), (
         f"offscreen render of the cost flyout '{mode}' tab no longer matches "
-        f"docs/screenshots/cost-{mode}.png. Open BOTH images and compare before regenerating."
+        f"tests/render-baselines/cost-{mode}.png. Open BOTH images and compare before regenerating."
+    )
+
+
+def test_cost_popout_tooltip_shows_after_a_jump_between_bars(tmp_path):
+    """The busiest Day bar's tooltip shows after the pointer jumps onto it from the next bar.
+
+    When one move event carries the pointer from a bar straight into its neighbour (past the
+    2 px gap), Qt delivers the new bar's enter BEFORE the old bar's exit. The late exit used to
+    stop the tooltip timer the new bar had just started, so the tip never showed. The pointer
+    is driven through Qt's own test events (`walk=hover` in screenshot.qml) and the baseline
+    shows the tip; a render without it differs.
+    """
+    qml6 = shutil.which("qml6")
+    if qml6 is None or os.environ.get("CI"):
+        pytest.skip("qml6/QtQuick not available; offscreen render test skipped")
+    cursors = tmp_path / "cursors"
+    made = subprocess.run([sys.executable, "tools/preview/demo_gif.py", "cursors", str(cursors), CURSOR_PX],
+                          cwd=REPO, capture_output=True, text=True)
+    if made.returncode != 0:
+        pytest.skip(f"no Breeze cursor theme here: {made.stderr[-200:]}")
+    out = tmp_path / "cost-day-hover.png"
+    env = dict(os.environ, **SHOT_ENV)
+    proc = subprocess.run([qml6, "tools/preview/screenshot.qml", "--", f"today={SHOT_DAY}", "component=CostPopout",
+                           "graphMode=day", "walk=hover", f"cursors={cursors}", f"out={out}"],
+                          cwd=REPO, env=env, capture_output=True, text=True, timeout=120)
+    if not out.is_file():
+        pytest.skip(f"offscreen render unavailable here: {proc.stderr[-200:]}")
+    assert "TypeError" not in proc.stderr and "ReferenceError" not in proc.stderr, proc.stderr[-600:]
+    assert out.read_bytes() == (SHOTS / "cost-day-hover.png").read_bytes(), (
+        "the hovered Day bar no longer renders like tests/render-baselines/cost-day-hover.png "
+        "(the tooltip over the busiest bar). Open BOTH images and compare before regenerating."
     )
 
 
