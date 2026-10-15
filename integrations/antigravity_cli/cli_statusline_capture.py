@@ -3,17 +3,12 @@
 
 The gemini CLI invokes `settings.json` → `statusLine.command` on every status update,
 piping a JSON telemetry context to the command's **stdin**. That context carries the
-session's per-model token counts. This script:
-
-  1. Reads that stdin JSON.
-  2. (Debug only) When TALLYBAR_DEBUG is set, dumps the raw payload to
-     ~/.tallybar/cli_statusline_raw.json (0600) so the exact schema can be confirmed from a
-     real session. Off by default — it would otherwise persist session telemetry every tick.
-  3. Extracts cumulative per-session token counts (defensively — tries the known shapes).
-  4. Writes them to ~/.tallybar/antigravity_cli_usage.json, keyed by session id, in the SAME
-     {trackingStarted, entries:{key:{d,u,c,o,t,x}}} shape as the IDE ledger + SDK shim, so
-     providers/cost.py folds it straight into the Antigravity cost summary.
-  5. Prints a short status string to stdout, so it still works AS a statusLine command.
+session's per-model token counts. This script extracts the cumulative per-session token
+counts and writes them to ~/.tallybar/antigravity_cli_usage.json, keyed by session id, in
+the SAME {trackingStarted, entries:{key:{d,u,c,o,t,x}}} shape as the IDE ledger + SDK shim,
+so providers/cost.py folds it straight into the Antigravity cost summary. With
+TALLYBAR_DEBUG set it also dumps the raw payload to ~/.tallybar/cli_statusline_raw.json
+(0600).
 
 Cumulative & idempotent: `total_usage`-style session metrics are cumulative, so we store the
 latest snapshot per session id and OVERWRITE each update (never sum) — re-runs can't inflate.
@@ -22,9 +17,6 @@ Never raises: a statusLine command must not error or it breaks the CLI's status 
 Wiring (done by the user / with permission — this script touches nothing until wired):
   ~/.gemini/antigravity-cli/settings.json →
     "statusLine": { "type": "command", "command": "<path-to-this-script>" }
-
-NOTE: the exact field names are not yet 100%-confirmed from a live payload — the extractor
-tries every plausible shape and the raw dump lets us lock it down on the first real run.
 """
 
 from __future__ import annotations
@@ -172,7 +164,7 @@ def _load() -> dict[str, Any]:
 def _save(d: dict[str, Any]) -> None:
     USAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
     try:
-        USAGE_PATH.parent.chmod(0o700)  # match the backend writers; keep ~/.tallybar private
+        USAGE_PATH.parent.chmod(0o700)
     except OSError:
         pass
     name = None
@@ -184,9 +176,9 @@ def _save(d: dict[str, Any]) -> None:
             _os.chmod(tmp.name, 0o600)
             tmp.write(_json.dumps(d))
             tmp.flush()
-            _os.fsync(tmp.fileno())  # durability: flush to disk before the atomic replace
+            _os.fsync(tmp.fileno())
         _os.replace(name, USAGE_PATH)
-        try:  # make the rename itself crash-durable (best-effort dir fsync)
+        try:
             dfd = _os.open(str(USAGE_PATH.parent), _os.O_RDONLY)
             try:
                 _os.fsync(dfd)
@@ -195,8 +187,6 @@ def _save(d: dict[str, Any]) -> None:
         except OSError:
             pass
     except BaseException:
-        # Don't leak the uniquely-named temp file on a write/replace failure (the sole
-        # caller swallows the exception, so without this it would accumulate silently).
         if name is not None:
             try:
                 _os.unlink(name)
@@ -213,9 +203,7 @@ def main() -> None:
     if not raw:
         return
 
-    # Debug aid (opt-in): dump the raw payload so the statusLine schema can be confirmed
-    # from a live session. Off by default — it would otherwise persist session telemetry to
-    # a world-readable file on every tick. When enabled, write it 0600 like the usage file.
+    # Opt-in: it would otherwise persist session telemetry on every tick.
     if _os.environ.get("TALLYBAR_DEBUG"):
         try:
             _RAW_DUMP.parent.mkdir(parents=True, exist_ok=True)
@@ -225,7 +213,7 @@ def main() -> None:
                 pass
             fd = _os.open(str(_RAW_DUMP), _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC, 0o600)
             with _os.fdopen(fd, "w", encoding="utf-8") as handle:
-                _os.fchmod(handle.fileno(), 0o600)  # enforce 0600 even if the file pre-existed looser
+                _os.fchmod(handle.fileno(), 0o600)
                 handle.write(raw)
         except OSError:
             pass
@@ -264,7 +252,6 @@ def main() -> None:
         except Exception:
             pass
 
-    # Still behave as a statusLine: print a compact status string.
     try:
         model = _first(payload, "active_model", "model", "modelName") or ""
         if isinstance(model, dict):

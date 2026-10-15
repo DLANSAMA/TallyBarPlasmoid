@@ -48,10 +48,6 @@ from http_helpers import scrub_credentials  # noqa: E402
 TIMEOUT = 20.0
 
 
-# ---------------------------------------------------------------------------
-# Credential discovery (read-only; we never write to a provider's own files)
-# ---------------------------------------------------------------------------
-
 def _copilot_token() -> tuple[str | None, str]:
     """Copilot's editor plugins store an oauth_token per host. Returns (token, where)."""
     candidates = [
@@ -105,10 +101,6 @@ def _cursor_token() -> tuple[str | None, str]:
     token = row[0]
     return (token.decode("utf-8", "replace") if isinstance(token, bytes) else str(token)), str(db)
 
-
-# ---------------------------------------------------------------------------
-# Probes — one request each, no retries, no side effects
-# ---------------------------------------------------------------------------
 
 def _request(url: str, headers: dict[str, str], body: bytes | None = None) -> dict[str, Any]:
     req = urllib.request.Request(url, data=body, headers=headers,

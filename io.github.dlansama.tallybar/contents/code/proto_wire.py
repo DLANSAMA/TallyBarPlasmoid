@@ -32,14 +32,10 @@ def _pb_read_varint(buf: bytes, i: int) -> tuple[int, int]:
 def _dominant_enum(found: list[dict[int, int]]) -> int:
     """The model enum (field 1) of the record carrying the most tokens in ``found``.
 
-    A single trajectory blob (one ``steps``/``gen_metadata`` idx) is one generation using
-    ONE model — verified across 748 real on-disk blobs (2026-07-02): every blob's records
-    share a single field-1 enum, so this equals ``found[0]``'s enum today. Picking the
-    max-token record (rather than first-parsed) is a self-correcting guard: IF a future
-    blob ever mixed models, the whole summed entry is attributed to its dominant model
-    instead of whichever happened to parse first. Keeping ONE entry per steps idx (one per
-    generation for gen_metadata) preserves every key invariant (the ``:``/``@``/``#``
-    namespaces, RPC-purge prefixes, memo/prune).
+    A blob is one model in practice; a mixed blob's whole summed entry is attributed to
+    its dominant model. ONE entry per steps idx (one per generation for gen_metadata)
+    preserves every key invariant (the ``:``/``@``/``#`` namespaces, RPC-purge prefixes,
+    memo/prune).
     """
     if not found:
         return 0
@@ -96,12 +92,10 @@ def _pb_find_usage(
     A usage record is gated by ``field6 in {24, 26}`` (24 = pre-2.0 ``steps.metadata``
     layout; 26 = Antigravity-2.0 ``gen_metadata`` layout) AND field 2 present (input tokens).
     Field 1 is the *model* enum (e.g. 1016/1036=Gemini Pro, 1020/1133=Gemini Flash), so we
-    must NOT gate on a single value — doing so silently dropped every non-Pro generation
-    (Flash/Claude/etc.), which was ~60% of real usage.
+    must NOT gate on a single value or non-Pro generations (Flash/Claude/etc.) are dropped.
 
     ``marker``: when provided, gate on that exact value (e.g. ``marker=26`` for the fallback
-    gen_metadata path). When None (the default), accept both 24 and 26 — the accuracy fix that
-    captures Antigravity-2.0 desktop/IDE generations previously silently dropped.
+    gen_metadata path). When None (the default), accept both 24 and 26.
     """
     if out is None:
         out = []

@@ -23,8 +23,7 @@ This script:
   2. Extracts whatever rate-limit windows are present.
   3. Writes them to ~/.tallybar/claude_statusline.json (atomic, 0600), stamped
      with the capture time so the backend can age the reading rather than assume
-     it is current — the same mistake that made Grok's bar claim a 15-hour-old
-     number was fresh.
+     it is current.
   4. Prints a short line to stdout, so it still works AS a status line.
 
 Never raises: a statusLine command that errors breaks Claude Code's status bar.
@@ -119,8 +118,6 @@ def _atomic_write(path: _Path, text: str) -> None:
         except OSError:
             pass
     finally:
-        # Never leak the uniquely-named temp on failure — the caller swallows
-        # exceptions, so without this they would accumulate silently.
         if name is not None:
             try:
                 _os.unlink(name)
@@ -163,7 +160,7 @@ def main() -> int:
                 "rateLimits": found,
             }, indent=2, sort_keys=True))
         except Exception:
-            pass  # a status line must never fail loudly
+            pass
 
     print(_status_text(found))
     return 0
@@ -175,6 +172,5 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except BaseException:
-        # Absolute backstop: print something and exit clean rather than break the bar.
         print("TallyBar")
         raise SystemExit(0)

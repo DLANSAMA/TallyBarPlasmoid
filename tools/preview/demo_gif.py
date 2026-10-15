@@ -29,7 +29,7 @@ CURSOR_THEME = Path("/usr/share/icons/breeze_cursors/cursors")
 CURSORS = {"arrow": "default", "hand": "pointing_hand"}
 XCURSOR_IMAGE = 0xFFFD0002
 FRAME_NAME = re.compile(r"^f-(\d+)-(\d+)\.png$")
-END_HOLD_SECONDS = 0.8  # the last frame's rest before the GIF loops
+END_HOLD_SECONDS = 0.8
 CANVAS = "0x141416"  # screenshot.qml demoCanvas
 # Read each frame in a millisecond time base. The image demuxer's default 25 fps time base
 # rounds every duration to 40 ms steps, so ~50 ms frames played as 40, 40, 40, 40, 80: a
@@ -58,7 +58,7 @@ def _xcursor_image(path: Path, nominal: int):
 def _png(width: int, height: int, argb) -> bytes:
     rows = bytearray()
     for y in range(height):
-        rows.append(0)  # filter: none
+        rows.append(0)
         for px in argb[y * width:(y + 1) * width]:
             a = px >> 24
             r, g, b = (px >> 16) & 255, (px >> 8) & 255, px & 255

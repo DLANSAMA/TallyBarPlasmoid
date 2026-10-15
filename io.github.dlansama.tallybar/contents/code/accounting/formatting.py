@@ -1,4 +1,3 @@
-"""Timestamp, currency, and token-count formatting helpers."""
 from __future__ import annotations
 
 import datetime as dt
@@ -27,7 +26,7 @@ def compact_token_count(value: int | float) -> str:
     # count renders identically in the Python cost lines and the QML bars/tooltips/graphs.
     # JS Math.round is half-UP, so use int(x + 0.5) rather than Python's half-even round().
     amount = max(0, int(float(value) + 0.5))
-    largest_div = 1_000_000_000  # "B" — nothing bigger to carry a rounded-up value into.
+    largest_div = 1_000_000_000
     for div, suffix in ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K")):
         if amount >= div:
             # At the largest unit there is no bigger tier to escalate into: recursing

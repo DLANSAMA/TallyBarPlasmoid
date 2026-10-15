@@ -29,11 +29,9 @@ build:
 	@unzip -l $(APPLET).plasmoid | grep -q " metadata.json$$" || { echo "ERROR: $(APPLET).plasmoid is missing metadata.json" >&2; exit 1; }
 	@echo "Build complete."
 
-# Run the test suite exactly as CI does (uses the .venv pytest).
 test:
 	$(VENV)/pytest tests/
 
-# pyflakes-only lint (Python), matching CI — keep the tree F-clean.
 lint:
 	$(VENV)/python -m flake8 --select=F $(APPLET)/contents/code/ tests/ integrations/
 
@@ -57,8 +55,7 @@ qmllint:
 	    echo "Qt6 qmllint not found — skipping QML lint (install qt6-declarative / qt6-declarative-dev-tools)"; \
 	fi
 
-# Type-check the Python backend with mypy (lenient; config in mypy.ini).
-# Prefer uvx mypy when available (no install step needed), fall back to plain mypy.
+# Type-check the Python backend with mypy (config in mypy.ini).
 typecheck:
 	@if command -v uvx > /dev/null 2>&1; then \
 	    echo "Running mypy (via uvx) on $(APPLET)/contents/code/ ..."; \
@@ -70,12 +67,9 @@ typecheck:
 	    echo "mypy not found — skipping type-check (pip install mypy or: uvx mypy)"; \
 	fi
 
-# Aggregate static-analysis gate: lint + qmllint + typecheck, all STRICT.
-#
-# The tree is type-clean, so typecheck blocks: a gate that is allowed to stay red
-# stops being read, and the first real error goes unnoticed. If mypy is not
-# installed the step is skipped, not failed — it must not break a contributor who
-# has neither uvx nor mypy.
+# Aggregate static-analysis gate: lint + qmllint + typecheck. Errors in any of them fail
+# the gate (the tree is clean, and a gate allowed to stay red stops being read);
+# qmllint and typecheck are skipped, not failed, when their tool is not installed.
 check: lint qmllint typecheck
 
 # QML preview — loads a plasmoid UI component in the standalone qml runner.
@@ -164,8 +158,7 @@ _render:
 	@$(SHOT_ENV) qml6 $(SHOT) -- $(SOURCE) component=CostPopout graphMode=month out=$(OUTDIR)/cost-month.png
 
 # Regenerate the translation template from the i18n() calls in the QML.
-# CLAUDE.md tells contributors to run this after adding user-visible prose; the
-# target it referred to never existed, so the .pot drifted ~5 strings behind.
+# Run after adding user-visible prose.
 POT := po/plasma_applet_io.github.dlansama.tallybar.pot
 pot:
 	@command -v xgettext > /dev/null 2>&1 || { \

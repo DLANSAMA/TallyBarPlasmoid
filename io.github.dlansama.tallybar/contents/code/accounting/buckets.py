@@ -1,4 +1,3 @@
-"""Token and cost bucket aggregation (weekly, monthly, hourly)."""
 from __future__ import annotations
 
 import datetime as dt
@@ -88,11 +87,9 @@ def type_split_add(acc: dict[str, dict[str, Any]], split: UsageSplit) -> None:
     extra = split.tokens - sum(split.type_tokens)
     if extra > 0:
         acc["unsplit"]["tokens"] += extra
-    # The cost is always typed: every billed lane is one of USAGE_TYPES.
 
 
 def type_split_merge(acc: dict[str, dict[str, Any]], other: dict[str, Any] | None) -> None:
-    """Add a stored (serialized or accumulator) split into ``acc``."""
     for key in _SPLIT_KEYS:
         slot = (other or {}).get(key)
         if isinstance(slot, dict):
@@ -195,7 +192,6 @@ def model_breakdown_rows(model_costs: dict[str, dict[str, Any]] | None, limit: i
 
 
 def buckets_model_costs(buckets: dict[Any, dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
-    """Aggregate un-capped per-model {cost, tokens} maps across raw bucket dicts."""
     out: dict[str, dict[str, Any]] = {}
     if not buckets:
         return out

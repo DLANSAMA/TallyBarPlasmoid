@@ -150,11 +150,11 @@ def _sweep_stale_cookie_dirs() -> None:
                     continue
                 target = os.path.join(base, name)
                 try:
-                    st = os.lstat(target)  # never follow symlinks
+                    st = os.lstat(target)
                 except OSError:
                     continue
                 if not stat.S_ISDIR(st.st_mode):
-                    continue  # skips symlinks and regular files
+                    continue
                 if st.st_uid != os.getuid():
                     continue
                 if st.st_mtime >= cutoff:
@@ -477,13 +477,9 @@ def select_session_cookies(cookies: list[BrowserCookie], domains: tuple[str, ...
     """The cookies to authenticate ``domains`` with: unexpired, and all from ONE browser
     profile — the one used most recently for these domains.
 
-    A login session lives in one profile. Merging every profile into one jar made the
-    LAST store read win each (domain, path, name) collision — Firefox, read last — so a
-    profile abandoned months ago (observed: last used 4 months before the live Chrome one)
-    could shadow the live session, or splice two Google accounts' SID/HSID cookies into one
-    request; and expired cookies were sent anyway. Profile choice = the latest
-    ``last_used_unix`` among its matching cookies; ties (or stores without access times)
-    fall back to the most cookies, then discovery order."""
+    A login session lives in one profile, so profiles are never merged. Profile choice =
+    the latest ``last_used_unix`` among its matching cookies; ties (or stores without
+    access times) fall back to the most cookies, then discovery order."""
     current = time.time() if now is None else now
     stores: dict[tuple[str, str], list[BrowserCookie]] = {}
     for item in cookies:
@@ -538,10 +534,8 @@ def cookiejar_for_domains(cookies: list[BrowserCookie], domains: tuple[str, ...]
 
 
 def _open_kwallet_and_collect_passwords(background: bool) -> tuple[dict[str, list[bytes]], dict[str, Any]]:
-    # Synchronous D-Bus work (connect/open/list/read/close), meant to run off the event-loop
-    # thread — see the call site in collect_browser_sessions for why. diagnostics() is built here,
-    # before the `with` block closes the wallet: its `available` field reads the live handle, so
-    # building it after close() would wrongly report `available: false` on an otherwise-successful run.
+    # diagnostics() is built before the `with` closes the wallet: its `available` field
+    # reads the live handle, so after close() it would report false on a successful run.
     with KWalletClient(background=background) as kwallet:
         passwords = kwallet.safe_storage_passwords()
         return passwords, kwallet.diagnostics(passwords)
@@ -549,7 +543,7 @@ def _open_kwallet_and_collect_passwords(background: bool) -> tuple[dict[str, lis
 
 async def collect_browser_sessions(timeout: float, background: bool = False) -> tuple[list[BrowserCookie], dict[str, Any]]:
     import asyncio
-    from io_helpers import to_daemon_thread  # daemon worker: a stuck cookie read can't gate exit
+    from io_helpers import to_daemon_thread
     home = Path.home()
     domain_filter = (
         "claude.ai",
@@ -562,14 +556,9 @@ async def collect_browser_sessions(timeout: float, background: bool = False) -> 
         "accounts.google.com",
         "generativelanguage.googleapis.com",
     )
-    # KWalletClient's connect/open/list-entries/read-password/close calls are synchronous
-    # Gio D-Bus round-trips (call_sync). Run the whole sequence on a daemon thread like every
-    # other blocking fetch in this module — otherwise a wedged/slow kwalletd parks the event-loop
-    # thread itself, and the outer asyncio.wait_for(timeout) can't fire until that call returns,
-    # stalling the snapshot past its budget. The wallet is closed inside the thread (end of the
-    # `with` in _open_kwallet_and_collect_passwords) right after passwords are extracted, before
-    # the cookie-file reads below even start; `diagnostics()` only reads cached attributes, so it's
-    # safe to call from the event loop afterward.
+    # KWalletClient's calls are synchronous Gio D-Bus round-trips: run them on a daemon
+    # thread, or a wedged kwalletd parks the event loop and asyncio.wait_for can't fire.
+    # The wallet is closed inside the thread; `diagnostics()` only reads cached attributes.
     passwords, kwallet_diagnostics = await to_daemon_thread(_open_kwallet_and_collect_passwords, background)
     crypto_evp = OpenSslEvp()
     cookies: list[BrowserCookie] = []
@@ -585,10 +574,8 @@ async def collect_browser_sessions(timeout: float, background: bool = False) -> 
     ]
 
     if chromium_tasks or firefox_tasks:
-        # Honor the caller-supplied timeout as an internal bound (build_snapshot
-        # also wraps this call, but a truthful signature should enforce its own
-        # deadline). On timeout this raises, which the orchestrator turns into an
-        # empty cookie jar + "timeout" browser diagnostic.
+        # On timeout this raises, which the orchestrator turns into an empty cookie
+        # jar + "timeout" browser diagnostic.
         results = await asyncio.wait_for(
             asyncio.gather(*chromium_tasks, *firefox_tasks), timeout
         )

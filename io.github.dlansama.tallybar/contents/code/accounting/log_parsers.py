@@ -149,13 +149,13 @@ def _tail_parse(path: Path, prev: dict[str, Any], parser, size: int,
     if (not isinstance(prev_off, int) or not isinstance(prev_fp, int)
             or not isinstance(prev_recs, list) or not isinstance(prev_size, int)):
         return None
-    if size <= prev_size:              # shrank, or unchanged-size rewrite
+    if size <= prev_size:          
         return None
     if prev_off < 0 or prev_off > end:
         return None
     if _offset_fingerprint(path, prev_off) != prev_fp:
         return None
-    if end == prev_off:                # grew, but only by a still-unterminated line
+    if end == prev_off:              
         return list(prev_recs)
     tail = parser(path, prev_off, end)
     if tail is None:
@@ -212,15 +212,13 @@ def _cached_log_records(root: Path, pattern: str, cache_path: Path | None,
         else:
             # The parse window's END is fixed BEFORE reading and the parser is bounded to
             # it, so the cached records are exactly the parse of bytes [0, off) no matter
-            # what the agent appends meanwhile. (Parsing to EOF and measuring the offset
-            # afterwards double-counted a final line whose "\n" had not landed yet.)
+            # what the agent appends meanwhile.
             end = _safe_resume_offset(path)
             if end is None:
                 continue
             if prev is not None:
                 # An active session's JSONL is appended to constantly, so "changed" is the
-                # common case during use and a full reparse of a large file was the single
-                # most expensive thing a refresh did.
+                # common case during use.
                 recs = _tail_parse(path, prev, parser, st.st_size, end)
             if recs is None:
                 recs = parser(path, 0, end)
@@ -291,22 +289,20 @@ def _parse_claude_file(path: Path, start: int = 0,
 
     Opened in binary so ``start`` is a real byte offset: text-mode ``seek()`` only accepts
     opaque cookies from ``tell()``. ``json.loads`` takes bytes directly, and decoding a
-    mangled line now raises UnicodeDecodeError, which is skipped alongside JSONDecodeError
-    rather than escaping the way it used to in text mode.
+    mangled line raises UnicodeDecodeError, which is skipped alongside JSONDecodeError.
 
     The dedup key ``r`` is the API message id, falling back to ``requestId`` and then the
     line uuid. Every line of one message (one per content block, each carrying the full
     usage) shares that id, and so does a copy of the message in another transcript. Some
     transcripts carry no ``requestId`` on any line (they have no ``version`` field either,
-    and some repeat another session's messages); keying on ``requestId`` first billed each
-    such message once per content-block line, and a repeated message again.
+    and some repeat another session's messages).
 
     Subagent transcripts (any file under a ``subagents/`` directory) carry two extra
     per-line fields for the summarizer's output estimate: ``f`` marks a line that holds
     final usage (a non-null ``stop_reason`` or ``usage.output_tokens_details``), and a
     non-final line records its visible output size ``v`` keyed by its line uuid ``i``.
     Several Claude Code versions log only the start-of-message usage for many subagent
-    turns (over 90% of them in 2.1.258 and 2.1.284), so no line of such a request ever
+    turns, so no line of such a request ever
     holds the real ``output_tokens`` and the max-output fold has nothing to recover.
     Main-session lines never carry these fields. The flag derives from the path, which is
     the parse cache's key, so the cache stays a pure function of each entry's file.
@@ -324,7 +320,7 @@ def _parse_claude_file(path: Path, start: int = 0,
         for line in handle:
             if remaining is not None:
                 remaining -= len(line)
-                if remaining < 0:      # past the window: appended after ``end`` was fixed
+                if remaining < 0:
                     break
             try:
                 record = json.loads(line)
@@ -414,7 +410,7 @@ def _parse_codex_file(path: Path) -> list[dict[str, Any]] | None:
             total = info.get("total_token_usage")
             total = total if isinstance(total, dict) and total else None
             if total is not None and prev_total is not None and total == prev_total:
-                continue  # repeated token_count: the session's cumulative total hasn't moved
+                continue
             if isinstance(last, dict) and last:
                 usage: Any = last
             elif total is not None:
@@ -976,7 +972,7 @@ def _grok_archive_split(rec: dict[str, Any], tokens: int, cost: float) -> dict[s
     if weight_sum <= 0:
         weights = {}
     elif not sum(weights.values()):
-        weights = dict(typed)  # no rates to go by: share the cost by tokens
+        weights = dict(typed)
     for key, count in typed.items():
         acc[key]["tokens"] += count
         if weights:

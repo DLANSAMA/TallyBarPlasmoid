@@ -1,7 +1,6 @@
 """Shared low-level filesystem durability helpers.
 
-Imported flat (``from io_helpers import fsync_dir``) by backend.py, pricing_data.py
-and providers/cost.py — they all live under contents/code/ which is on sys.path both
+Imported flat (``from io_helpers import fsync_dir``): contents/code/ is on sys.path both
 at runtime (Plasma runs the script from that dir) and in tests. Stdlib only.
 """
 from __future__ import annotations
@@ -40,15 +39,14 @@ def sweep_stale_temp_files(dirs, max_age_seconds: int = 86400, only_prefix: str 
     regular-file, strict 24h age, non-recursive, never-raise) are unchanged.
 
     A crashed atomic write (interpreter kill between mkstemp and os.replace) leaves these temps
-    behind — over months they accumulate (observed: six July tmp* files plus a 101 MB
-    ``claude_logs.json.<rand>.tmp``). Called early in the --once refresh to keep ~/.tallybar tidy."""
+    behind. Called early in the --once refresh to keep ~/.tallybar tidy."""
     removed = 0
     cutoff = time.time() - max_age_seconds
     for d in dirs:
         try:
             entries = os.scandir(str(d))
         except OSError:
-            continue  # nonexistent / unreadable dir is harmless
+            continue
         try:
             for entry in entries:
                 try:
@@ -58,9 +56,9 @@ def sweep_stale_temp_files(dirs, max_age_seconds: int = 86400, only_prefix: str 
                             continue
                     elif not (_MKSTEMP_ORPHAN_RE.fullmatch(name) or name.endswith(".tmp")):
                         continue
-                    st = os.lstat(entry.path)  # do NOT follow symlinks
+                    st = os.lstat(entry.path)
                     if not stat.S_ISREG(st.st_mode):
-                        continue  # skip symlinks, dirs, sockets, …
+                        continue
                     if st.st_mtime >= cutoff:
                         continue  # too fresh — may be an in-flight write
                     os.unlink(entry.path)
@@ -186,7 +184,7 @@ def to_daemon_thread(func: Any, *args: Any) -> asyncio.Future[Any]:
         exc: BaseException | None
         try:
             result, exc = func(*args), None
-        except BaseException as err:  # propagate ANY failure back, like asyncio.to_thread
+        except BaseException as err:
             result, exc = None, err
         try:
             loop.call_soon_threadsafe(_deliver, result, exc)
