@@ -313,7 +313,8 @@ def _status_notification(pkey: str, plabel: str, status: str, provider: dict[str
 
 
 def compute_notifications(providers: dict[str, Any], config: dict[str, Any],
-                          cost_available: bool = True) -> list[dict[str, Any]]:
+                          cost_available: bool = True,
+                          now: time.struct_time | None = None) -> list[dict[str, Any]]:
     """Detect usage-limit threshold crossings and return only the NEWLY-crossed ones
     (de-duped via NOTIFY_STATE_PATH so each crossing alerts once). The QML side fires
     these via notify-send. Returns [] when notifications are disabled — but still keeps
@@ -488,7 +489,7 @@ def compute_notifications(providers: dict[str, Any], config: dict[str, Any],
                 # hovering at the boundary doesn't flap. Day-of-month < 3 → projection == mtd, so
                 # the arm condition (projected >= budget while mtd < budget) can't trip early.
                 proj_key = "budget|all|projected"
-                lt = time.localtime()
+                lt = now or time.localtime()
                 projected = all_ai_projected_month_cost(providers, lt)
                 if mtd < budget and projected >= budget:
                     if proj_key not in previously_fired and enabled:

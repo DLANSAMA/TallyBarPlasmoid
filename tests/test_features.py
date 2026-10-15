@@ -3,6 +3,7 @@ notifications, the config setter and cost export (backend)."""
 
 import json
 import sys
+import time
 from pathlib import Path
 import pytest
 
@@ -422,28 +423,26 @@ def test_all_ai_mtd_sums_inmonth_buckets_only_not_cost30d():
 
 def test_budget_alert_fires_dedupes_rearms(tmp_path, monkeypatch):
     monkeypatch.setattr(backend, "NOTIFY_STATE_PATH", tmp_path / "n.json")
-    # Neutralize the predictive crossing so this test stays about real-spend
-    # crossings only — otherwise the calendar-pace projection of $85/$120 early in a month
-    # would emit a second "all" notification and depend on today's date.
-    monkeypatch.setattr(backend, "all_ai_projected_month_cost", lambda *a, **k: 0.0)
+    # Day 1 of the month: the calendar-pace projection equals month-to-date, so only real spend crosses.
+    day1 = time.strptime("2026-01-01", "%Y-%m-%d")
     cfg = {"notificationsEnabled": True, "notificationThresholds": [90, 100], "monthlyBudget": 100.0}
 
     # $85 of $100 = 85% -> crosses 80 (warn), not 100.
     p85 = _cost_providers([{"inMonth": True, "cost": 85.0}])
-    first = [n for n in backend.compute_notifications(p85, cfg) if n["provider"] == "all"]
+    first = [n for n in backend.compute_notifications(p85, cfg, now=day1) if n["provider"] == "all"]
     assert len(first) == 1 and first[0]["threshold"] == 80 and first[0]["urgency"] == "normal"
     assert first[0]["label"] == "Monthly budget"
 
-    assert [n for n in backend.compute_notifications(p85, cfg) if n["provider"] == "all"] == []
+    assert [n for n in backend.compute_notifications(p85, cfg, now=day1) if n["provider"] == "all"] == []
 
     # Over budget -> 100 fires critical (highest crossed only, not 80 again).
     p120 = _cost_providers([{"inMonth": True, "cost": 120.0}])
-    over = [n for n in backend.compute_notifications(p120, cfg) if n["provider"] == "all"]
+    over = [n for n in backend.compute_notifications(p120, cfg, now=day1) if n["provider"] == "all"]
     assert len(over) == 1 and over[0]["threshold"] == 100 and over[0]["urgency"] == "critical"
 
     # Drop below 80 (re-arm), then cross 80 again -> re-fires.
-    backend.compute_notifications(_cost_providers([{"inMonth": True, "cost": 10.0}]), cfg)
-    again = [n for n in backend.compute_notifications(p85, cfg) if n["provider"] == "all"]
+    backend.compute_notifications(_cost_providers([{"inMonth": True, "cost": 10.0}]), cfg, now=day1)
+    again = [n for n in backend.compute_notifications(p85, cfg, now=day1) if n["provider"] == "all"]
     assert len(again) == 1 and again[0]["threshold"] == 80
 
 
