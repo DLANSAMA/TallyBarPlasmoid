@@ -267,10 +267,10 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
         rpc_covered: set[str] = set()
         for cascade_id, records in rpc_usage.items():
             rpc_covered.add(cascade_id)
-            # The RPC supersedes the on-disk scan for this conversation: drop any legacy DB-sourced
-            # entries (plain ``<cascadeId>:<int>`` keys) so RPC + disk never double-count it.
-            # The RPC counts per generation, the disk per step, so fewer RPC records than disk
-            # entries is normal: never gate this purge on a record-count comparison.
+            # The RPC supersedes the disk scan for this conversation: drop its DB-sourced keys so
+            # nothing double-counts. RPC counts per generation, disk per step, so never gate
+            # this on a record-count comparison.
+            # → tests/test_cli_usage.py::test_rpc_supersedes_legacy_db_entries
             prefix_len = len(cascade_id) + 1
             for key in [k for k in entries
                         if (k.startswith(f"{cascade_id}:") or k.startswith(f"{cascade_id}@"))
@@ -293,9 +293,9 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                     # Re-resolve the model when the mapping has improved: a placeholder unknown
                     # at capture time fell back to a family default. Heal it in place (keeps
                     # date/hour/tokens — only the pricing/breakdown name changes).
-                    # UPGRADE-ONLY: with no live display name this refresh (GetAvailableModels
-                    # failed, or the id was retired from the picker) never DOWNGRADE a stored
-                    # name to the family fallback — only fill a missing one.
+                    # Upgrade-only: with no live display name (GetAvailableModels failed, or the
+                    # id left the picker) never replace a stored name with the family fallback.
+                    # → tests/test_cli_usage.py::test_heal_never_downgrades_stored_name_when_lookup_fails
                     fixed = rec.get("model_display") or ""
                     if not fixed and not entries[key].get("model"):
                         fixed = _rpc_model_pricing_key(rec["model_placeholder"], rec["api_provider"])

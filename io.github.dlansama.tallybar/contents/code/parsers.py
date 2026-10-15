@@ -1022,10 +1022,8 @@ def parse_grok_billing_config(event: Any) -> dict[str, Any] | None:
             return None
         percent = 0.0
 
-    # Label: SuperGrok weekly pool is the primary bar users care about.
-    # Avoid the words "credits"/"monthly"/"extra" — enrich_ui_formatting marks
-    # those as isExtraUsage for Claude prepaid / on-demand lanes. "Weekly" also
-    # matches _is_weekly_metric for pace-detail clearing.
+    # Avoid "credits"/"monthly"/"extra": enrich_ui_formatting flags those as extra usage.
+    # → tests/test_accounting.py::test_grok_billing_label_is_never_flagged_as_extra_usage
     period_type = str(period_info.get("type") or "").upper()
     if "WEEK" in period_type:
         label = "Weekly"

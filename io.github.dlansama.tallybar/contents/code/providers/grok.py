@@ -23,11 +23,9 @@ from parsers import parse_grok_billing_config, relative_reset
 
 GROK_HOME = Path.home() / ".grok"
 GROK_LOG = GROK_HOME / "logs" / "unified.jsonl"
-# Reverse-scan the unified log in chunks looking for billing events.
-# Billing is logged at session start; a long agent session can push that line
-# far from EOF (multi-MB), so a fixed "last 512KB" window is load-bearing-wrong.
-# Chunked reverse scan finds the newest hit without re-reading the whole file
-# in the common case (event near the end) while still covering older sessions.
+# Billing is logged at session start, so a long session buries it far (multi-MB) from EOF:
+# scan backwards in chunks rather than a fixed tail window.
+# → tests/test_providers.py::test_run_grok_local_finds_billing_buried_under_large_tail
 _BILLING_CHUNK_BYTES = 256 * 1024
 # The weekly bar is xAI's OWN creditUsagePercent, but it only lands in the log when
 # the grok CLI actually runs — so its age is the age of the last session, not of our

@@ -73,7 +73,7 @@ Item {
     // A shown provider whose live status can't report real usage (sign-in / unlock needed,
     // timed out, not running) renders identical empty bars to a healthy 0%-used account —
     // so the panel icon dims and shows a small badge, keyed off STATUS not usage percent
-    // (usage-keyed amber/red recolour stays locked out). Mirrors FullRepresentation's
+    // (never a usage-keyed recolour). Mirrors FullRepresentation's
     // tabStatusBad set, plus the sign-in / not-running actionable states.
     function statusIsBad(status) {
         // The ONE bad-status set lives in lib/ui_helpers.js (shared with FullRepresentation).
@@ -111,8 +111,8 @@ Item {
     }
 
     function compactFillColor() {
-        // Usage bars stay the provider color at every percentage — no warning/critical
-        // recolor. The fill width (and the warning pulse) still convey how full it is.
+        // Provider colour at every percentage; width and the warning pulse convey fullness.
+        // → tests/test_enforced_rules.py::test_usage_bars_never_recolour_by_percentage
         return root.accentColor();
     }
 
@@ -231,8 +231,7 @@ Item {
         textFormat: Text.PlainText
         text: root.panelText()
         color: root.compactFillColor()
-        // Dim (not recolour) when the provider's status is bad — a status signal, not a
-        // usage one, so the accent-colour rule is preserved.
+        // Dim (not recolour) on a bad status.
         opacity: (root.warning ? root.warningPulse : 0.95) * (root.statusBad ? 0.5 : 1.0)
         font.pixelSize: root.vertical ? 11 : 12
         font.weight: Font.DemiBold

@@ -345,10 +345,9 @@ def compute_notifications(providers: dict[str, Any], config: dict[str, Any],
             raise TimeoutError("could not acquire notify-state lock (another write in progress)")
         try:
             previously_fired = _load_notify_state()
-            # Seed from the persisted armed-set so a crossing is NOT re-armed when a provider
-            # transiently fails: a timed-out provider comes back with limits:[], so the loop
-            # below never touches its keys; only a limit actually observed this run changes its
-            # armed state.
+            # Seed from the persisted armed-set: a timed-out provider returns limits:[] and must
+            # not re-arm its crossings.
+            # → tests/test_features.py::test_compute_notifications_no_rearm_on_transient_provider_failure
             now_fired: set[str] = set(previously_fired)
             notifications: list[dict[str, Any]] = []
             # Muted providers raise no notifications; their armed-set keys are left untouched
@@ -1134,8 +1133,8 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     # Claude Code statusLine fallback (integrations/claude_code/statusline_capture.py): when
     # the claude.ai cookie path produced no live limits — Cloudflare 403/429, signed out,
     # wallet locked, or --no-network — use the quota Claude Code itself handed the hook.
-    # Runs AFTER the carry-forward so a carried last-good reading is replaced only by a
-    # NEWER capture. A live cookie reading is never touched. Local file read, no network.
+    # Runs AFTER the carry-forward so a carried reading is replaced only by a newer capture; a
+    # live cookie reading is never touched. → tests/test_claude_statusline_fallback.py
     providers["claude"] = apply_claude_statusline_fallback(providers["claude"], load_claude_statusline())
 
     # Merge the cost summaries computed CONCURRENTLY since the top of build_snapshot
@@ -1281,12 +1280,10 @@ def main() -> int:
     if not args.once:
         parser.error("only --once is supported by the Plasma executable datasource")
 
-    # Skip background (widget-timer) refreshes while the screen is locked — no
-    # network, disk, or ledger work happens behind a locked screen. Gated to
-    # ``--background`` only so manual/foreground refreshes (including the KWallet
-    # unlock path, which omits --background) always run. Re-paint the cached snapshot so
-    # the widget keeps showing last-known values (the staleness line explains the age);
-    # do NOT save_snapshot (mustn't clobber last-known-good) and emit no notifications.
+    # Background refreshes skip while the screen is locked (foreground ones, including the
+    # KWallet unlock path, always run): re-paint the cache, no save_snapshot, no notifications.
+    # → tests/test_backend.py::test_screenlock_skips_background_refresh,
+    #   ::test_screenlock_ignored_for_foreground_refresh
     if args.background and _screen_locked():
         cached = _cached_or_minimal_snapshot()
         cached["notifications"] = []
@@ -1323,8 +1320,8 @@ def main() -> int:
     except (KeyboardInterrupt, SystemExit):
         raise
     except BaseException as exc:
-        # A BaseException escaping build_snapshot must still leave parseable JSON on stdout,
-        # and must never clobber the last-known-good cache.
+        # Parseable JSON on stdout, last-known-good cache untouched.
+        # → tests/test_backend.py::test_fatal_build_snapshot_still_prints_cached_json
         print(_dump_json(_degraded_snapshot(_exc_detail(exc)), args.pretty))
         return 0
     # Always print the fresh snapshot, but only overwrite the cold-start cache when it has
@@ -1334,8 +1331,8 @@ def main() -> int:
     try:
         if _snapshot_has_live_data(snapshot) or not _snapshot_has_live_data(load_snapshot()):
             save_snapshot(snapshot)
-        # Attached AFTER the cache write so the cached snapshot never carries them (the
-        # cold-start cacheLoader would re-fire stale alerts). Only this --once path emits them.
+        # After the cache write, or the cold-start cacheLoader re-fires stale alerts.
+        # → tests/test_features.py::test_main_saves_snapshot_before_attaching_notifications
         diags_raw = snapshot.get("diagnostics")
         diags = diags_raw if isinstance(diags_raw, dict) else {}
         cost_ok = not (diags.get("cost_summary_timeout") or diags.get("cost_summary_error"))

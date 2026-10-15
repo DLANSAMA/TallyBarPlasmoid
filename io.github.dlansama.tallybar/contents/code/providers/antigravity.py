@@ -568,21 +568,9 @@ def collect_antigravity_rpc_usage(
     Returns an ``RpcHarvest``. Its ``marks`` are persisted by the caller as watermarks so
     unchanged cascades are skipped on the next refresh (see ``rpcWatermarks`` in the ledger).
 
-    **Incremental harvest contract:**
-    - ``known``: cascadeId → previously persisted ``lastModifiedTime``.  When the listed
-      ``lastModifiedTime`` matches the known value (exact equality, not ordering — equality makes a
-      clock regression on LS restart a harmless re-query rather than a silent permanent skip), the
-      metadata call is skipped and the mark is re-confirmed in ``marks``.  A missing or empty
-      ``lastModifiedTime`` always triggers a query (can't tell if it changed).
-    - Watermarks are set ONLY on a successful metadata response (status 200, dict body) — including
-      zero-usage conversations (so they stop being re-queried).  An exception, non-200, or deadline
-      skip leaves the cascade unmarked, so it will be retried on the next refresh rather than
-      having its generations silently lost.
-    - ``deadline``: wall-clock ``time.time()`` deadline for the whole harvest.  Checked before each
-      LS, each port probe, and each per-cascade metadata call; on expiry the function returns what
-      was harvested so far (partial result is fine — the persistent ledger + watermarks resume on
-      the next refresh, providing a self-healing ratchet: already-queried cascades leave the work
-      set regardless of iteration order).
+    Incremental: ``known`` (cascadeId → persisted ``lastModifiedTime``) skips unchanged cascades by
+    exact equality; a mark is set only on a successful metadata response; ``deadline`` (wall clock)
+    returns the partial harvest. → tests/test_rpc_watermarks.py
 
     Best-effort: any failure (LS not running, no port, RPC error) is skipped, so an empty result
     simply means the caller falls back to the on-disk scan.  Only conversations currently loaded in
@@ -675,10 +663,9 @@ def collect_antigravity_rpc_usage(
                     if not usage:
                         continue
                     step_indices = gen.get("stepIndices") or []
-                    # Per-generation ledger key (`<cascadeId>#<stepKey>`) must be STABLE across
-                    # polls and unique within the conversation. stepIndices[0] is both when present.
-                    # When it's absent, fall back to the generation's position in the list,
-                    # prefixed "g" so it can never collide with a real integer stepIndices[0].
+                    # Ledger key `<cascadeId>#<stepKey>` must be stable across polls: stepIndices[0],
+                    # else `g<gen_index>` (the "g" can't collide with an integer).
+                    # → tests/test_rpc_watermarks.py::test_generation_keys_are_stable_when_a_usageless_generation_appears
                     step_key = str(int(step_indices[0])) if step_indices else f"g{gen_index}"
                     # createdAt lives at chatModel.chatStartMetadata.createdAt (not on `gen`).
                     # It's a UTC instant; localise.

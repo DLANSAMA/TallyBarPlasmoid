@@ -37,10 +37,11 @@ from io_helpers import atomic_write_text, to_daemon_thread
 
 PRICING_CACHE_PATH = Path.home() / ".tallybar" / "pricing_cache.json"
 PRICING_CACHE_TTL = 86400.0
-# Format of pricing_cache.json. Bump it whenever _litellm_to_tallybar's output changes:
-# the cache holds converted entries, not LiteLLM's raw fields, so an older one can't be
-# upgraded in place. Both loaders refuse any other version — even as the stale fallback —
-# and cache_is_current() makes build_snapshot refetch on that same refresh.
+# Format of pricing_cache.json: converted entries, not LiteLLM's raw fields, so an older one
+# can't be upgraded in place. Both loaders refuse any other version (even as the stale
+# fallback) and build_snapshot refetches.
+# → tests/test_pricing_data.py::test_pricing_cache_version_tracks_converter_output,
+#   ::test_pre_tier_price_cache_is_never_served
 PRICING_CACHE_VERSION = 2
 
 # Only ingest chat models from these direct-API providers (skip Bedrock/Vertex
@@ -67,24 +68,16 @@ INTRO_RATE_ENDS: dict[str, str] = {
 
 _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
     # Anthropic Claude. cache_write is the 5-minute write rate (1.25x input);
-    # cache_write_1h is the 1-hour write rate (2x input) — usage_cost_usd splits
-    # cache_creation by the on-disk ephemeral_1h/5m breakdown and bills each portion
-    # at its own rate. (LiteLLM is the source of truth; this ships for offline use.)
-    # cache_read is NOT always 0.1x input: Opus 5.5 reads at 0.05x and Fable/Mythos 5.1
-    # at 0.025x, so copy each published rate rather than deriving it. Every 5.x model
-    # needs its own exact key — family matching would price "claude-opus-5-5" off a
-    # "claude-opus-5" row, and with no matching row at all usage_cost_usd falls back to
-    # the claude-sonnet-4 family default.
-    # Haiku 5.5 and Sonnet 4.5 also carry a prompt-length tier (long_context_threshold +
-    # long_* rates; see _long_context_tier): a request whose prompt passes the threshold
-    # bills every token at the long rates. Every row below for a model the LiteLLM catalog
-    # tiers (OpenAI, Gemini and xAI too) carries that tier, so a first run / offline bills
-    # long prompts the way the live catalog does.
-    # Sonnet 4.5's 200K tier comes from the LiteLLM catalog; Anthropic's pricing page no
-    # longer lists it. Pricing stays catalog-driven: this row mirrors the catalog, and the
-    # live entry wins whenever one is cached.
-    # Rates: Anthropic's published pricing, identical to the LiteLLM catalog (2026-10-07)
-    # apart from that Sonnet 4.5 tier.
+    # cache_write_1h is the 1-hour write rate (2x input). LiteLLM is the source of truth;
+    # this ships for offline use.
+    # cache_read is not always 0.1x input (Opus 5.5 0.05x, Fable/Mythos 5.1 0.025x): copy each
+    # published rate. Every 5.x model needs its own exact key, or family matching prices it
+    # off a shorter row.
+    # → tests/test_pricing_data.py::test_offline_fallback_prices_every_current_claude_model_exactly
+    # Every row for a model the catalog prompt-tiers (any provider) carries that tier, so a
+    # first run / offline bills long prompts like the live catalog.
+    # → tests/test_pricing_data.py::test_offline_fallback_carries_every_provider_prompt_tier
+    # Sonnet 4.5's 200K tier is catalog-only (Anthropic's page no longer lists it).
     ("claude-fable-5-1",     {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 0.25}),
     ("claude-fable-5",       {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 1.00}),
     ("claude-mythos-5-1",    {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 0.25}),
@@ -195,12 +188,10 @@ _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
                                    "long_context_threshold": 199_999, "long_input": 2.00,
                                    "long_output":  4.00, "long_cache_read": 0.40}),
     # Named Grok API models (pay-per-use rates from xAI price sheet).
-    # grok-4.6 MUST have its own exact key: get_pricing family-matches
-    # ``"grok-4" in "grok-4.6"``, so a missing row inherits grok-4's $3/$15
-    # instead of the published 4.6 short-context rate ($2 / $6 / $0.50 cache).
-    # LiteLLM has lagged this launch; the supplement keeps the live catalog
-    # authoritative once it grows a grok-4.6 key.
-    # 4.6 / 4.5 / 4.20 / 4.3 rates and long-prompt tiers: the LiteLLM catalog (2026-10-07).
+    # grok-4.6 needs its own exact key: get_pricing family-matches "grok-4" in "grok-4.6" and
+    # would bill grok-4's $3/$15 instead of $2/$6/$0.50 cache.
+    # → tests/test_pricing_data.py::test_embedded_exact_match_grok_46_not_grok_4
+    # 4.6 / 4.5 / 4.20 / 4.3 rates and long-prompt tiers: the LiteLLM catalog.
     ("grok-4.6",                  {"input":  2.00, "output":  6.00, "cache_read":  0.50,
                                    "long_context_threshold": 199_999, "long_input": 4.00,
                                    "long_output": 12.00, "long_cache_read": 1.00}),

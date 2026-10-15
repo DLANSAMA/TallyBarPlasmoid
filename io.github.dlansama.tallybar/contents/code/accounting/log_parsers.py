@@ -41,10 +41,12 @@ _UNSET = object()
 
 _PARSE_CACHE_DIR = Path.home() / ".tallybar" / "cache"
 _CACHE_SCHEMA_VERSION = 1          # bump to invalidate ALL parse caches at once
-_CLAUDE_PARSE_VERSION = 5          # bump when _parse_claude_file's output shape changes
-_CODEX_PARSE_VERSION = 3           # bump when _parse_codex_file's output shape changes
-_GROK_PARSE_VERSION = 3            # bump when _parse_grok_file's output shape changes
-_GEMINI_PARSE_VERSION = 2          # bump when _parse_gemini_file's output shape changes
+# A cached record is only valid for the output shape that wrote it, so a shape change
+# bumps its version. → tests/test_accounting.py::test_parse_cache_versions_track_output_shape
+_CLAUDE_PARSE_VERSION = 5
+_CODEX_PARSE_VERSION = 3
+_GROK_PARSE_VERSION = 3
+_GEMINI_PARSE_VERSION = 2
 # A deadline-cut walk stops this long BEFORE the deadline so its checkpoint save lands
 # while the process is still alive (the scan runs on a daemon thread that dies with the
 # one-shot backend). A 45 MB Claude cache saves in ~0.2 s; 1.5 s leaves room for a larger
@@ -210,9 +212,9 @@ def _cached_log_records(root: Path, pattern: str, cache_path: Path | None,
                 continue
             changed = True
         else:
-            # The parse window's END is fixed BEFORE reading and the parser is bounded to
-            # it, so the cached records are exactly the parse of bytes [0, off) no matter
-            # what the agent appends meanwhile.
+            # Fix the window END before reading so the records are exactly the parse of
+            # bytes [0, off) while the agent keeps appending.
+            # → tests/test_accounting.py::test_append_during_the_parse_is_neither_lost_nor_doubled
             end = _safe_resume_offset(path)
             if end is None:
                 continue

@@ -150,9 +150,8 @@ REPO_ROOT = Path(__file__).parent.parent
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 
 # The four gates that must run before ANY artifact is produced. ci.yml gates merges;
-# release-plasmoid.yml gates the v* tag that becomes the store.kde.org download. They
-# drifted once — release ran only flake8 + pytest, so a tag could ship QML that CI had
-# already rejected. Keep both lists in lockstep; this test is what stops the re-drift.
+# release-plasmoid.yml gates the v* tag that becomes the store.kde.org download. Both run
+# the same list; the tests below fail when they differ.
 REQUIRED_GATES = {
     "flake8": "flake8 --select=F",
     "qmllint": "make qmllint",

@@ -86,17 +86,13 @@ PlasmoidItem {
         return "'" + String(text).replace(/\0/g, "").replace(/'/g, "'\"'\"'") + "'";
     }
 
-    // The plasmoid ships no config/main.xml declaring a pythonPath key, so the interpreter
-    // is NOT user-configurable today -- it's fixed to the system python3 (3.11+ required;
-    // the backend relies on asyncio.TaskGroup/asyncio.timeout). Splicing a user-controlled
-    // value in here unquoted (unlike the shellQuote'd backend path below) would be a shell
-    // injection vector if this were ever wired up to real config, so don't reintroduce it
-    // without also shellQuote()-ing it.
+    // A constant, never built from config: it is spliced into the shell command unquoted.
+    // → tests/test_enforced_rules.py::test_python_exec_is_a_constant
     property string pythonExec: "/usr/bin/env python3"
     // Per-provider timeout handed to the backend (--timeout). The backend's refresh can take
     // up to backend.refresh_worst_case_seconds(timeout) = 3*timeout + 2 (38s at 12) plus
     // interpreter startup, so the watchdog below must sit above that.
-    // tests/test_backend.py pins the relation (test_refresh_watchdog_covers_backend_worst_case).
+    // → tests/test_backend.py::test_refresh_watchdog_covers_backend_worst_case
     readonly property int backendTimeoutSeconds: 12
     readonly property int refreshWatchdogMs: 45000
 

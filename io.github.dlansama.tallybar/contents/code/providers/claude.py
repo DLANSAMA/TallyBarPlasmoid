@@ -60,12 +60,11 @@ def _credit_balance_fresh(prev: Any) -> dict[str, Any] | None:
     return fresh_credit_balance(prev, CREDIT_REFRESH_SECONDS)
 
 
-# usage_summary is tried first, but when it answers "not here" (404/410, or 200 with no
-# recognizable limits) every refresh pays an extra
-# authenticated claude.ai GET, the very call volume that trips Cloudflare. Remember the miss
-# on the provider dict and go straight to /usage until this long has passed, then re-probe
-# once in case the endpoint comes back. Transient answers (403/429/5xx, network errors) are
-# NOT recorded — a blip must not switch the probe off for a day.
+# A usage_summary miss (404/410, or 200 with no limits) is remembered so each refresh skips
+# an extra claude.ai GET (the call volume that trips Cloudflare); re-probe after this long.
+# Transient answers (403/429/5xx, network errors) are never recorded.
+# → tests/test_providers.py::test_usage_summary_404_is_remembered_and_skipped,
+#   ::test_usage_summary_transient_error_is_not_remembered
 USAGE_SUMMARY_RETRY_SECONDS = 24 * 3600
 _USAGE_SUMMARY_GONE = (404, 410)
 
@@ -101,11 +100,10 @@ def _prev_monthly_limit(prev: Any) -> dict[str, Any] | None:
 
 # Claude Code statusLine capture (integrations/claude_code/statusline_capture.py)
 
-# Written by the optional statusLine hook: Claude Code hands its subscriber quota to the
-# hook on every status update, no cookies or network involved. The backend uses it as a
-# FALLBACK when the claude.ai cookie path can't produce limits (Cloudflare 403/429, signed
-# out, wallet locked, --no-network) — never over a live cookie reading, which also carries
-# the extra-usage/credit rows the statusLine blob doesn't have.
+# Written by the optional statusLine hook (Claude Code hands it the subscriber quota on every
+# status update). Used only when the cookie path yields no limits, never over a live reading,
+# which also carries the extra-usage rows this blob lacks.
+# → tests/test_claude_statusline_fallback.py
 CLAUDE_STATUSLINE_PATH = Path.home() / ".tallybar" / "claude_statusline.json"
 # A capture only updates while Claude Code runs. Past this age it is ignored outright:
 # the percentages only ever grow within a window, so a day-old reading is a misleading

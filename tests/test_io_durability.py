@@ -56,9 +56,8 @@ def test_gemini_is_timeout_exc():
 
 
 def test_no_duplicate_atomic_write_definitions():
-    # The fsync/atomic-write recipe must live ONLY in
-    # io_helpers — guard against a future re-introduction of a local copy in the
-    # writers. backend's _atomic_write_text must BE the shared helper, not a fork.
+    # backend's _atomic_write_text must BE the shared helper, not a fork.
+    # (os.fsync / mkstemp outside io_helpers: tests/test_enforced_rules.py)
     import accounting
     import backend
     import pricing_data

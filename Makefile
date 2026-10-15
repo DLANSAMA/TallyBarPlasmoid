@@ -136,7 +136,8 @@ screenshots:
 # Render baselines (tests/render-baselines/): the same shots from the mock fixture, with
 # its week/month buckets rebased onto SHOT_DAY so the PNGs are byte-stable on any day, plus
 # the Day tab with a pointer resting on its busiest bar (its tooltip must show).
-# tests/test_qml_render.py compares against these and mirrors SHOT_DAY + SHOT_ENV.
+# tests/test_qml_render.py compares against these and reads SHOT_DAY + SHOT_ENV from here.
+# → tests/test_enforced_rules.py::test_qml_render_reads_shot_env_from_makefile
 render-baselines:
 	@command -v qml6 > /dev/null 2>&1 || { \
 	    echo "qml6 not found — install qt6-declarative (qt6-tools)"; exit 1; }

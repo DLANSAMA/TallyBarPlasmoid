@@ -31,7 +31,7 @@ Item {
         anchors.top: parent.top
         anchors.rightMargin: 10
         anchors.topMargin: 30
-        // Amber (fixed palette — never Kirigami/PlasmaCore theme) once the snapshot is
+        // Amber (fixed palette) once the snapshot is
         // stale (> 2× refresh interval), so an old "Updated 18m ago" actually reads as old.
         // Also amber when THIS provider's entry is a carried-forward (per-provider stale)
         // one, even if the overall snapshot timestamp is fresh.

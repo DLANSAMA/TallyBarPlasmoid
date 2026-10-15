@@ -115,9 +115,9 @@ def _usage_counts(usage: dict[str, Any]) -> dict[str, int]:
                                      "cachedContentTokenCount", "cached")
     thoughts_separate = _usage_int(usage, "thoughtsTokenCount", "thoughts")
 
-    # Token counts take cache writes from the top-level field only; the nested fallback
-    # below is billed but never counted. The parse caches' keep/drop filter
-    # (usage_token_total > 0) depends on it.
+    # Counted from the top-level field only: the nested fallback below is billed, not counted
+    # (the parse caches' usage_token_total > 0 filter depends on it).
+    # → tests/test_type_breakdown.py::test_nested_cache_writes_bill_but_do_not_count_as_tokens
     cache_create_tokens = cache_create
     cache_create_1h = 0
     cc_detail = usage.get("cache_creation")
@@ -234,16 +234,10 @@ def usage_split(usage: Any, model: str | None) -> UsageSplit:
     )
 
 
-# Every usage key the readers actually look at: _usage_counts (behind usage_cost_usd,
-# usage_split and usage_token_breakdown) and _explicit_total. Anything else in a provider's usage dict is
-# metadata the math never touches (Anthropic ships service_tier, inference_geo,
-# server_tool_use, iterations, speed and output_tokens_details on EVERY assistant message;
-# OpenAI ships reasoning_output_tokens, which is deliberately not added — it is already
-# inside output_tokens).
-#
-# This set lives here, beside its consumers, so that adding a key to usage_cost_usd without
-# adding it here is a one-file mistake rather than a silent cross-module drift. The
-# round-trip is pinned by tests/test_accounting.py::test_slim_usage_*.
+# Every usage key the readers look at (_usage_counts, _explicit_total); the rest of a usage
+# dict is metadata the math skips (OpenAI's reasoning_output_tokens is already inside
+# output_tokens). Kept beside its consumers.
+# → tests/test_accounting.py::test_slim_usage_covers_every_key_the_readers_consume
 _USAGE_SCALAR_FIELDS = frozenset({
     "input_tokens", "inputTokens", "promptTokenCount", "input",
     "output_tokens", "outputTokens", "candidatesTokenCount", "output",

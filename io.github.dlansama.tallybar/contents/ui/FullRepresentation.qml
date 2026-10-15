@@ -265,9 +265,8 @@ Item {
     }
 
     function primaryTextColor(alpha) {
-        // Fixed light-on-dark palette — the popup paints its own dark glass, so
-        // colors must NOT track Kirigami.Theme/PlasmaCore.Theme (a light global
-        // theme would render dark text invisible against the glass). See CLAUDE.md.
+        // Fixed light-on-dark palette: the popup paints its own dark glass, so a light global
+        // theme must not leak in. → tests/test_enforced_rules.py::test_no_plasma5_theme_or_plasmoid_enum_constants_in_ui
         return Qt.rgba(0.96, 0.97, 1, alpha === undefined ? 0.96 : alpha);
     }
 
@@ -340,10 +339,9 @@ Item {
     // bare percentage into a pace read: fill past the marker = burning faster
     // than the window sustains, fill short of it = headroom.
     //
-    // Deliberately NOT a colour change. Bars stay provider-accent at every
-    // percentage; competitors signal pace by recolouring to amber/red, we mark
-    // time instead. Endpoints are dropped (<=0, >=100) — a marker pinned to
-    // either edge reads as chrome, not information.
+    // Deliberately not a colour change: bars stay provider-accent at every percentage.
+    // → tests/test_enforced_rules.py::test_usage_bars_never_recolour_by_percentage
+    // Endpoints are dropped (<=0, >=100): a marker pinned to an edge reads as chrome.
     function metricPacePercent(limit) {
         if (!limit)
             return -1;
