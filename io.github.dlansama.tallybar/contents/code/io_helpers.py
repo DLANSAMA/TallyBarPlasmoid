@@ -70,6 +70,22 @@ def sweep_stale_temp_files(dirs, max_age_seconds: int = 86400, only_prefix: str 
     return removed
 
 
+def deadline_passed(deadline: float | None, inclusive: bool = False) -> bool:
+    """True once the wall-clock ``time.time()`` ``deadline`` has passed; ``None`` never expires.
+    ``inclusive`` also counts the exact deadline instant as passed."""
+    if deadline is None:
+        return False
+    now = time.time()
+    return now >= deadline if inclusive else now > deadline
+
+
+def clamp_to_deadline(seconds: float, deadline: float | None, floor: float = 0.1) -> float:
+    """``seconds`` shortened to what is left before ``deadline`` (never below ``floor``)."""
+    if deadline is None:
+        return seconds
+    return max(floor, min(seconds, deadline - time.time()))
+
+
 def flock_with_timeout(lock_fd: int, timeout: float, poll: float = 0.05) -> bool:
     """Acquire an exclusive flock on ``lock_fd`` NON-blocking, retrying until ``timeout``
     seconds elapse. Returns True if the lock was taken, False on contention timeout.

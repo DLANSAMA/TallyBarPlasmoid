@@ -16,6 +16,7 @@ import json
 import os
 import re
 import sqlite3
+import time
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -43,7 +44,7 @@ from accounting import (
     type_split_add,
     weekly_token_usage,
 )
-from io_helpers import atomic_write_text, flock_with_timeout
+from io_helpers import atomic_write_text, deadline_passed, flock_with_timeout
 
 
 ANTIGRAVITY_CONVERSATION_DIRS = (
@@ -165,6 +166,12 @@ def _save_antigravity_ledger(ledger: dict[str, Any]) -> None:
         pass
 
 
+def _lock_budget(deadline: float | None) -> float:
+    """Seconds a ledger/archive flock may wait: the time left to the cost-scan deadline
+    (2s when there is none), capped at 5s."""
+    return max(0.0, min((deadline - time.time()) if deadline is not None else 2.0, 5.0))
+
+
 def _db_signature(db_path: Path) -> str | None:
     """Content signature for the per-DB scan memo: main-file mtime_ns+size PLUS the
     ``-wal`` companion's (SQLite WAL appends land in the -wal without touching the
@@ -204,7 +211,6 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
     executions (e.g. overlapping widget refreshes).
     """
     import fcntl
-    import time
 
     current = now.astimezone() if now is not None else dt.datetime.now(dt.timezone.utc).astimezone()
     today_iso = current.date().isoformat()
@@ -224,7 +230,7 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
     # waste and a never-released lock would stall every future refresh. Bound the wait to the
     # cost-scan deadline (short default if none); on contention timeout, skip the read-modify-write
     # and return the last-known ledger read-only (one slightly-stale refresh) instead of blocking.
-    lock_budget = max(0.0, min((deadline - time.time()) if deadline is not None else 2.0, 5.0))
+    lock_budget = _lock_budget(deadline)
     if not flock_with_timeout(lock_fd, lock_budget):
         os.close(lock_fd)
         return _load_antigravity_ledger()
@@ -353,14 +359,12 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
         old_memo = old_memo if isinstance(old_memo, dict) else {}
         seen_memo: dict[str, str] = {}
         for conv_dir in ANTIGRAVITY_CONVERSATION_DIRS:
-            if deadline is not None and time.time() > deadline:
+            if deadline_passed(deadline):
                 break
             if not conv_dir.is_dir():
                 continue
             for db_path in conv_dir.glob("*.db"):
-                # Check the budget BEFORE opening a connection, or every remaining DB
-                # still costs a connect + index query after the deadline.
-                if deadline is not None and time.time() > deadline:
+                if deadline_passed(deadline):
                     break
                 stem = db_path.stem
                 force_scan = False
@@ -419,7 +423,7 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                     except Exception: pass
 
                 for j in range(0, len(new_idx), 400):  # chunk to stay under SQLite's variable limit
-                    if deadline is not None and time.time() > deadline:
+                    if deadline_passed(deadline):
                         break
                     chunk = new_idx[j:j + 400]
                     placeholders = ",".join("?" * len(chunk))
@@ -462,7 +466,7 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                 # CLI DBs: STOP after the steps pass (their gen_metadata rows are exact 2x
                 # duplicates of the steps usage — see CLAUDE.md "Antigravity CLI (agy) capture").
                 if conv_dir.parent.name == "antigravity-cli":
-                    if db_ok and sig and (deadline is None or time.time() <= deadline):
+                    if db_ok and sig and not deadline_passed(deadline):
                         seen_memo[stem] = sig  # steps pass IS the complete scan here
                     continue
 
@@ -506,7 +510,7 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                     mtime_fallback_date = today_iso
 
                 for j in range(0, len(gnew_idx), 400):
-                    if deadline is not None and time.time() > deadline:
+                    if deadline_passed(deadline):
                         break
                     chunk = gnew_idx[j:j + 400]
                     placeholders = ",".join("?" * len(chunk))
@@ -577,7 +581,7 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                             changed = True
 
                 # Both passes completed cleanly within budget -> memo this content state.
-                if db_ok and sig and (deadline is None or time.time() <= deadline):
+                if db_ok and sig and not deadline_passed(deadline):
                     seen_memo[stem] = sig
 
         # Persist the scan memo (change-gated like rpcWatermarks). After a COMPLETE scan,
@@ -585,7 +589,7 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
         # after a deadline-cut partial scan, carry unvisited DBs' old memos forward — their
         # signatures still describe their last complete scan, and dropping them would force
         # a pointless rescan AND churn a ledger write on every partial run.
-        scan_complete = deadline is None or time.time() <= deadline
+        scan_complete = not deadline_passed(deadline)
         new_memo = seen_memo if scan_complete else {**old_memo, **seen_memo}
         if new_memo != old_memo:
             ledger["dbScanned"] = new_memo
@@ -1092,7 +1096,6 @@ def update_cost_archive(summaries: dict[str, Any] | None,
     so callers wrap this in try/except; here we also bound the flock by the cost-scan deadline.
     """
     import fcntl
-    import time as _time
 
     current = now.astimezone() if now is not None else dt.datetime.now(dt.timezone.utc).astimezone()
     month_key = current.strftime("%Y-%m")
@@ -1109,7 +1112,7 @@ def update_cost_archive(summaries: dict[str, Any] | None,
         return
     lock_path = COST_ARCHIVE_PATH.with_suffix(".lock")
     lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
-    lock_budget = max(0.0, min((deadline - _time.time()) if deadline is not None else 2.0, 5.0))
+    lock_budget = _lock_budget(deadline)
     if not flock_with_timeout(lock_fd, lock_budget):
         os.close(lock_fd)
         return

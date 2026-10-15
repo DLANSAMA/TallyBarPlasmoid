@@ -23,7 +23,7 @@ from accounting import (
     now_iso,
 )
 from http_helpers import scrub_credentials
-from io_helpers import atomic_write_text
+from io_helpers import atomic_write_text, clamp_to_deadline, deadline_passed
 from parsers import (
     parse_antigravity_limits,
     parse_antigravity_quota_summary,
@@ -589,7 +589,7 @@ def collect_antigravity_rpc_usage(
     out: dict[str, list[dict[str, Any]]] = {}
     marks: dict[str, str] = {}
     for pid, token, scheme in find_antigravity_processes():
-        if deadline is not None and time.time() >= deadline:
+        if deadline_passed(deadline, inclusive=True):
             break
         ports, _ = antigravity_ports(pid)
         if not ports:
@@ -598,12 +598,10 @@ def collect_antigravity_rpc_usage(
         base = None
         summaries: Any = {}
         for port in ports:
-            if deadline is not None and time.time() >= deadline:
+            if deadline_passed(deadline, inclusive=True):
                 break
             for s in schemes:
-                per_call = min(timeout, 3.0)
-                if deadline is not None:
-                    per_call = max(0.1, min(per_call, deadline - time.time()))
+                per_call = clamp_to_deadline(min(timeout, 3.0), deadline)
                 try:
                     status, data = _post_local_rpc(
                         f"{s}://127.0.0.1:{port}{_LS_RPC_BASE}/GetAllCascadeTrajectories",
@@ -626,9 +624,7 @@ def collect_antigravity_rpc_usage(
         # has never seen. Best-effort: on failure records fall back to the enum map.
         display_names: dict[str, str] = {}
         try:
-            per_call = min(timeout, 3.0)
-            if deadline is not None:
-                per_call = max(0.1, min(per_call, deadline - time.time()))
+            per_call = clamp_to_deadline(min(timeout, 3.0), deadline)
             status, data = _post_local_rpc(
                 f"{base}{_LS_RPC_BASE}/GetAvailableModels", token, _LS_RPC_METADATA, per_call,
             )
@@ -645,15 +641,13 @@ def collect_antigravity_rpc_usage(
         for cascade_id, summary in summaries.items():
             if cascade_id in out:
                 continue
-            if deadline is not None and time.time() >= deadline:
+            if deadline_passed(deadline, inclusive=True):
                 break
             lmt = str((summary.get("lastModifiedTime") if isinstance(summary, dict) else None) or "")
             if lmt and known.get(cascade_id) == lmt:
                 marks[cascade_id] = lmt
                 continue
-            per_call = min(timeout, 3.0)
-            if deadline is not None:
-                per_call = max(0.1, min(per_call, deadline - time.time()))
+            per_call = clamp_to_deadline(min(timeout, 3.0), deadline)
             try:
                 status, data = _post_local_rpc(
                     f"{base}{_LS_RPC_BASE}/GetCascadeTrajectoryGeneratorMetadata",
