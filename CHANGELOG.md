@@ -23,8 +23,6 @@ Notable changes to TallyBar. Format follows
   reports no cache writes. `backend.py --cost` carries the split as `typeBreakdown`.
 
 ### Changed
-- The line under a tab's cost totals names cache reads and cache writes separately
-  instead of one "Cached" figure.
 - The cost popout's "Top models" list now follows the Day / Week / Month switch: Day
   lists today's models, Week the last 7 days, Month the last 30. It always showed 30
   days before.

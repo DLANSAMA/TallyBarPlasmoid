@@ -197,7 +197,7 @@ Item {
         elide: Text.ElideRight
         font.family: root.uiFont
         font.pixelSize: 11
-        // 30-day tokens by type: Input · Output · Cache reads · Cache writes.
+        // 30-day tokens by type: Input · Output · Cached (cache reads + writes).
         textFormat: Text.PlainText
         text: costSection.breakdownLine
         visible: costSection.hasBreakdown

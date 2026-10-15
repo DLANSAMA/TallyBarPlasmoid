@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: plasma_applet_io.github.dlansama.tallybar\n"
 "Report-Msgid-Bugs-To: https://github.com/DLANSAMA/TallyBarPlasmoid/issues\n"
-"POT-Creation-Date: 2026-10-14 20:41-0400\n"
+"POT-Creation-Date: 2026-10-14 21:03-0400\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -346,39 +346,35 @@ msgstr ""
 msgid "Not split by type"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1206
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1213
 msgid "Input %1"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1208
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1215
 msgid "Output %1"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1210
-msgid "Cache reads %1"
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1217
+msgid "Cached %1"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1212
-msgid "Cache writes %1"
-msgstr ""
-
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1223
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1227
 msgid "Today by type"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1224
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1228
 msgid "Last 7 days by type"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1224
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1228
 msgid "Last 30 days by type"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1226
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1230
 msgid "%1: %2 · %3 tok"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1264
+#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:1268
 msgid "Other"
 msgstr ""
 

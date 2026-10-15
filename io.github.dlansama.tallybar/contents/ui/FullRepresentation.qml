@@ -1197,20 +1197,24 @@ Item {
             const cost = root.costSummary() || ({});
             return String(cost.breakdown || "").trim();
         }
-        const parts = [];
+        // Cache reads and writes share one "Cached" item: four items overflow the line at
+        // real volumes, and each line's tooltip and the popout's BY TYPE list keep them apart.
+        let input = 0, output = 0, cached = 0;
         for (let i = 0; i < rows.length; ++i) {
-            if (rows[i].tokens <= 0)
-                continue;
-            const n = Fmt.compactCount(rows[i].tokens);
             if (rows[i].kind === "input")
-                parts.push(i18n("Input %1", n));
+                input = rows[i].tokens;
             else if (rows[i].kind === "output")
-                parts.push(i18n("Output %1", n));
-            else if (rows[i].kind === "cacheRead")
-                parts.push(i18n("Cache reads %1", n));
-            else if (rows[i].kind === "cacheWrite")
-                parts.push(i18n("Cache writes %1", n));
+                output = rows[i].tokens;
+            else if (rows[i].kind === "cacheRead" || rows[i].kind === "cacheWrite")
+                cached += rows[i].tokens;
         }
+        const parts = [];
+        if (input > 0)
+            parts.push(i18n("Input %1", Fmt.compactCount(input)));
+        if (output > 0)
+            parts.push(i18n("Output %1", Fmt.compactCount(output)));
+        if (cached > 0)
+            parts.push(i18n("Cached %1", Fmt.compactCount(cached)));
         return parts.join(" · ");
     }
 
