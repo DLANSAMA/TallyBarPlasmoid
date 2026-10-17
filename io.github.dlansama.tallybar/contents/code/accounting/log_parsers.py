@@ -43,7 +43,7 @@ _PARSE_CACHE_DIR = Path.home() / ".tallybar" / "cache"
 _CACHE_SCHEMA_VERSION = 1          # bump to invalidate ALL parse caches at once
 # A cached record is only valid for the output shape that wrote it, so a shape change
 # bumps its version. → tests/test_accounting.py::test_parse_cache_versions_track_output_shape
-_CLAUDE_PARSE_VERSION = 5
+_CLAUDE_PARSE_VERSION = 6
 _CODEX_PARSE_VERSION = 3
 _GROK_PARSE_VERSION = 3
 _GEMINI_PARSE_VERSION = 2

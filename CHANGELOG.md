@@ -35,6 +35,13 @@ Notable changes to TallyBar. Format follows
   reading in the CLI's log, as before.
 
 ### Fixed
+- Claude Code requests made in fast mode now cost twice the standard rate, as
+  Anthropic bills them. They were priced as standard requests before. Claude history
+  is re-read once after the update.
+- When claude.ai rate-limits the widget, it now waits out the server's Retry-After
+  (5 minutes when none is given, at most 30) before asking again, and keeps showing the
+  last good reading meanwhile. It used to retry on every refresh, which kept the limit
+  in place.
 - The panel icon now pulses for any usage window near its limit, not just the first
   two. Antigravity's Claude · GPT windows and Claude's per-model weekly caps could
   reach 90% with no warning on the panel.

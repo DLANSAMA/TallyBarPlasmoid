@@ -1821,6 +1821,51 @@ async def test_usage_summary_transient_error_is_not_remembered():
     assert "usageSummaryUnavailableSince" not in res
 
 
+@pytest.mark.asyncio
+async def test_claude_429_backs_off_until_retry_after():
+    seen: list[str] = []
+
+    def limited(url, jar, timeout):
+        seen.append(url)
+        return (429, {"error": "rate limited", "retryAfterSeconds": 600})
+    with patch("providers.claude.http_json_async", side_effect=limited):
+        first = await providers.claude.run_claude_api([_cookie("claude.ai")], timeout=1.0)
+    assert first["status"] == "api-error" and "rate-limiting" in first["message"]
+    until = dt.datetime.fromisoformat(first["rateLimitedUntil"])
+    left = (until - dt.datetime.now(dt.timezone.utc)).total_seconds()
+    assert 590 <= left <= 601
+
+    seen.clear()
+    with patch("providers.claude.http_json_async", side_effect=limited):
+        second = await providers.claude.run_claude_api([_cookie("claude.ai")], timeout=1.0, prev=first)
+    assert seen == []   # no claude.ai call while the back-off runs
+    assert second["status"] == "api-error"
+    assert second["rateLimitedUntil"] == first["rateLimitedUntil"]
+
+
+@pytest.mark.asyncio
+async def test_claude_429_back_off_is_clamped_and_defaulted():
+    lo, hi = providers.claude.RATE_LIMIT_BACKOFF_RANGE
+    for body, want in (({"retryAfterSeconds": 86400}, hi), ({"retryAfterSeconds": 1}, lo),
+                       ({}, providers.claude.RATE_LIMIT_BACKOFF_SECONDS)):
+        with patch("providers.claude.http_json_async", return_value=(429, body)):
+            res = await providers.claude.run_claude_api([_cookie("claude.ai")], timeout=1.0)
+        left = (dt.datetime.fromisoformat(res["rateLimitedUntil"])
+                - dt.datetime.now(dt.timezone.utc)).total_seconds()
+        assert want - 2 <= left <= want + 1
+
+
+@pytest.mark.asyncio
+async def test_claude_expired_back_off_probes_again():
+    past = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=5)).isoformat()
+    seen: list[str] = []
+    with patch("providers.claude.http_json_async", side_effect=_claude_side_effect(seen)):
+        res = await providers.claude.run_claude_api([_cookie("claude.ai")], timeout=1.0,
+                                                    prev={"rateLimitedUntil": past})
+    assert res["status"] == "ok" and "organizations" in seen
+    assert "rateLimitedUntil" not in res
+
+
 # ---------------------------------------------------------------------------
 # run_grok_bot (providers/grok_bot.py) — no live network, no real wallet, no real
 # ~/.config/Grok Bot/sand-secrets.json: the store, HTTP and KWallet are all injected.

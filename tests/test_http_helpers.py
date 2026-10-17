@@ -129,6 +129,14 @@ def test_http_json_http_error_with_json_body():
     assert status == 429 and data == {"error": "rate limited"}
 
 
+def test_http_json_429_carries_retry_after():
+    err = urllib.error.HTTPError("http://x", 429, "Boom", {"Retry-After": "90"},
+                                 io.BytesIO(b'{"error": "rate limited"}'))
+    with patch.object(http_helpers.urllib.request, "build_opener", return_value=_FakeOpener(exc=err)):
+        status, data = http_helpers.http_json("https://x", CookieJar(), 1.0)
+    assert status == 429 and data[http_helpers.RETRY_AFTER_KEY] == 90.0
+
+
 def test_http_json_http_error_non_json_body_uses_reason():
     err = _http_error(500, b"Internal Server Error")
     with patch.object(http_helpers.urllib.request, "build_opener", return_value=_FakeOpener(exc=err)):
@@ -307,3 +315,14 @@ def test_cookie_requests_refuse_a_plaintext_redirect(monkeypatch):
         http_helpers.http_text("https://x.test/", CookieJar(), 1, headers={"Authorization": "Bearer t"})
     assert [http_helpers._HttpsOnlyRedirects in s for s in seen] == [True, True, False]
     assert http_helpers._RefuseRedirects in seen[2]
+
+
+def test_retry_after_reads_seconds_and_http_dates():
+    import datetime as dt
+    import email.utils
+    assert http_helpers.retry_after_seconds("120") == 120.0
+    soon = email.utils.format_datetime(dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=300),
+                                       usegmt=True)
+    assert 290 <= http_helpers.retry_after_seconds(soon) <= 300
+    for bad in (None, "", "soon", "-5"):
+        assert http_helpers.retry_after_seconds(bad) is None

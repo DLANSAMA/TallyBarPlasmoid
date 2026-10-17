@@ -1177,6 +1177,17 @@ def test_carry_forward_transient_within_window_freezes_last_good():
     assert out["staleAsOf"] == cached["timestamp"]
 
 
+def test_carry_forward_keeps_this_runs_rate_limit_back_off():
+    cached = _cached_provider("Claude", [{"label": "Session", "percent": 40}], ts_offset=60.0,
+                              extra={"rateLimitedUntil": "2000-01-01T00:00:00+00:00"})
+    failing = {"label": "Claude", "status": "api-error", "limits": [],
+               "rateLimitedUntil": "2099-01-01T00:00:00+00:00"}
+    out = backend.carry_forward_provider_last_good(failing, cached, "claude")
+    assert out["stale"] is True and out["rateLimitedUntil"] == "2099-01-01T00:00:00+00:00"
+    failing.pop("rateLimitedUntil")
+    assert "rateLimitedUntil" not in backend.carry_forward_provider_last_good(failing, cached, "claude")
+
+
 def test_carry_forward_preserves_creditBalance_and_tier():
     cached = _cached_provider(
         "Claude", [{"label": "Session", "percent": 40}], ts_offset=30.0,

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
+import email.utils
 import json
 import re
 import socket
@@ -89,6 +91,27 @@ class _HttpsOnlyRedirects(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+# http_json puts a 429's Retry-After (seconds) in the error dict under this key.
+RETRY_AFTER_KEY = "retryAfterSeconds"
+
+
+def retry_after_seconds(value: Any) -> float | None:
+    """A Retry-After header (delta-seconds or an HTTP date, RFC 9110 §10.2.3) as seconds
+    from now, or None when absent or unreadable."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return float(value)
+    try:
+        when = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=dt.timezone.utc)
+    return max(0.0, (when - dt.datetime.now(dt.timezone.utc)).total_seconds())
+
+
 def http_json(url: str, jar: CookieJar, timeout: float, method: str = "GET", body: bytes | None = None) -> tuple[int, Any]:
     _require_https(url)
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar), _HttpsOnlyRedirects())
@@ -111,6 +134,10 @@ def http_json(url: str, jar: CookieJar, timeout: float, method: str = "GET", bod
             data = json.loads(raw.decode("utf-8", errors="replace"))
         except Exception:
             data = {"error": exc.reason}
+        if int(exc.code) == 429 and isinstance(data, dict):
+            wait = retry_after_seconds(exc.headers.get("Retry-After") if exc.headers else None)
+            if wait is not None:
+                data[RETRY_AFTER_KEY] = wait
         return int(exc.code), data
 
 

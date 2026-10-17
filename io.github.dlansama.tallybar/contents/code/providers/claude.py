@@ -12,7 +12,7 @@ from accounting import (
     now_iso,
 )
 from cookies import BrowserCookie, cookiejar_for_domains, has_session_cookies
-from http_helpers import http_json_async, scrub_credentials
+from http_helpers import RETRY_AFTER_KEY, http_json_async, scrub_credentials
 from parsers import (
     fresh_credit_balance,
     add_pace_detail,
@@ -85,6 +85,44 @@ def _usage_summary_skip_since(prev: Any) -> str | None:
         ts = ts.replace(tzinfo=dt.timezone.utc)
     age = (dt.datetime.now(dt.timezone.utc) - ts).total_seconds()
     return since if 0 <= age < USAGE_SUMMARY_RETRY_SECONDS else None
+
+
+# A 429 from claude.ai (Cloudflare) stops every claude.ai call until its Retry-After passes,
+# clamped to this range (default when the header is absent); polling through a 429 extends it.
+# → tests/test_providers.py::test_claude_429_backs_off_until_retry_after
+RATE_LIMIT_BACKOFF_SECONDS = 300
+RATE_LIMIT_BACKOFF_RANGE = (60, 1800)
+
+
+def _rate_limited_until(prev: Any) -> dt.datetime | None:
+    """The previous snapshot's ``rateLimitedUntil`` while it is still in the future, else None."""
+    if not isinstance(prev, dict):
+        return None
+    until = prev.get("rateLimitedUntil")
+    if not isinstance(until, str) or not until:
+        return None
+    try:
+        ts = dt.datetime.fromisoformat(until.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=dt.timezone.utc)
+    now = dt.datetime.now(dt.timezone.utc)
+    if ts <= now or (ts - now).total_seconds() > RATE_LIMIT_BACKOFF_RANGE[1]:
+        return None
+    return ts
+
+
+def _backoff_until(data: Any) -> dt.datetime:
+    wait = data.get(RETRY_AFTER_KEY) if isinstance(data, dict) else None
+    if not isinstance(wait, (int, float)):
+        wait = RATE_LIMIT_BACKOFF_SECONDS
+    lo, hi = RATE_LIMIT_BACKOFF_RANGE
+    return dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=min(hi, max(lo, float(wait))))
+
+
+def _rate_limited_message(until: dt.datetime) -> str:
+    return f"claude.ai is rate-limiting; retrying after {until.astimezone().strftime('%H:%M')}"
 
 
 def _prev_monthly_limit(prev: Any) -> dict[str, Any] | None:
@@ -254,6 +292,11 @@ async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
     }
     if disk_tier:
         result["tier"] = disk_tier
+    limited_until = _rate_limited_until(prev)
+    if limited_until is not None:
+        result.update(status="api-error", message=_rate_limited_message(limited_until),
+                      rateLimitedUntil=prev["rateLimitedUntil"])  # type: ignore[index]
+        return result
     try:
         status, data = await http_json_async(CLAUDE_ORGANIZATIONS_URL, jar, timeout)
     except Exception as exc:
@@ -271,6 +314,11 @@ async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
         # Surface a sign-in URL so the UI's error state is clickable.
         result.update(status="unauthorized", message=f"API rejected session cookies ({status})",
                       actionUrl="https://claude.ai")
+        return result
+    if status == 429:
+        until = _backoff_until(data)
+        result.update(status="api-error", message=_rate_limited_message(until),
+                      rateLimitedUntil=until.isoformat(timespec="seconds"))
         return result
     if status < 200 or status >= 300:
         result.update(status="api-error", message=f"API returned HTTP {status}")

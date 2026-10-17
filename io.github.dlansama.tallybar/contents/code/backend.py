@@ -671,6 +671,10 @@ def carry_forward_provider_last_good(provider: dict[str, Any], cached: Any, key:
     frozen["status"] = "ok"
     frozen["stale"] = True
     frozen["staleAsOf"] = stale_as_of
+    # The back-off must outlive the frozen reading, or the next refresh polls through the 429.
+    frozen.pop("rateLimitedUntil", None)
+    if provider.get("rateLimitedUntil"):
+        frozen["rateLimitedUntil"] = provider["rateLimitedUntil"]
     return frozen
 
 

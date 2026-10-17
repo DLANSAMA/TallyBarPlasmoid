@@ -137,7 +137,11 @@ def _usage_counts(usage: dict[str, Any]) -> dict[str, int]:
         "cache_create_1h": cache_create_1h,
         "cache_read_separate": cache_read_separate,
         "cached_within_input": cached_within_input,
+        "fast": int(usage.get("speed") == "fast"),
     }
+
+
+FAST_MODE_MULTIPLIER = 2.0
 
 
 def _cost_terms(n: dict[str, int], model: str | None) -> list[tuple[int, float]]:
@@ -167,7 +171,7 @@ def _cost_terms(n: dict[str, int], model: str | None) -> list[tuple[int, float]]
     cache_read_rate = prices.get("cache_read", input_rate)
     cache_write_rate = prices.get("cache_write", input_rate)
     cache_write_1h_rate = prices.get("cache_write_1h", cache_write_rate)
-    return [
+    terms = [
         (0, n["uncached_input"] * input_rate),
         (1, n["output"] * prices.get("output", 0.0)),
         (0, n["tool"] * input_rate),
@@ -176,6 +180,12 @@ def _cost_terms(n: dict[str, int], model: str | None) -> list[tuple[int, float]]
         (2, n["cache_read_separate"] * cache_read_rate),
         (2, n["cached_within_input"] * cache_read_rate),
     ]
+    # Anthropic fast mode (usage "speed": "fast") bills every lane at FAST_MODE_MULTIPLIER x
+    # the standard rate, cache multipliers stacking on top (platform.claude.com pricing).
+    # → tests/test_accounting.py::test_usage_cost_usd_claude_fast_mode_doubles_every_lane
+    if n["fast"] and _provider_family_for_model(model) == "claude":
+        terms = [(idx, c * FAST_MODE_MULTIPLIER) for idx, c in terms]
+    return terms
 
 
 def _terms_cost(terms: list[tuple[int, float]]) -> float:
@@ -280,6 +290,8 @@ def slim_usage(usage: Any) -> Any:
         }
         if kept:
             out["cache_creation"] = kept
+    if usage.get("speed") == "fast":
+        out["speed"] = "fast"
     return out
 
 

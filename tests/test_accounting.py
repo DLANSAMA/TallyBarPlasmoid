@@ -1575,8 +1575,9 @@ def test_slim_usage_actually_drops_the_metadata():
     fat = _USAGE_CORPUS[0]
     slim = accounting.slim_usage(fat)
     for dropped in ("service_tier", "inference_geo", "server_tool_use", "iterations",
-                    "speed", "output_tokens_details"):
+                    "output_tokens_details"):
         assert dropped in fat and dropped not in slim, dropped
+    assert fat["speed"] == slim["speed"] == "fast"    # fast mode changes the price
     assert len(json.dumps(slim)) < len(json.dumps(fat)) / 2
     # Non-positive values are dropped too: every reader guards with `v > 0`.
     assert "cache_read_input_tokens" in slim          # 145233
@@ -2152,7 +2153,7 @@ def _fixture_gemini(tmp_path):
 
 # (version, fingerprint of the parser's output on the fixture above)
 _PARSE_PINS = {
-    "claude": (5, "07501fee7c53456a"),
+    "claude": (6, "07501fee7c53456a"),
     "codex": (3, "c78d70d4941f28c1"),
     "grok": (3, "610763b0f302ac40"),
     "gemini": (2, "08a92be3066fcd9c"),
@@ -2191,3 +2192,23 @@ def test_grok_billing_label_is_never_flagged_as_extra_usage(period_type):
     row = providers["grok"]["limits"][0]
     assert row["isExtraUsage"] is False, f"label {row['label']!r} reads as extra usage"
     assert "formattedExtraUsageDetail" not in providers["grok"]
+
+
+def test_usage_cost_usd_claude_fast_mode_doubles_every_lane():
+    """Fast mode bills 2x on every lane (Opus 5.5 $8/$40 vs $4/$20), cache rates included;
+    the flag survives slim_usage so cached records keep it, and non-Claude models ignore it."""
+    from accounting import pricing
+    usage = {"input_tokens": 4231, "output_tokens": 812, "cache_creation_input_tokens": 19004,
+             "cache_read_input_tokens": 145233, "service_tier": "standard",
+             "cache_creation": {"ephemeral_5m_input_tokens": 15004, "ephemeral_1h_input_tokens": 4000}}
+    fast = dict(usage, speed="fast")
+    std_cost = pricing.usage_cost_usd(usage, "claude-opus-5-5")
+    assert pricing.usage_cost_usd(dict(usage, speed="standard"), "claude-opus-5-5") == std_cost
+    assert pricing.usage_cost_usd(fast, "claude-opus-5-5") == 2 * std_cost
+    assert pricing.usage_cost_usd(pricing.slim_usage(fast), "claude-opus-5-5") == 2 * std_cost
+    split = pricing.usage_split(fast, "claude-opus-5-5")
+    assert split.cost == 2 * std_cost
+    assert abs(sum(split.type_costs) - split.cost) < 1e-12
+    assert pricing.slim_usage(dict(usage, speed="standard")).get("speed") is None
+    gpt = {"input_tokens": 1000, "output_tokens": 100}
+    assert pricing.usage_cost_usd(dict(gpt, speed="fast"), "gpt-5.5") == pricing.usage_cost_usd(gpt, "gpt-5.5")
