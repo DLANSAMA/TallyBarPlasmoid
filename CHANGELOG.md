@@ -35,9 +35,10 @@ Notable changes to TallyBar. Format follows
   reading in the CLI's log, as before.
 
 ### Fixed
-- On accounts where Antigravity runs on Google's daily channel, the Antigravity tab's
-  Gemini bar now says it is the 5-hour window. Google sends no weekly Gemini figure there,
-  so there is no weekly Gemini bar.
+- On accounts where Antigravity runs on Google's daily channel, the Antigravity tab
+  showed one unlabelled Gemini bar. While the Antigravity desktop app is open, the tab
+  now shows Gemini's 5-hour and weekly bars, read from the app. With the app closed it
+  shows the 5-hour bar, labelled.
 - Claude Code requests made in fast mode now cost twice the standard rate, as
   Anthropic bills them. They were priced as standard requests before. Claude history
   is re-read once after the update.

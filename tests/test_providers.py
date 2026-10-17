@@ -2290,3 +2290,42 @@ def test_gemini_web_result_never_carries_a_tier(monkeypatch, limits):
         res = providers.gemini.run_gemini_web([_cookie("gemini.google.com")], timeout=1.0)
     assert res["status"] == ("ok" if limits else "api-empty")
     assert "tier" not in res
+
+
+def _summary_lane(label, window, percent):
+    return {"label": label, "percent": percent, "reset": "", "unit": "%",
+            "sublabel": "5-hour" if window == "5h" else "Weekly", "window": window}
+
+
+def test_choose_antigravity_fills_a_missing_group_from_the_desktop_app():
+    remote = {"status": "ok", "limitsSource": "quota-summary", "limits": [
+        _summary_lane("Gemini", "5h", 4.5),            # model-quota fill: no weekly
+        _summary_lane("Claude · GPT", "5h", 0.0), _summary_lane("Claude · GPT", "weekly", 0.0)]}
+    local = {"status": "ok", "limitsSource": "quota-summary", "tier": "Google AI Ultra", "limits": [
+        _summary_lane("Gemini", "5h", 4.2), _summary_lane("Gemini", "weekly", 12.8),
+        _summary_lane("Claude · GPT", "5h", 9.0), _summary_lane("Claude · GPT", "weekly", 9.0),
+        {"label": "Credits", "percent": 1.0, "reset": "Monthly credit pool", "unit": "%"}]}
+    out = providers.antigravity.choose_antigravity_result(local, remote)
+    assert [(lane["label"], lane["window"], lane["percent"]) for lane in out["limits"]] == [
+        ("Gemini", "5h", 4.2), ("Gemini", "weekly", 12.8),
+        ("Claude · GPT", "5h", 0.0), ("Claude · GPT", "weekly", 0.0)]
+    assert out["tier"] == "Google AI Ultra"
+
+
+def test_choose_antigravity_keeps_the_cloud_lanes_without_a_desktop_summary():
+    remote = {"status": "ok", "limitsSource": "quota-summary",
+              "limits": [_summary_lane("Gemini", "5h", 4.5)]}
+    local = {"status": "ok", "limits": [{"label": "Gemini", "percent": 50.0, "reset": "", "unit": "%"}]}
+    out = providers.antigravity.choose_antigravity_result(local, remote)
+    assert out["limits"] == remote["limits"]
+
+
+def test_local_quota_summary_unwraps_the_language_server_reply():
+    reply = {"response": {"groups": [{"displayName": "Gemini Models", "buckets": [
+        {"window": "weekly", "remainingFraction": 0.872, "resetTime": "2099-10-23T22:12:01Z"},
+        {"window": "5h", "remainingFraction": 0.958, "resetTime": "2099-10-18T01:37:32Z"}]}]}}
+    with patch.object(providers.antigravity, "post_local_json", return_value=(200, reply)):
+        lanes = providers.antigravity._local_quota_summary("http://127.0.0.1:1", "t", 1.0)
+    assert [(lane["label"], lane["window"]) for lane in lanes] == [("Gemini", "5h"), ("Gemini", "weekly")]
+    with patch.object(providers.antigravity, "post_local_json", side_effect=OSError("down")):
+        assert providers.antigravity._local_quota_summary("http://127.0.0.1:1", "t", 1.0) == []

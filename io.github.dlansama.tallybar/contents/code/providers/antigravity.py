@@ -744,6 +744,29 @@ def normalized_antigravity_lanes(limits: list[dict[str, Any]], include_missing: 
     return rows
 
 
+def _fill_groups_from_local(remote_lanes: list[dict[str, Any]],
+                            local_result: dict[str, Any]) -> list[dict[str, Any]]:
+    # The cloud summary for agy's sign-in can leave a group out (Gemini, on the daily
+    # channel) while the desktop app's language server, on the same channel, lists it with
+    # both windows. A group the cloud gave both windows for stays the cloud's.
+    # → tests/test_providers.py::test_choose_antigravity_fills_a_missing_group_from_the_desktop_app
+    if local_result.get("limitsSource") != "quota-summary":
+        return remote_lanes
+    local_lanes = [lane for lane in local_result.get("limits") or [] if lane.get("window")]
+    complete = {lane.get("label") for lane in remote_lanes if lane.get("window") == "weekly"}
+    order: list[Any] = []
+    for lane in remote_lanes + local_lanes:
+        if lane.get("label") not in order:
+            order.append(lane.get("label"))
+    merged: list[dict[str, Any]] = []
+    for label in order:
+        local_group = [lane for lane in local_lanes if lane.get("label") == label]
+        use_local = label not in complete and local_group
+        merged.extend(local_group if use_local else
+                      [lane for lane in remote_lanes if lane.get("label") == label])
+    return merged
+
+
 def choose_antigravity_result(
     local_result: dict[str, Any],
     remote_result: dict[str, Any] | None,
@@ -755,6 +778,7 @@ def choose_antigravity_result(
             and remote_result.get("limitsSource") == "quota-summary"):
         merged = dict(remote_result)
         if isinstance(local_result, dict) and local_result.get("status") == "ok":
+            merged["limits"] = _fill_groups_from_local(remote_result.get("limits") or [], local_result)
             # GetUserStatus is the ONLY authoritative tier source (CLAUDE.md: "only Antigravity's
             # GetUserStatus has it") — remote loadCodeAssist returns the product name ("Antigravity"),
             # not the real "Google AI Ultra/Pro" tier — so the local tier wins whenever present.
@@ -1295,6 +1319,18 @@ def run_antigravity_remote_with_credentials(
 
 
 
+def _local_quota_summary(origin: str, token: str, timeout: float) -> list[dict[str, Any]]:
+    """The desktop language server's own RetrieveUserQuotaSummary, as quota-summary lanes."""
+    try:
+        status, data = post_local_json(
+            f"{origin}{_LS_RPC_BASE}/RetrieveUserQuotaSummary", token, min(timeout, 3.0))
+    except Exception:
+        return []
+    if status != 200 or not isinstance(data, dict):
+        return []
+    return parse_antigravity_quota_summary(data.get("response", data))
+
+
 def run_antigravity_local(timeout: float) -> dict[str, Any]:
     result: dict[str, Any] = {
         "label": "Antigravity",
@@ -1325,6 +1361,9 @@ def run_antigravity_local(timeout: float) -> dict[str, Any]:
                 limits = parse_antigravity_limits(data)
                 lanes = normalized_antigravity_lanes(limits, include_missing=True)
 
+                summary_lanes = _local_quota_summary(f"{s}://127.0.0.1:{port}", token, timeout)
+                if summary_lanes:
+                    limits = lanes = summary_lanes
                 credit_balance, credit_limit = antigravity_credit_state(data)
                 if credit_limit is not None:
                     lanes.append(credit_limit)
@@ -1335,6 +1374,8 @@ def run_antigravity_local(timeout: float) -> dict[str, Any]:
                     "message": "Read Antigravity local language-server status",
                     "limits": lanes,
                 }
+                if summary_lanes:
+                    provider["limitsSource"] = "quota-summary"
                 tier = antigravity_tier(data)
                 if tier:
                     provider["tier"] = tier
