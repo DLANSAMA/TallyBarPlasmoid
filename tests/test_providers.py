@@ -932,6 +932,34 @@ def test_antigravity_daily_summary_without_gemini_never_reads_prod(tmp_path):
     assert all("daily-" in url for url in seen if "cloudcode-pa" in url)
 
 
+@pytest.mark.parametrize("hours_left, sublabel", [(2.9, "5-hour"), (30.0, None)])
+def test_antigravity_daily_gemini_fill_is_labelled_by_its_reset(tmp_path, hours_left, sublabel):
+    reset = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=hours_left)).isoformat()
+    claude_group = {"displayName": "Claude and GPT models", "buckets": [
+        {"window": "5h", "resetTime": "2099-06-24T01:03:34Z", "remainingFraction": 1}]}
+    models = {"models": {"gemini-3-flash": {
+        "displayName": "Gemini 3 Flash",
+        "quotaInfo": {"remainingFraction": 0.955, "resetTime": reset}}}}
+    base = _fake_urlopen()
+
+    def fake(request, timeout=None, context=None):
+        url = request.full_url
+        if "retrieveUserQuotaSummary" in url:
+            return _FakeHTTPResponse(200, {"groups": [claude_group]})
+        if "fetchAvailableModels" in url:
+            return _FakeHTTPResponse(200, models)
+        return base(request, timeout, context)
+
+    credentials = {"access_token": "tok-1", "expiry_date": int((time.time() + 3600) * 1000)}
+    with patch.object(providers.antigravity, "antigravity_cloudcode_host",
+                      return_value="daily-cloudcode-pa.googleapis.com"), \
+            patch("urllib.request.urlopen", side_effect=fake):
+        res = providers.antigravity.run_antigravity_remote_with_credentials(
+            credentials, tmp_path / "creds.json", {}, "test-source", timeout=1.0)
+    assert res["limits"][0]["label"] == "Gemini"
+    assert res["limits"][0].get("sublabel") == sublabel
+
+
 def test_antigravity_remote_with_credentials_expired_token_refreshes(tmp_path):
     # Expired token -> refresh_antigravity_credentials exchanges the refresh_token for a new
     # access_token via oauth2.googleapis.com/token, persists it (save_antigravity_credentials),

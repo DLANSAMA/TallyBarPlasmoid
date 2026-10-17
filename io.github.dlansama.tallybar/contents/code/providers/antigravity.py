@@ -26,6 +26,7 @@ from accounting import (
 from http_helpers import scrub_credentials
 from io_helpers import atomic_write_text, clamp_to_deadline, deadline_passed
 from parsers import (
+    antigravity_model_entries,
     parse_antigravity_limits,
     parse_antigravity_quota_summary,
 )
@@ -1138,7 +1139,30 @@ def _fill_missing_gemini_lanes(
     gemini = next((lane for lane in parsed if lane.get("label") == "Gemini"), None)
     if gemini is None:
         return summary_lanes
+    if _gemini_quota_is_five_hour(models):
+        gemini = {**gemini, "sublabel": "5-hour", "window": "5h"}
     return [gemini] + summary_lanes
+
+
+# fetchAvailableModels' per-model quota carries no window name, only a reset time; one due
+# within five hours can only be the 5-hour window. Daily sends no weekly Gemini figure at all.
+# → tests/test_providers.py::test_antigravity_daily_gemini_fill_is_labelled_by_its_reset
+_FIVE_HOUR_WINDOW_SECONDS = 5 * 3600 + 120
+
+
+def _gemini_quota_is_five_hour(models: Any) -> bool:
+    gemini = [e for e in antigravity_model_entries(models) if "gemini" in f"{e[0]} {e[1]}".lower()]
+    if not gemini:
+        return False
+    reset = min(gemini, key=lambda e: e[2])[3]
+    try:
+        ts = dt.datetime.fromisoformat(reset.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=dt.timezone.utc)
+    left = (ts - dt.datetime.now(dt.timezone.utc)).total_seconds()
+    return 0 < left <= _FIVE_HOUR_WINDOW_SECONDS
 
 
 def run_antigravity_remote_with_credentials(
