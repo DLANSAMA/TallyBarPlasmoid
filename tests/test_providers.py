@@ -864,8 +864,6 @@ def test_antigravity_remote_with_credentials_success(tmp_path):
 
 
 def test_antigravity_summary_without_gemini_group_takes_gemini_from_available_models(tmp_path):
-    # Live 2026-10-15: the summary lists only "Claude and GPT models"; the Gemini lane comes
-    # from fetchAvailableModels' per-model quota instead of disappearing.
     summary = {"groups": [{"displayName": "Claude and GPT models", "buckets": [
         {"bucketId": "3p-weekly", "window": "weekly",
          "resetTime": "2099-06-28T03:18:59Z", "remainingFraction": 1},
@@ -897,8 +895,6 @@ def test_antigravity_summary_without_gemini_group_takes_gemini_from_available_mo
 
 
 def test_antigravity_daily_summary_without_gemini_takes_the_group_from_prod(tmp_path):
-    # Live 2026-10-15: agy logs the daily host, whose summary dropped the Gemini group, while
-    # prod still returns it with both windows (what the Antigravity apps show).
     claude_group = {"displayName": "Claude and GPT models", "buckets": [
         {"window": "weekly", "resetTime": "2099-06-28T03:18:59Z", "remainingFraction": 1},
         {"window": "5h", "resetTime": "2099-06-24T01:03:34Z", "remainingFraction": 1},
