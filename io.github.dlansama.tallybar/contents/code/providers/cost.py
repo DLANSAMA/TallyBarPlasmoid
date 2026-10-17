@@ -258,9 +258,14 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
         marks = ledger.get("rpcWatermarks")
         if not isinstance(marks, dict):
             marks = {}
+        # An entry without "h" was captured with no timestamp and dated to the harvest day;
+        # re-query its cascade so it takes its generation's real date and hour.
+        # → tests/test_rpc_watermarks.py::test_undated_entries_take_the_real_date
+        hourless_stems = {k.rsplit("#", 1)[0] for k, e in entries.items() if "#" in k and e.get("h") is None}
+        known = {k: v for k, v in marks.items() if k not in hourless_stems}
         try:
             from .antigravity import collect_antigravity_rpc_usage
-            harvest = collect_antigravity_rpc_usage(4.0, known=marks, deadline=deadline)
+            harvest = collect_antigravity_rpc_usage(4.0, known=known, deadline=deadline)
             rpc_usage, live_marks, learned_placeholders = harvest.usage, harvest.marks, harvest.learned_names
         except Exception:
             rpc_usage, live_marks, learned_placeholders = {}, {}, {}
@@ -284,11 +289,11 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                 key = f"{cascade_id}#{rec['stepKey']}"
                 rec_hour = rec.get("hour")
                 if key in entries:
-                    # Backfill the local hour onto an entry captured before hour-tracking
-                    # existed (or one still missing it) so today's already-seen generations
-                    # show in the Day view — without re-pricing or re-dating them.
+                    # No hour means the stored date was the harvest day, not the generation's.
                     if rec_hour is not None and entries[key].get("h") is None:
                         entries[key]["h"] = rec_hour
+                        if rec["date"]:
+                            entries[key]["d"] = rec["date"]
                         changed = True
                     # Re-resolve the model when the mapping has improved: a placeholder unknown
                     # at capture time fell back to a family default. Heal it in place (keeps
@@ -324,7 +329,7 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                 if enum is not None:
                     entry["me"] = enum
                 if rec_hour is not None:
-                    entry["h"] = rec_hour 
+                    entry["h"] = rec_hour
                 entries[key] = entry
                 changed = True
 
