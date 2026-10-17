@@ -16,9 +16,9 @@ Item {
     property string selectedProvider: "gemini"
     readonly property real primaryPercent: percentAt(0)
     readonly property real secondaryPercent: percentAt(1)
-    // Worst-of-both-windows: a near-exhausted weekly/secondary limit must still pulse
-    // the systray warning even while the fast-resetting primary/session window is fresh.
-    readonly property real worstPercent: Math.max(primaryPercent, secondaryPercent)
+    // Worst of EVERY capacity window, not just the two drawn: Antigravity's Claude · GPT lanes
+    // and Claude's per-model caps sit at index 2+, and a near-exhausted one must still pulse.
+    readonly property real worstPercent: worstUsagePercent()
     readonly property bool warning: worstPercent >= 72 && !root.isMuted()
     readonly property bool critical: worstPercent >= 90 && !root.isMuted()
     property real warningPulse: 1.0
@@ -50,6 +50,14 @@ Item {
             return 0;
 
         return Math.max(0, Math.min(100, Number(limits[index].percent || 0)));
+    }
+
+    function worstUsagePercent() {
+        const limits = root.usageRows();
+        let worst = 0;
+        for (let i = 0; i < limits.length; ++i)
+            worst = Math.max(worst, Math.min(100, Number(limits[i].percent || 0)));
+        return worst;
     }
 
     function usageSummary() {

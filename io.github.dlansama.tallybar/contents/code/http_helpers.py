@@ -78,9 +78,20 @@ def _require_https(url: str) -> None:
         raise ValueError(f"refusing non-https request URL: {str(url)[:60]!r}")
 
 
+class _HttpsOnlyRedirects(urllib.request.HTTPRedirectHandler):
+    """Follow a 3xx only to another ``https://`` URL. ``_require_https`` sees the first URL
+    alone, and the cookie processor attaches every non-Secure jar cookie to a plaintext hop.
+    The ValueError reaches the caller's ``except Exception`` as an ``api-error``.
+    → tests/test_http_helpers.py::test_cookie_requests_refuse_a_plaintext_redirect"""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _require_https(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def http_json(url: str, jar: CookieJar, timeout: float, method: str = "GET", body: bytes | None = None) -> tuple[int, Any]:
     _require_https(url)
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar), _HttpsOnlyRedirects())
     headers = {
         "Accept": "application/json, text/plain, */*",
         "User-Agent": "Mozilla/5.0 TallyBar Plasma/0.1",
@@ -123,10 +134,12 @@ def http_text(
 ) -> tuple[int, str]:
     _require_https(url)
     handlers: list[Any] = [urllib.request.HTTPCookieProcessor(jar)]
-    # A bearer-carrying request must not follow redirects (cookie-only callers still do:
-    # the jar scopes cookies to their own domain on every hop).
+    # A bearer-carrying request must not follow redirects; cookie-only callers still do, to
+    # https only (the jar scopes cookies to their own domain on every hop).
     if any(k.lower() == "authorization" for k in (headers or {})):
         handlers.append(_RefuseRedirects())
+    else:
+        handlers.append(_HttpsOnlyRedirects())
     opener = urllib.request.build_opener(*handlers)
     request_headers = {
         "Accept": "*/*",

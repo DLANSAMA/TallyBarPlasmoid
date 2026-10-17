@@ -279,3 +279,31 @@ def test_refuse_redirects_never_forwards_the_bearer():
         for s in (source, target):
             s.shutdown()
             s.server_close()
+
+
+def test_cookie_requests_refuse_a_plaintext_redirect(monkeypatch):
+    """Cookie-only openers follow an https hop but never an http one; bearer openers refuse all."""
+    import urllib.request
+    from http.cookiejar import CookieJar
+
+    handler = http_helpers._HttpsOnlyRedirects()
+    req = urllib.request.Request("https://claude.ai/api/organizations")
+    with pytest.raises(ValueError):
+        handler.redirect_request(req, None, 302, "Found", {}, "http://claude.ai/api/organizations")
+    assert handler.redirect_request(req, None, 302, "Found", {}, "https://claude.ai/x").full_url == "https://claude.ai/x"
+
+    seen = []
+
+    def capture(*handlers):
+        seen.append({type(h) for h in handlers})
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(urllib.request, "build_opener", capture)
+    for call in (lambda: http_helpers.http_json("https://x.test/", CookieJar(), 1),
+                 lambda: http_helpers.http_text("https://x.test/", CookieJar(), 1)):
+        with pytest.raises(RuntimeError):
+            call()
+    with pytest.raises(RuntimeError):
+        http_helpers.http_text("https://x.test/", CookieJar(), 1, headers={"Authorization": "Bearer t"})
+    assert [http_helpers._HttpsOnlyRedirects in s for s in seen] == [True, True, False]
+    assert http_helpers._RefuseRedirects in seen[2]

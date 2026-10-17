@@ -7,6 +7,22 @@ import "lib/ui_helpers.js" as UIHelpers
 PlasmoidItem {
     id: root
 
+    Plasmoid.contextualActions: [
+        PlasmaCore.Action {
+            text: i18n("Refresh")
+            icon.name: "view-refresh"
+            enabled: !root.loading
+            onTriggered: root.refresh()
+        },
+        PlasmaCore.Action {
+            text: i18n("Unlock KWallet")
+            icon.name: "kwalletmanager"
+            visible: root.anyWalletBlocked()
+            enabled: !root.loading
+            onTriggered: root.refreshForeground()
+        }
+    ]
+
     property string selectedProvider: "claude"
     property bool loading: false
     property bool liveLoaded: false
@@ -231,6 +247,16 @@ PlasmoidItem {
             lines.push(line);
         }
         return lines.join("\n");
+    }
+
+    function anyWalletBlocked() {
+        const providers = root.telemetry && root.telemetry.providers ? root.telemetry.providers : ({});
+        for (const key in providers) {
+            const s = String((providers[key] || {}).status || "");
+            if (s === "wallet-locked" || s === "wallet-state-unknown")
+                return true;
+        }
+        return false;
     }
 
     function refresh() {

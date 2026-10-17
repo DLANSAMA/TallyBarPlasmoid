@@ -21,6 +21,8 @@ Notable changes to TallyBar. Format follows
   Day / Week / Month switch shows. Codex, Gemini and Grok count prompt tokens served
   from cache as cache reads, so their input line is the uncached part only. Antigravity
   reports no cache writes. `backend.py --cost` carries the split as `typeBreakdown`.
+- Right-click the panel icon to refresh, or to unlock KWallet when a tab needs it,
+  without opening the popup.
 
 ### Changed
 - The cost popout's "Top models" list now follows the Day / Week / Month switch: Day
@@ -33,6 +35,11 @@ Notable changes to TallyBar. Format follows
   reading in the CLI's log, as before.
 
 ### Fixed
+- The panel icon now pulses for any usage window near its limit, not just the first
+  two. Antigravity's Claude · GPT windows and Claude's per-model weekly caps could
+  reach 90% with no warning on the panel.
+- Signed-in requests no longer follow a redirect from https to plain http, which
+  would have sent non-Secure cookies unencrypted.
 - A cost-popout bar's tooltip no longer fails to appear when the pointer moves straight
   from one bar onto the next. It happened most in the Day view, whose bars sit 2 px
   apart: the tooltip stayed hidden until the pointer left the bar and came back.
