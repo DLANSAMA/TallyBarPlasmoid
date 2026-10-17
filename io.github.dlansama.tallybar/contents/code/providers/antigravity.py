@@ -1127,17 +1127,9 @@ def _fill_missing_gemini_lanes(
 ) -> list[dict[str, Any]]:
     if not summary_lanes or any(lane.get("label") == "Gemini" for lane in summary_lanes):
         return summary_lanes
-    if base_url != ANTIGRAVITY_REMOTE_BASE_URL:
-        prod_status, prod_summary = antigravity_bearer_json(
-            "/v1internal:retrieveUserQuotaSummary", access_token, {}, timeout,
-            base_url=ANTIGRAVITY_REMOTE_BASE_URL)
-        if prod_status == 200:
-            have = {lane.get("label") for lane in summary_lanes}
-            missing = [lane for lane in parse_antigravity_quota_summary(prod_summary)
-                       if lane.get("label") not in have]
-            summary_lanes = missing + summary_lanes
-            if any(lane.get("label") == "Gemini" for lane in summary_lanes):
-                return summary_lanes
+    # Only agy's own host counts its usage: prod's summary still lists a Gemini group, but it
+    # never moves for an account agy runs on the daily channel.
+    # → tests/test_providers.py::test_antigravity_daily_summary_without_gemini_never_reads_prod
     project_id = antigravity_project_id(code_assist)
     status, models = antigravity_bearer_json(
         "/v1internal:fetchAvailableModels", access_token,

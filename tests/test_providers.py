@@ -894,15 +894,19 @@ def test_antigravity_summary_without_gemini_group_takes_gemini_from_available_mo
     assert res["limits"][0]["percent"] == 25.0
 
 
-def test_antigravity_daily_summary_without_gemini_takes_the_group_from_prod(tmp_path):
+def test_antigravity_daily_summary_without_gemini_never_reads_prod(tmp_path):
     claude_group = {"displayName": "Claude and GPT models", "buckets": [
         {"window": "weekly", "resetTime": "2099-06-28T03:18:59Z", "remainingFraction": 1},
         {"window": "5h", "resetTime": "2099-06-24T01:03:34Z", "remainingFraction": 1},
     ]}
-    gemini_group = {"displayName": "Gemini Models", "buckets": [
-        {"window": "weekly", "resetTime": "2099-06-27T04:27:51Z", "remainingFraction": 0.5},
-        {"window": "5h", "resetTime": "2099-06-24T00:33:30Z", "remainingFraction": 0.75},
+    unused_gemini_group = {"displayName": "Gemini Models", "buckets": [
+        {"window": "weekly", "resetTime": "2099-06-27T04:27:51Z", "remainingFraction": 1},
+        {"window": "5h", "resetTime": "2099-06-24T00:33:30Z", "remainingFraction": 1},
     ]}
+    models = {"models": {"gemini-3-flash": {
+        "displayName": "Gemini 3 Flash",
+        "quotaInfo": {"remainingFraction": 0.75, "resetTime": "2099-06-24T00:33:30Z"},
+    }}}
     base = _fake_urlopen()
     seen = []
 
@@ -910,8 +914,10 @@ def test_antigravity_daily_summary_without_gemini_takes_the_group_from_prod(tmp_
         url = request.full_url
         seen.append(url)
         if "retrieveUserQuotaSummary" in url:
-            groups = [claude_group] if "daily-" in url else [gemini_group, claude_group]
+            groups = [claude_group] if "daily-" in url else [unused_gemini_group, claude_group]
             return _FakeHTTPResponse(200, {"groups": groups})
+        if "fetchAvailableModels" in url:
+            return _FakeHTTPResponse(200, models)
         return base(request, timeout, context)
 
     credentials = {"access_token": "tok-1", "expiry_date": int((time.time() + 3600) * 1000)}
@@ -921,10 +927,9 @@ def test_antigravity_daily_summary_without_gemini_takes_the_group_from_prod(tmp_
         res = providers.antigravity.run_antigravity_remote_with_credentials(
             credentials, tmp_path / "creds.json", {}, "test-source", timeout=1.0,
         )
-    assert [(lane["label"], lane["sublabel"], lane["percent"]) for lane in res["limits"]] == [
-        ("Gemini", "5-hour", 25.0), ("Gemini", "Weekly", 50.0),
-        ("Claude · GPT", "5-hour", 0.0), ("Claude · GPT", "Weekly", 0.0)]
-    assert not any("fetchAvailableModels" in url for url in seen)
+    assert [(lane["label"], lane.get("sublabel"), lane["percent"]) for lane in res["limits"]] == [
+        ("Gemini", None, 25.0), ("Claude · GPT", "5-hour", 0.0), ("Claude · GPT", "Weekly", 0.0)]
+    assert all("daily-" in url for url in seen if "cloudcode-pa" in url)
 
 
 def test_antigravity_remote_with_credentials_expired_token_refreshes(tmp_path):
