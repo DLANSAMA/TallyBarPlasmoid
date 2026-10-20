@@ -140,3 +140,12 @@ def test_save_writes_through_symlink(tmp_path):
     data = json.loads(target.read_text())
     assert data["access_token"] == "new"
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+def test_loopback_tls_skip_needs_an_exact_loopback_host():
+    assert agmod._is_loopback_https("https://127.0.0.1:4321/rpc")
+    assert agmod._is_loopback_https("https://localhost:4321/rpc")
+    assert not agmod._is_loopback_https("https://127.0.0.1.evil.com/rpc")
+    assert not agmod._is_loopback_https("https://localhost.evil.com/rpc")
+    assert not agmod._is_loopback_https("https://evil.com@127.0.0.1x.com/rpc")
+    assert not agmod._is_loopback_https("http://127.0.0.1:4321/rpc")

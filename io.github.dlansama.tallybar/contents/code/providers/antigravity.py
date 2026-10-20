@@ -415,6 +415,15 @@ def antigravity_ports_from_proc(pid: int) -> list[int]:
     return ports
 
 
+def _is_loopback_https(url: str) -> bool:
+    """True only for an https URL whose host is exactly 127.0.0.1 or localhost.
+
+    A prefix check would also pass https://127.0.0.1.evil.com and skip TLS checks for it.
+    """
+    parts = urllib.parse.urlsplit(url)
+    return parts.scheme == "https" and parts.hostname in ("127.0.0.1", "localhost")
+
+
 def post_local_json(url: str, token: str, timeout: float) -> tuple[int, Any]:
     body = json.dumps(
         {
@@ -435,7 +444,7 @@ def post_local_json(url: str, token: str, timeout: float) -> tuple[int, Any]:
         headers["X-Codeium-Csrf-Token"] = token
     request = urllib.request.Request(url, data=body, method="POST", headers=headers)
     context = ssl.create_default_context()
-    if url.startswith("https://127.0.0.1") or url.startswith("https://localhost"):
+    if _is_loopback_https(url):
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
     else:
@@ -526,7 +535,7 @@ def _post_local_rpc(url: str, token: str, body: dict[str, Any], timeout: float) 
         headers=headers,
     )
     context = ssl.create_default_context()
-    if url.startswith("https://127.0.0.1") or url.startswith("https://localhost"):
+    if _is_loopback_https(url):
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
     with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
