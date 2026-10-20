@@ -193,6 +193,98 @@ def test_checker_ignores_nested_children(tmp_path):
     assert find_unpinned_texts(f) == [(4, "outer.value")]
 
 
+# QQC2.ToolTip has no textFormat property. Qt Basic paints `text` in a Text, and the
+# KDE desktop style paints it in a Label; neither sets textFormat, so both stay on
+# AutoText. Qt treats "<" plus a letter as rich text, and an `<img src="http://…">`
+# in that string is fetched when the tooltip is shown. The Text scanner above never
+# sees an attached `ToolTip.text`. The one exception is components/PlainToolTip.qml,
+# whose own contentItem Text pins PlainText and binds the control's text.
+_TOOLTIP_BLOCK = re.compile(r"(?<![A-Za-z0-9_])ToolTip\s*\{")
+_TOOLTIP_ATTACHED_TEXT = re.compile(r"(?<![A-Za-z0-9_])ToolTip\s*\.\s*text\s*:")
+
+
+def _binding_expr(src: str, hit: int) -> str:
+    line_end = src.find("\n", hit)
+    expr = src[hit:line_end if line_end != -1 else len(src)].strip()
+    # A one-line `ToolTip { text: expr }` keeps the block's closing brace on this line.
+    if expr.endswith("}") and not expr.startswith("{"):
+        expr = expr[:-1].strip()
+    if expr.startswith("{"):
+        return "{ … }"
+    return expr
+
+
+def find_style_tooltips(path: Path):
+    """Return [(line, expr)] for dynamic tooltip text painted by the style's AutoText.
+
+    ``PlainToolTip`` does not match: the character before its ``ToolTip`` is a letter.
+    A static binding (a literal or ``i18n`` of literals) is exempt, same as ``Text``.
+    """
+    src = path.read_text()
+    masked = _mask(src)
+    findings = []
+    for m in _TOOLTIP_ATTACHED_TEXT.finditer(masked):
+        expr = _binding_expr(src, m.end())
+        if not _is_static_binding(expr):
+            findings.append((src[:m.end()].count("\n") + 1, expr))
+    for m in _TOOLTIP_BLOCK.finditer(masked):
+        brace = masked.index("{", m.start())
+        hit = None
+        for a, b in _own_level_slices(masked, brace):
+            rel = re.search(r"(?<![\w.])text\s*:", masked[a:b])
+            if rel:
+                hit = a + rel.end()
+                break
+        if hit is None:
+            continue
+        expr = _binding_expr(src, hit)
+        if not _is_static_binding(expr):
+            findings.append((src[:hit].count("\n") + 1, expr))
+    return findings
+
+
+def test_dynamic_tooltips_are_plain_text():
+    findings = [
+        (qml.relative_to(REPO), line, expr)
+        for qml in QML_FILES
+        if qml.name != "PlainToolTip.qml"
+        for line, expr in find_style_tooltips(qml)
+    ]
+    assert not findings, (
+        "A QQC2.ToolTip paints dynamic text with the style's Label/Text, which leaves "
+        "textFormat at AutoText. Hovering it fetches an <img> in a provider message. "
+        "Use PlainToolTip, whose contentItem pins Text.PlainText:\n"
+        + "\n".join(f"  {path}:{line}: {expr}" for path, line, expr in findings)
+    )
+
+
+def test_plain_tooltip_paints_its_text_as_plaintext():
+    """The exception above is only safe while this file pins the format itself."""
+    path = UI / "components" / "PlainToolTip.qml"
+    assert path.is_file(), "components/PlainToolTip.qml is missing"
+    masked = _mask(path.read_text())
+    assert re.search(r"textFormat\s*:\s*Text\.PlainText", masked), masked
+    assert re.search(r"text\s*:\s*tip\.text\b", masked), masked
+
+
+def test_tooltip_checker_flags_dynamic_and_accepts_plain(tmp_path):
+    bad = tmp_path / "Bad.qml"
+    bad.write_text(
+        'import QtQuick\n'
+        'import QtQuick.Controls as QQC2\n'
+        'Item {\n'
+        '  QQC2.ToolTip.text: provider.message\n'
+        '  QQC2.ToolTip { text: costSection.tipText }\n'
+        '  QQC2.ToolTip { text: i18n("Usage Dashboard") }\n'
+        '  PlainToolTip { text: provider.message }\n'
+        '}\n'
+    )
+    assert find_style_tooltips(bad) == [
+        (4, "provider.message"),
+        (5, "costSection.tipText"),
+    ]
+
+
 def test_token_counts_never_sit_in_a_32_bit_int_property():
     """QML `int` is 32-bit: a day past 2,147,483,647 tokens wrapped negative and the cost
     popout drew no bar for it. Token and cost values belong in `real` (or `var`)."""
