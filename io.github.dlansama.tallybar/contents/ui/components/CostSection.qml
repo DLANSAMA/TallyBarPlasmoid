@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import "../lib/format.js" as Fmt
 
@@ -118,7 +117,7 @@ Item {
         }
     }
 
-    QQC2.ToolTip {
+    PlainToolTip {
         parent: costSection
         x: Math.round((costSection.width - width) / 2)
         y: costSection.tipY

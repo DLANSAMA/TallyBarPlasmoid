@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 
@@ -41,12 +40,15 @@ Item {
                 // A provider whose live status is bad (api-error / timeout /
                 // unauthorized / wallet-locked) while it may still show cached data —
                 // surface the otherwise-invisible message on hover, plus the glyph below.
-                QQC2.ToolTip.delay: 350
-                QQC2.ToolTip.text: root.providerMuted(providerTab.providerKey)
-                    ? i18n("Muted — alerts off")
-                    : root.tabStatusMessage(providerTab.providerKey)
-                QQC2.ToolTip.visible: tabMouse.containsMouse
-                    && (root.tabStatusBad(providerTab.providerKey) || root.providerMuted(providerTab.providerKey))
+                PlainToolTip {
+                    parent: providerTab
+                    delay: 350
+                    text: root.providerMuted(providerTab.providerKey)
+                        ? i18n("Muted — alerts off")
+                        : root.tabStatusMessage(providerTab.providerKey)
+                    visible: tabMouse.containsMouse
+                        && (root.tabStatusBad(providerTab.providerKey) || root.providerMuted(providerTab.providerKey))
+                }
 
                 Rectangle {
                     id: tabSurface

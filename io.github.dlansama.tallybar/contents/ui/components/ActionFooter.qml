@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 
@@ -102,9 +101,12 @@ ColumnLayout {
 
                     width: 38
                     height: parent.height
-                    QQC2.ToolTip.delay: 450
-                    QQC2.ToolTip.text: quickAction.modelData.label
-                    QQC2.ToolTip.visible: quickActionMouse.containsMouse
+                    PlainToolTip {
+                        parent: quickAction
+                        delay: 450
+                        text: quickAction.modelData.label
+                        visible: quickActionMouse.containsMouse
+                    }
 
                     Rectangle {
                         anchors.fill: parent

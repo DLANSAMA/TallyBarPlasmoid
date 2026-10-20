@@ -35,6 +35,9 @@ Notable changes to TallyBar. Format follows
   reading in the CLI's log, as before.
 
 ### Fixed
+- A provider error shown on a tab tooltip is drawn as plain text. Markup in that
+  message, including an image link, is no longer fetched when the pointer rests
+  on the tab.
 - On accounts where Antigravity runs on Google's daily channel, the Antigravity tab
   showed one unlabelled Gemini bar. While the Antigravity desktop app is open, the tab
   now shows Gemini's 5-hour and weekly bars, read from the app. With the app closed it
