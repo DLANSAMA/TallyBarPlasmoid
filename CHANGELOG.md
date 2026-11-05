@@ -6,6 +6,14 @@ Notable changes to TallyBar. Format follows
 
 ## [Unreleased]
 
+### Changed
+- The Claude tab uses Anthropic's new plan names: Max 20x shows as Ultra and Max 5x as
+  Max. The name comes from claude.ai, or from Claude Code's sign-in when claude.ai
+  can't be reached.
+- Ultra accounts have no 5-hour limit, so the Claude tab no longer shows a "Not
+  started" Session row for them. Max, Pro and the other plans still show it between
+  sessions.
+
 ## [0.2.0] — 2026-11-05
 
 ### Added

@@ -37,7 +37,7 @@ as a month heat grid. Clicking any bar or day expands it into a per-model breakd
 | Provider        | Quota / limits                                    | Where that comes from                                                  |
 |-----------------|---------------------------------------------------|------------------------------------------------------------------------|
 | **Codex**       | session window, weekly window, plan               | the `codex` CLI's app-server over JSON-RPC; browser cookies as fallback |
-| **Claude**      | session window, weekly window, per-model windows  | claude.ai, using your browser's existing session; plan read from disk   |
+| **Claude**      | session window (not on Ultra), weekly window, per-model windows, plan | claude.ai, using your browser's existing session; plan read from disk   |
 | **Gemini**      | daily usage, Google One AI credit pool            | gemini.google.com, using your browser's existing session                |
 | **Antigravity** | Gemini window, Claude/GPT window, plan            | the local Antigravity language server, plus Google's Cloud Code API     |
 | **Grok**        | weekly window                                     | xAI's billing service via the `grok` CLI's sign-in; else the CLI's log  |

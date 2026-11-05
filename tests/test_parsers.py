@@ -835,3 +835,24 @@ def test_claude_idle_row_formatting():
     p = {"limits": parsers.parse_claude_usage(_LIVE_IDLE_CLAUDE)}
     enrich_ui_formatting({"claude": p})
     assert p["limits"][0]["formattedUsedText"] == "Not started"
+
+
+def test_claude_plan_name_maps_renamed_plans():
+    assert parsers.claude_plan_name("default_claude_max_20x") == "Ultra"
+    assert parsers.claude_plan_name("claude_max 20x") == "Ultra"
+    assert parsers.claude_plan_name("default_claude_max_5x") == "Max"
+    assert parsers.claude_plan_name("Ultra") == "Ultra"
+    assert parsers.claude_plan_name("claude_pro") == "Pro"
+    assert parsers.claude_plan_name(None) == ""
+
+
+def test_parse_claude_tier_prefers_plan_display_name():
+    orgs = [{"rate_limit_tier": "auto_trust_tier_a", "plan_display_name": None},
+            {"rate_limit_tier": "default_claude_max_20x", "plan_display_name": "Ultra"}]
+    assert parsers.parse_claude_tier(orgs) == "Ultra"
+    assert parsers.parse_claude_tier([{"rate_limit_tier": "default_claude_max_20x"}]) == "Ultra"
+
+
+def test_claude_no_idle_row_without_a_session_window():
+    labels = [l["label"] for l in parsers.parse_claude_usage(_LIVE_IDLE_CLAUDE, session_window=False)]
+    assert "Session" not in labels

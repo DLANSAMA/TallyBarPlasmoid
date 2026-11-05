@@ -116,6 +116,24 @@ def normalize_tier(value: Any) -> str:
     return ""
 
 
+# Anthropic renamed its plans on 2026-10-30 (Max 5x → Max, Max 20x → Ultra) but kept the
+# old internal ids (rate_limit_tier "default_claude_max_20x", subscriptionType "max").
+_CLAUDE_LEGACY_PLAN_IDS = ((re.compile(r"max[ _]?20x"), "Ultra"), (re.compile(r"max[ _]?5x"), "Max"))
+# Verified Ultra accounts have no 5-hour window, so five_hour: null is not an idle session there.
+CLAUDE_PLANS_WITHOUT_SESSION = frozenset({"Ultra"})
+
+
+def claude_plan_name(value: Any) -> str:
+    """Current display name for a Claude plan id or label, "" when unrecognized."""
+    if not isinstance(value, str):
+        return ""
+    lowered = value.strip().lower()
+    for pattern, label in _CLAUDE_LEGACY_PLAN_IDS:
+        if pattern.search(lowered):
+            return label
+    return normalize_tier(value)
+
+
 def parse_claude_tier(organizations: Any) -> str:
     if isinstance(organizations, dict):
         candidates = organizations.get("organizations") or organizations.get("data") or organizations.get("items") or []
@@ -124,11 +142,18 @@ def parse_claude_tier(organizations: Any) -> str:
     if not isinstance(candidates, list):
         return ""
 
+    # claude.ai's own plan name wins over the internal ids, in any org that has one.
+    for item in candidates:
+        if isinstance(item, dict):
+            for key in ("plan_display_name", "planDisplayName"):
+                tier = claude_plan_name(item.get(key))
+                if tier:
+                    return tier
     for item in candidates:
         if not isinstance(item, dict):
             continue
         for key in ("rate_limit_tier", "rateLimitTier", "tier", "plan", "subscription", "subscription_tier"):
-            tier = normalize_tier(item.get(key))
+            tier = claude_plan_name(item.get(key))
             if tier:
                 return tier
     return ""
@@ -413,7 +438,8 @@ def parse_gemini_usage_info(data: Any) -> list[dict[str, Any]]:
     return [limit for _, limit in sorted(windows, key=lambda item: item[0])]
 
 
-def parse_claude_usage(data: Any) -> list[dict[str, Any]]:
+def parse_claude_usage(data: Any, session_window: bool = True) -> list[dict[str, Any]]:
+    """session_window=False for a plan with no 5-hour limit: no idle Session row."""
     if not isinstance(data, dict):
         return []
     limits: list[dict[str, Any]] = []
@@ -600,7 +626,7 @@ def parse_claude_usage(data: Any) -> list[dict[str, Any]]:
     _apply_claude_weekly_breakdown(limits, data.get("seven_day_breakdown"))
     # five_hour arrives as an explicit null between sessions; a 0% row says the window
     # hasn't started instead of the bar vanishing. → tests/test_parsers.py::test_claude_idle_session_row
-    if "five_hour" in data and data["five_hour"] is None and limits and not any(
+    if session_window and "five_hour" in data and data["five_hour"] is None and limits and not any(
         str(row.get("label", "")).lower() == "session" for row in limits
     ):
         limits.insert(0, {"label": "Session", "percent": 0.0, "reset": "Starts with your next message", "unit": "%", "idle": True})

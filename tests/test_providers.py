@@ -277,6 +277,19 @@ def test_claude_tier_from_credentials_rate_limit_fallback(tmp_path, monkeypatch)
     creds.parent.mkdir(parents=True)
     creds.write_text(json.dumps({"claudeAiOauth": {"rateLimitTier": "default_claude_max_20x"}}))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    assert providers.claude.claude_tier_from_credentials() == "Ultra"
+
+
+def test_claude_tier_from_credentials_rate_limit_tier_beats_ambiguous_max(tmp_path, monkeypatch):
+    # Since the 2026-10-30 rename, subscriptionType "max" covers both Max and Ultra.
+    creds = tmp_path / ".claude" / ".credentials.json"
+    creds.parent.mkdir(parents=True)
+    creds.write_text(json.dumps({"claudeAiOauth": {"subscriptionType": "max",
+                                                   "rateLimitTier": "default_claude_max_20x"}}))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    assert providers.claude.claude_tier_from_credentials() == "Ultra"
+    creds.write_text(json.dumps({"claudeAiOauth": {"subscriptionType": "max",
+                                                   "rateLimitTier": "default_claude_max_5x"}}))
     assert providers.claude.claude_tier_from_credentials() == "Max"
 
 
@@ -2329,3 +2342,36 @@ def test_local_quota_summary_unwraps_the_language_server_reply():
     assert [(lane["label"], lane["window"]) for lane in lanes] == [("Gemini", "5h"), ("Gemini", "weekly")]
     with patch.object(providers.antigravity, "post_local_json", side_effect=OSError("down")):
         assert providers.antigravity._local_quota_summary("http://127.0.0.1:1", "t", 1.0) == []
+
+
+def _claude_idle_usage_side_effect(orgs):
+    usage = {"five_hour": None,
+             "seven_day": {"utilization": 9.0, "resets_at": "2099-11-12T20:00:00+00:00"}}
+
+    def side_effect(url, jar, timeout):
+        if url.endswith("/organizations"):
+            return (200, orgs)
+        if url.endswith("/usage"):
+            return (200, usage)
+        return (404, {})
+    return side_effect
+
+
+@pytest.mark.asyncio
+async def test_claude_ultra_has_no_idle_session_row():
+    # Verified Ultra has no 5-hour window: five_hour null is permanent, not "not started".
+    orgs = [{"uuid": "org-1", "rate_limit_tier": "default_claude_max_20x", "plan_display_name": "Ultra"}]
+    with patch("providers.claude.http_json_async", side_effect=_claude_idle_usage_side_effect(orgs)):
+        res = await providers.claude.run_claude_api([_cookie("claude.ai")], timeout=1.0)
+    assert res["tier"] == "Ultra"
+    assert [l["label"] for l in res["limits"]] == ["Weekly"]
+
+
+@pytest.mark.asyncio
+async def test_claude_max_keeps_idle_session_row():
+    orgs = [{"uuid": "org-1", "rate_limit_tier": "default_claude_max_5x"}]
+    with patch("providers.claude.http_json_async", side_effect=_claude_idle_usage_side_effect(orgs)):
+        res = await providers.claude.run_claude_api([_cookie("claude.ai")], timeout=1.0)
+    assert res["tier"] == "Max"
+    assert [l["label"] for l in res["limits"]] == ["Session", "Weekly"]
+    assert res["limits"][0]["idle"] is True

@@ -17,7 +17,8 @@ from parsers import (
     fresh_credit_balance,
     add_pace_detail,
     claude_org_ids,
-    normalize_tier,
+    CLAUDE_PLANS_WITHOUT_SESSION,
+    claude_plan_name,
     parse_claude_credit_balance,
     parse_claude_tier,
     parse_claude_usage,
@@ -27,17 +28,18 @@ from parsers import (
 
 def claude_tier_from_credentials() -> str | None:
     """Best-effort, zero-network tier label from the Claude Code OAuth creds file
-    (``~/.claude/.credentials.json`` → ``claudeAiOauth.subscriptionType`` or, as a
-    fallback, ``rateLimitTier``), mapped through the SAME ``normalize_tier`` ladder
-    the /organizations API path uses so the display label matches (e.g. "max" or
-    "default_claude_max_20x" → "Max"). Read-only; never logs the token. Any error
+    (``~/.claude/.credentials.json`` → ``claudeAiOauth.rateLimitTier`` or, as a fallback,
+    ``subscriptionType``), mapped through the SAME ``claude_plan_name`` the
+    /organizations API path uses so the display label matches (e.g.
+    "default_claude_max_20x" → "Ultra"). Read-only; never logs the token. Any error
     (missing file / bad JSON / missing keys) → None."""
     try:
         raw = (Path.home() / ".claude" / ".credentials.json").read_text(encoding="utf-8")
         oauth = json.loads(raw).get("claudeAiOauth")
         if not isinstance(oauth, dict):
             return None
-        tier = normalize_tier(oauth.get("subscriptionType")) or normalize_tier(oauth.get("rateLimitTier"))
+        # rateLimitTier first: subscriptionType "max" is both Max and Ultra since the rename.
+        tier = claude_plan_name(oauth.get("rateLimitTier")) or claude_plan_name(oauth.get("subscriptionType"))
         return tier or None
     except Exception:
         return None
@@ -327,6 +329,7 @@ async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
     tier = parse_claude_tier(data) or disk_tier
     if tier:
         result["tier"] = tier
+    session_window = tier not in CLAUDE_PLANS_WITHOUT_SESSION
 
     limits: list[dict[str, Any]] = []
     credit_balance: dict[str, Any] | None = None
@@ -386,7 +389,7 @@ async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
 
         org_limits: list[dict[str, Any]] = []
         if summary is not None and summary[0] == 200:
-            org_limits = parse_claude_usage(summary[1])
+            org_limits = parse_claude_usage(summary[1], session_window)
         if summary is not None:
             if org_limits:
                 summary_unavailable_since = None
@@ -395,7 +398,7 @@ async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
         if not org_limits:
             usage = await _claude_get(f"{base}/usage", jar, timeout)
             if usage is not None and usage[0] == 200:
-                org_limits = parse_claude_usage(usage[1])
+                org_limits = parse_claude_usage(usage[1], session_window)
         if org_limits:
             limits = org_limits
             break
