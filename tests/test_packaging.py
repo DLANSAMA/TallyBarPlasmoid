@@ -47,8 +47,8 @@ def test_notice_ships_and_points_at_logo_attribution():
     notice = APPLET_DIR / "NOTICE"
     assert notice.is_file(), "io.github.dlansama.tallybar/NOTICE is missing — it won't ship"
     text = notice.read_text()
-    assert "contents/images/logos/SOURCES.md" in text
-    assert (APPLET_DIR / "contents" / "images" / "logos" / "SOURCES.md").is_file()
+    assert "contents/images/SOURCES.md" in text
+    assert (APPLET_DIR / "contents" / "images" / "SOURCES.md").is_file()
 
 
 def test_backend_once_subprocess_prints_parseable_json(tmp_path):

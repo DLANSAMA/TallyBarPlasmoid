@@ -4,12 +4,11 @@ Licensed under the MIT License — see LICENSE (bundled beside this file).
 
 Third-party brand marks
 -----------------------
-The provider logos shipped under contents/images/logos/ (Codex/OpenAI, Claude,
-Gemini, Antigravity) are the trademarks of their respective owners, not
-TallyBar-owned artwork. They are bundled unmodified (except for format
-conversion / transparent-background fallbacks required by Plasma) solely to
-identify each provider in the widget. Per-file attribution and provenance are
-recorded in contents/images/logos/SOURCES.md.
+The provider marks under contents/images/tallybar-provider-icons/ (Codex/OpenAI,
+Claude, Gemini, Antigravity, Grok, Grok Bot) are the trademarks of their respective
+owners, not TallyBar-owned artwork. They are bundled solely to identify each provider
+in the widget. Per-file attribution and provenance are recorded in
+contents/images/SOURCES.md.
 
 Bundled MIT-licensed artwork
 ----------------------------
