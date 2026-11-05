@@ -95,13 +95,15 @@ function statusIsBad(status) {
 // The limit rows that are real capacity windows — everything except the extra-usage /
 // credit / spend rows the backend flags isExtraUsage (Claude overage, Codex/Antigravity
 // credit pools). Badges, pulses and panel bars key off these only, matching the backend's
-// notifications, which skip isExtraUsage rows too. Loops on .length (not Array.isArray)
-// so a QVariantList that crossed a Repeater boundary still works.
+// notifications, which skip isExtraUsage rows too. An idle window (a Claude session not
+// yet started) is left out as well, so the panel shows the next window that has a reading.
+// Loops on .length (not Array.isArray) so a QVariantList that crossed a Repeater boundary
+// still works.
 function usageLimits(limits) {
     const out = [];
     const src = limits || [];
     for (let i = 0; i < src.length; ++i) {
-        if (src[i] && !src[i].isExtraUsage)
+        if (src[i] && !src[i].isExtraUsage && !src[i].idle)
             out.push(src[i]);
     }
     return out;

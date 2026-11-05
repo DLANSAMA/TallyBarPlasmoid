@@ -128,6 +128,8 @@ def test_usage_limits_drops_extra_usage_rows():
             {"label": "Weekly", "percent": 20}]
     assert [r["label"] for r in _run_js_fn("usageLimits", rows)] == ["Session", "Weekly"]
     assert _run_js_fn("usageLimits", None) == []
+    idle = [{"label": "Session", "percent": 0, "idle": True}, {"label": "Weekly", "percent": 9}]
+    assert [r["label"] for r in _run_js_fn("usageLimits", idle)] == ["Weekly"]
 
 
 @pytest.mark.parametrize("provider, muted, expected", [

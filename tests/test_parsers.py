@@ -779,3 +779,59 @@ def test_as_dict_narrows_payload_values():
 
     # A non-dict default still degrades to {} rather than leaking the junk out.
     assert parsers.as_dict(None, "not-a-dict") == {}
+
+
+_LIVE_IDLE_CLAUDE = {
+    "five_hour": None,
+    "seven_day": {"utilization": 9.0, "resets_at": "2099-11-12T20:00:00+00:00"},
+    "seven_day_opus": None,
+    "extra_usage": {"is_enabled": False, "monthly_limit": None, "used_credits": None,
+                    "utilization": None, "user_disabled": True},
+    "limits": [
+        {"kind": "weekly_all", "group": "weekly", "percent": 9, "severity": "normal",
+         "resets_at": "2099-11-12T20:00:00+00:00", "scope": None, "is_active": True},
+        {"kind": "weekly_scoped", "group": "weekly", "percent": 8, "severity": "warning",
+         "resets_at": "2099-11-12T20:00:00+00:00",
+         "scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None}, "is_active": False},
+    ],
+    "seven_day_breakdown": {"rows": [
+        {"key": "claude_code", "display_name": "Claude Code", "percent": 80},
+        {"key": "chat", "display_name": "Chats", "percent": 15},
+        {"key": "cowork", "display_name": "Cowork", "percent": 5},
+        {"key": "other", "display_name": "Other", "percent": 0},
+    ]},
+}
+
+
+def test_claude_idle_session_row():
+    limits = parsers.parse_claude_usage(_LIVE_IDLE_CLAUDE)
+    assert [l["label"] for l in limits] == ["Session", "Weekly", "Fable"]
+    assert limits[0]["idle"] is True and limits[0]["percent"] == 0.0
+
+
+def test_claude_no_idle_row_when_session_runs_or_key_absent():
+    running = dict(_LIVE_IDLE_CLAUDE, five_hour={"utilization": 30, "resets_at": "2099-11-05T23:00:00+00:00"})
+    labels = [l["label"] for l in parsers.parse_claude_usage(running)]
+    assert labels.count("Session") == 1
+    assert not any(l.get("idle") for l in parsers.parse_claude_usage(running))
+    absent = {k: v for k, v in _LIVE_IDLE_CLAUDE.items() if k != "five_hour"}
+    assert "Session" not in [l["label"] for l in parsers.parse_claude_usage(absent)]
+
+
+def test_claude_severity_copied_only_when_flagged():
+    by = {l["label"]: l for l in parsers.parse_claude_usage(_LIVE_IDLE_CLAUDE)}
+    assert by["Fable"]["severity"] == "warning"
+    assert "severity" not in by["Weekly"]
+
+
+def test_claude_weekly_breakdown_sublabel_top_two_nonzero():
+    by = {l["label"]: l for l in parsers.parse_claude_usage(_LIVE_IDLE_CLAUDE)}
+    assert by["Weekly"]["sublabel"] == "Claude Code 80% · Chats 15%"
+    assert "sublabel" not in by["Fable"]
+
+
+def test_claude_idle_row_formatting():
+    from accounting.limits import enrich_ui_formatting
+    p = {"limits": parsers.parse_claude_usage(_LIVE_IDLE_CLAUDE)}
+    enrich_ui_formatting({"claude": p})
+    assert p["limits"][0]["formattedUsedText"] == "Not started"

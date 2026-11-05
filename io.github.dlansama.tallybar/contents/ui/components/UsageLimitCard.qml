@@ -11,8 +11,10 @@ Item {
     // model-provided role, so the persistent delegate refreshes in place.
     property var modelData: (root && root.usageLimits) ? (root.usageLimits()[index] || ({})) : ({})
     property real pct: (root && root.safePercent) ? root.safePercent(modelData ? (modelData.percent || 0) : 0) : 0
-    property bool warning: pct >= 72
-    property bool critical: pct >= 90
+    // Claude sends its own severity per window; it can flag a bar below these thresholds.
+    property string severity: String(modelData && modelData.severity ? modelData.severity : "")
+    property bool warning: pct >= 72 || severity === "warning" || severity === "critical"
+    property bool critical: pct >= 90 || severity === "critical"
     property real pulse: 1.0
 
     SequentialAnimation {

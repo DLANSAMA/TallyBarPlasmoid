@@ -596,6 +596,15 @@ def parse_claude_usage(data: Any) -> list[dict[str, Any]]:
                 300 if session_like else 10080,
             ))
 
+    _apply_claude_limit_severity(limits, array_limits)
+    _apply_claude_weekly_breakdown(limits, data.get("seven_day_breakdown"))
+    # five_hour arrives as an explicit null between sessions; a 0% row says the window
+    # hasn't started instead of the bar vanishing. → tests/test_parsers.py::test_claude_idle_session_row
+    if "five_hour" in data and data["five_hour"] is None and limits and not any(
+        str(row.get("label", "")).lower() == "session" for row in limits
+    ):
+        limits.insert(0, {"label": "Session", "percent": 0.0, "reset": "Starts with your next message", "unit": "%", "idle": True})
+
     extra = data.get("extra_usage") or data.get("extraUsage") or {}
     if isinstance(extra, dict):
         utilization = first_number(extra, ("utilization",))
@@ -678,6 +687,63 @@ def parse_claude_usage(data: Any) -> list[dict[str, Any]]:
             )
 
     return limits or extract_limits_from_json(data)
+
+
+_CLAUDE_SEVERITIES = ("warning", "critical")
+
+
+def _claude_array_label(entry: dict[str, Any]) -> str:
+    scope = entry.get("scope")
+    if isinstance(scope, dict):
+        model_scope = scope.get("model")
+        if isinstance(model_scope, dict):
+            name = str(model_scope.get("display_name") or model_scope.get("displayName") or "").strip()
+            if name:
+                return name
+    kind = str(entry.get("kind") or "").lower()
+    group = str(entry.get("group") or "").lower()
+    return "Session" if ("session" in kind or group == "session") else "Weekly"
+
+
+def _apply_claude_limit_severity(limits: list[dict[str, Any]], array_limits: Any) -> None:
+    """Copies Anthropic's own per-window severity ("warning"/"critical") onto the row with
+    the same label, so the UI can pulse a bar Claude itself flags before it reaches 72%."""
+    if not isinstance(array_limits, list):
+        return
+    by_label: dict[str, str] = {}
+    for entry in array_limits:
+        if not isinstance(entry, dict):
+            continue
+        severity = str(entry.get("severity") or "").lower()
+        if severity in _CLAUDE_SEVERITIES:
+            by_label[_claude_array_label(entry).lower()] = severity
+    for row in limits:
+        flagged = by_label.get(str(row.get("label", "")).lower())
+        if flagged:
+            row["severity"] = flagged
+
+
+def _apply_claude_weekly_breakdown(limits: list[dict[str, Any]], breakdown: Any) -> None:
+    """Puts the week's split by surface ("Claude Code 80% · Chats 20%") in the Weekly row's
+    sublabel: the two largest non-zero shares."""
+    if not isinstance(breakdown, dict) or not isinstance(breakdown.get("rows"), list):
+        return
+    shares: list[tuple[float, str]] = []
+    for item in breakdown["rows"]:
+        if not isinstance(item, dict):
+            continue
+        pct = item.get("percent")
+        name = str(item.get("display_name") or item.get("displayName") or "").strip()
+        if isinstance(pct, (int, float)) and not isinstance(pct, bool) and pct > 0 and name:
+            shares.append((float(pct), name))
+    if not shares:
+        return
+    shares.sort(key=lambda s: -s[0])
+    text = " · ".join(f"{name} {pct:.0f}%" for pct, name in shares[:2])
+    for row in limits:
+        if str(row.get("label", "")).lower() == "weekly":
+            row["sublabel"] = text
+            return
 
 
 def antigravity_model_entries(data: Any) -> list[tuple[str, str, float, str]]:

@@ -303,7 +303,7 @@ Item {
         const limits = provider.limits || [];
         let firstUsage = -1;
         for (let i = 0; i < limits.length; ++i) {
-            if (limits[i].isExtraUsage) continue;
+            if (limits[i].isExtraUsage || limits[i].idle) continue;
             if (firstUsage < 0) firstUsage = i;
             if (String(limits[i].label || "").toLowerCase().indexOf("session") >= 0)
                 return root.safePercent(limits[i].percent || 0);
