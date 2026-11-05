@@ -22,6 +22,31 @@ from parsers import (
 
 
 OPENAI_COOKIE_DOMAINS = ("chatgpt.com", "openai.com")
+# ChatGPT plan ids from the codex CLI's plan schema whose keyword-ladder reading is wrong
+# ("edu_plus" is not Plus, "prolite" is not Pro) or unreadable once title-cased.
+CODEX_PLAN_NAMES = {
+    "prolite": "Pro Lite",
+    "go": "Go",
+    "free_workspace": "Free",
+    "business": "Business",
+    "self_serve_business_usage_based": "Business",
+    "enterprise_cbp_usage_based": "Enterprise",
+    "enterprise_cbp_automation": "Enterprise",
+    "edu": "Edu",
+    "education": "Edu",
+    "edu_plus": "Edu Plus",
+    "edu_pro": "Edu Pro",
+    "k12": "K-12",
+    "finserv": "Financial Services",
+    "hc": "Healthcare",
+}
+
+
+def codex_plan_name(plan_type: str) -> str:
+    """Display name for a ChatGPT planType id; an unknown one keeps its words title-cased."""
+    key = plan_type.strip().lower().replace("-", "_")
+    return (CODEX_PLAN_NAMES.get(key) or normalize_tier(key)
+            or key.replace("_", " ").title())
 # A malformed stream can't grow the RPC read buffer past _RPC_BUFFER_CAP chars; on overflow
 # the newest _RPC_BUFFER_KEEP are kept.
 _RPC_BUFFER_CAP = 16_000_000
@@ -307,9 +332,7 @@ async def run_codex_rpc(timeout: float) -> dict[str, Any]:
             or rate_limits.get("plan_type")
         )
         if isinstance(plan_type, str) and plan_type:
-            # Shared keyword ladder (parsers.normalize_tier); an unrecognized plan keeps
-            # its raw name title-cased rather than reading as no-plan.
-            tier = normalize_tier(plan_type) or plan_type.title()
+            tier = codex_plan_name(plan_type)
 
         provider: dict[str, Any] = {
             "label": "Codex",

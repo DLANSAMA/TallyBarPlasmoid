@@ -710,3 +710,16 @@ def test_offline_fallback_prices_current_gpt_and_grok_models(model, inp, out, ca
         prices = pricing_data.get_pricing(model)
     assert (prices["input"], prices["output"], prices["cache_read"]) == (inp, out, cached)
     assert "long_context_threshold" in prices
+
+
+def test_intro_rate_moves_to_list_rate_on_its_date():
+    fb = list(pricing_data._FALLBACK_PRICING)
+    before = dict(pricing_data._apply_list_rates(fb, today="2026-11-30"))
+    after = dict(pricing_data._apply_list_rates(fb, today="2026-12-01"))
+    assert before["gemini-4-argon"]["input"] == 2.00
+    assert (after["gemini-4-argon"]["input"], after["gemini-4-argon"]["output"]) == (4.00, 20.00)
+    assert after["gemini-3.8-flash"]["input"] == 0.75          # its list rate starts 2027-01-01
+    assert dict(pricing_data._apply_list_rates(fb, today="2027-01-01"))["gemini-3.8-flash"]["input"] == 1.50
+    # A fetched catalog that already moved to a different rate is left alone.
+    moved = [("gemini-4-argon", {"input": 3.00, "output": 15.00, "cache_read": 0.30})]
+    assert pricing_data._apply_list_rates(moved, today="2027-02-01") == moved

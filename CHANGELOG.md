@@ -19,6 +19,13 @@ Notable changes to TallyBar. Format follows
 - A Grok Bot plan with no name from xAI reads "Grok week" instead of "SuperGrok week":
   xAI now sells plans that aren't SuperGrok.
 - Antigravity shows a Google AI Plus plan by name when Google sends only its id.
+- Codex shows ChatGPT's newer plans by name: Pro Lite, Go, Business, Edu (Plus and Pro),
+  K-12 and others, instead of a raw id or the wrong plan.
+- Grok Bot shows your plan's own name, including X subscriptions such as Premium, and
+  a "Prepaid usage" line when a prepaid account has spent this month. Requests match
+  Grok Bot 0.78.5.
+- Gemini 4 Argon and the Gemini 3.6–3.8 Flash models switch from their introductory
+  price to the list price on the day Google's offer ends, online or offline.
 
 ## [0.2.0] — 2026-11-05
 

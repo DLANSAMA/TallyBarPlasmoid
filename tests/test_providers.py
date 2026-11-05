@@ -111,6 +111,17 @@ class _FakeRpcChild:
         self.terminated = True
 
 
+@pytest.mark.parametrize("plan_type, name", [
+    ("pro", "Pro"), ("plus", "Plus"), ("free", "Free"), ("team", "Team"),
+    ("prolite", "Pro Lite"), ("edu_plus", "Edu Plus"), ("edu_pro", "Edu Pro"),
+    ("education", "Edu"), ("self_serve_business_usage_based", "Business"),
+    ("enterprise_cbp_usage_based", "Enterprise"), ("free_workspace", "Free"),
+    ("go", "Go"), ("k12", "K-12"), ("some_new_plan", "Some New Plan"),
+])
+def test_codex_plan_name_maps_chatgpt_plan_ids(plan_type, name):
+    assert providers.codex.codex_plan_name(plan_type) == name
+
+
 @pytest.mark.asyncio
 async def test_codex_rpc_success_maps_limits_and_tier():
     result = {
@@ -2015,7 +2026,7 @@ def _gb_assert_no_secrets(result):
 
 
 def test_grok_bot_checksum_matches_the_apps_own_tg():
-    """Vectors from running the app's own kut/Tg (sand 0.63.0 main-app.cjs) under node with
+    """Vectors from running the app's own kut/Tg (sand 0.63.0 main-app.cjs; unchanged in 0.78.5) under node with
     Date.now pinned. JS `>>` is int32 with a 5-bit shift count, so `t>>40`/`t>>32` are
     `t>>8`/`t`: the first two bytes repeat the last two. Zeroing them (the obvious Python
     shift) gives "paaotEjt…" for the first vector — a checksum the app never sends."""
@@ -2050,10 +2061,10 @@ def test_grok_bot_request_shape(tmp_path):
     assert h["Connect-Protocol-Version"] == "1"
     assert h["Authorization"] == f"Bearer {_GB_TOKEN}"
     assert h["User-Agent"] == ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                               "(KHTML, like Gecko) Sand/0.63.0 Safari/537.36")
+                               "(KHTML, like Gecko) Sand/0.78.5 Safari/537.36")
     assert h["x-cursor-client-type"] == "sand"
     assert h["x-cursor-client-source"] == "sand-desktop"
-    assert h["x-cursor-client-version"] == "0.63.0"
+    assert h["x-cursor-client-version"] == "0.78.5"
     assert h["x-cursor-client-os"] == "linux"
     assert h["x-sand-box-namespace"] == "prod"
     assert h["x-ghost-mode"] == "true"
@@ -2075,6 +2086,9 @@ def test_grok_bot_grok_brand_tier_reads_as_a_week(tmp_path, brand):
     assert [r["label"] for r in res["limits"]] == ["Weekly"]   # not a second percent bar
     no_label = {k: v for k, v in _GB_USAGE.items() if k != "grokPlanLabel"}
     res, _ = _gb_run(tmp_path, _gb_usage_http({**no_label, "billingBrand": brand}))
+    assert res["tier"] == "Pro week"
+    bare = {k: v for k, v in no_label.items() if k != "cursorPlanName"}
+    res, _ = _gb_run(tmp_path, _gb_usage_http({**bare, "billingBrand": brand}))
     assert res["tier"] == "Grok week"   # xAI sells non-SuperGrok plans too
 
 
@@ -2375,3 +2389,46 @@ async def test_claude_max_keeps_idle_session_row():
     assert res["tier"] == "Max"
     assert [l["label"] for l in res["limits"]] == ["Session", "Weekly"]
     assert res["limits"][0]["idle"] is True
+
+
+# The live X Subscription shape (2026-11-05): the plan is in cursorPlanName, the label is generic.
+_GB_UNIFIED = {**_GB_USAGE, "grokPlanLabel": "Grok Bot Plan", "cursorPlanName": "Premium",
+               "billingBrand": "SAND_BILLING_BRAND_GROK", "isUnified": True}
+
+
+def test_grok_bot_x_subscription_plan_name(tmp_path):
+    res, _ = _gb_run(tmp_path, _gb_usage_http(_GB_UNIFIED))
+    assert res["status"] == "ok" and res["tier"] == "Premium week"
+
+
+@pytest.mark.parametrize("billing, text", [
+    ({"billingMode": "PREPAID_BILLING_MODE_PREPAID", "eligible": True, "spentThisMonthCents": "1234"},
+     "Prepaid usage: $12.34 this month"),
+    ({"billingMode": "PREPAID_BILLING_MODE_PREPAID", "spentThisMonthCents": "0"}, None),
+    ({"billingMode": "PREPAID_BILLING_MODE_POSTPAID", "spentThisMonthCents": "500"}, None),
+    ({"billingMode": "PREPAID_BILLING_MODE_PREPAID", "spentThisMonthCents": "12e9"}, None),
+])
+def test_grok_bot_prepaid_spend_line(tmp_path, billing, text):
+    http = _gb_usage_http(_GB_UNIFIED)
+    http.responses[grok_bot.GROK_BOT_PREPAID_URL] = (200, json.dumps(billing))
+    res, _ = _gb_run(tmp_path, http)
+    assert res["status"] == "ok" and [r["label"] for r in res["limits"]] == ["Weekly"]
+    assert res.get("extraUsageText") == text
+
+
+def test_grok_bot_prepaid_failure_keeps_the_weekly_bar(tmp_path):
+    http = _gb_usage_http(_GB_UNIFIED)
+    http.responses[grok_bot.GROK_BOT_PREPAID_URL] = (500, "{}")
+    res, _ = _gb_run(tmp_path, http)
+    assert res["status"] == "ok" and "extraUsageText" not in res
+    plain_http = _gb_usage_http()                           # not unified: no prepaid call
+    plain, _ = _gb_run(tmp_path, plain_http)
+    assert grok_bot.GROK_BOT_PREPAID_URL not in [c["url"] for c in plain_http.calls]
+    assert "extraUsageText" not in plain
+
+
+def test_grok_bot_prepaid_text_feeds_the_extra_usage_line():
+    from accounting.limits import enrich_ui_formatting
+    p = {"limits": [{"label": "Weekly", "percent": 10}], "extraUsageText": "Prepaid usage: $1.00 this month"}
+    enrich_ui_formatting({"grokbot": p})
+    assert p["formattedExtraUsageDetail"] == "Prepaid usage: $1.00 this month"

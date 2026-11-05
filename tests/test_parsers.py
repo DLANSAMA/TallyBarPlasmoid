@@ -662,6 +662,13 @@ def test_parse_antigravity_quota_summary_infers_window_from_bucket_id():
     assert round(lanes[0]["percent"], 1) == 50.0
 
 
+def test_parse_antigravity_quota_summary_gemini_only_account():
+    # A free account has no Claude/GPT group at all: two Gemini lanes, nothing invented.
+    data = {"groups": [_QUOTA_SUMMARY_SAMPLE["groups"][0]]}
+    lanes = parsers.parse_antigravity_quota_summary(data)
+    assert [(l["label"], l["sublabel"]) for l in lanes] == [("Gemini", "5-hour"), ("Gemini", "Weekly")]
+
+
 def test_parse_antigravity_quota_summary_rejects_garbage():
     assert parsers.parse_antigravity_quota_summary(None) == []
     assert parsers.parse_antigravity_quota_summary({}) == []

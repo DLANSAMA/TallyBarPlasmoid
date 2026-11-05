@@ -397,6 +397,8 @@ def enrich_ui_formatting(providers: dict[str, Any]) -> None:
 
         if "creditBalance" in p_data or extra_limit:
             p_data["formattedExtraUsageDetail"] = _extra_usage_detail(extra_limit or {}, p_key, p_data.get("creditBalance"))
+        if not p_data.get("formattedExtraUsageDetail") and isinstance(p_data.get("extraUsageText"), str):
+            p_data["formattedExtraUsageDetail"] = p_data["extraUsageText"].strip()
 
         for limit in limits:
             pct = max(0.0, min(100.0, float(limit.get("percent") or 0)))

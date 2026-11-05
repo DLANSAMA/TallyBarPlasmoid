@@ -53,14 +53,31 @@ PRICING_CACHE_VERSION = 2
 _RELEVANT_PROVIDERS = frozenset(("anthropic", "openai", "gemini", "xai"))
 
 
-# Last day each introductory Gemini rate in _FALLBACK_PRICING applies (ISO date). After it the
-# row must be updated to the list rate (see the comment on those rows); a test fails then.
-INTRO_RATE_ENDS: dict[str, str] = {
-    "gemini-4-argon": "2026-11-30",
-    "gemini-3.6-flash": "2026-12-31",
-    "gemini-3.7-flash": "2026-12-31",
-    "gemini-3.8-flash": "2026-12-31",
+# Introductory Gemini rates and the list rate each moves to (ai.google.dev/gemini-api/docs/pricing):
+# model -> (first day of the list rate, list rates). From that day the offline row bills the list
+# rate, and so does a fetched catalog entry still carrying the intro input rate (LiteLLM can lag).
+# → tests/test_pricing_data.py::test_intro_rate_moves_to_list_rate_on_its_date
+LIST_RATE_FROM: dict[str, tuple[str, dict[str, float]]] = {
+    "gemini-4-argon":   ("2026-12-01", {"input": 4.00, "output": 20.00, "cache_read": 0.20}),
+    "gemini-3.6-flash": ("2027-01-01", {"input": 1.50, "output":  7.50, "cache_read": 0.15}),
+    "gemini-3.7-flash": ("2027-01-01", {"input": 1.50, "output":  7.50, "cache_read": 0.15}),
+    "gemini-3.8-flash": ("2027-01-01", {"input": 1.50, "output":  7.50, "cache_read": 0.15}),
 }
+
+
+def _apply_list_rates(entries: list[tuple[str, dict[str, float]]],
+                      today: str | None = None) -> list[tuple[str, dict[str, float]]]:
+    """entries with every intro rate whose end has passed replaced by its list rate."""
+    day = today or time.strftime("%Y-%m-%d")
+    intro = dict(_FALLBACK_PRICING)
+    out = []
+    for key, prices in entries:
+        scheduled = LIST_RATE_FROM.get(key)
+        if scheduled and day >= scheduled[0] and prices.get("input") == intro.get(key, {}).get("input"):
+            prices = dict(scheduled[1])
+        out.append((key, prices))
+    return out
+
 
 # Embedded fallback — a snapshot of per-MTok pricing that ships with the code. The fetched
 # LiteLLM data is the source of truth; these rows bill a first run / offline, and
@@ -153,14 +170,13 @@ _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
     ("gpt-4o-mini",          {"input":  0.15, "output":  0.60, "cache_read":  0.075}),
     ("gpt-4o",               {"input":  2.50, "output": 10.00, "cache_read":  1.25}),
     # Google Gemini
-    # Introductory rates end on the dates in INTRO_RATE_ENDS (a test fails once one passes).
+    # Introductory rates: LIST_RATE_FROM switches each row to its list rate on the date.
     # Rates from ai.google.dev/gemini-api/docs/pricing (2026-10-01). Every Flash version
     # needs its own exact key ("gemini-3.5-flash" would otherwise family-match
     # "gemini-3.5-flash-lite"). 3.6/3.7/3.8 Flash are on an introductory rate through
-    # 2026-12-31 and list at $1.50 / $7.50 / $0.15 from 2027-01-01: update these rows then
-    # (the live catalog is used whenever it has the key).
+    # 2026-12-31 and list at $1.50 / $7.50 / $0.15 from 2027-01-01.
     # Gemini 4 Argon (same page, 2026-10-14): $2 / $10 / $0.10 through 2026-11-30, then
-    # $4 / $20 / $0.20 from 2026-12-01 — update this row then. No prompt-length tier.
+    # $4 / $20 / $0.20 from 2026-12-01. No prompt-length tier.
     ("gemini-4-argon",       {"input":  2.00, "output": 10.00, "cache_read":  0.10}),
     # 3.1 Pro and 2.5 Pro bill prompts over 200K tokens at their long-prompt tier (LiteLLM
     # catalog, 2026-10-07). The catalog only has "gemini-3.1-pro-preview", so this row is
@@ -460,7 +476,7 @@ def _with_fallback_supplement(entries: list[tuple[str, dict[str, float]]]) -> li
     picks the longest pattern regardless of position."""
     known = {key for key, _ in entries}
     supplement = [(key, prices) for key, prices in _FALLBACK_PRICING if key not in known]
-    return list(entries) + supplement
+    return _apply_list_rates(list(entries) + supplement)
 
 
 def _install_catalog(
@@ -513,7 +529,7 @@ def get_pricing(model: str | None) -> dict[str, float]:
                             fetched_at = 0.0
                         _install_catalog(_with_fallback_supplement(stale), fetched_at)
                     else:
-                        _install_catalog(list(_FALLBACK_PRICING), 0.0)
+                        _install_catalog(_apply_list_rates(list(_FALLBACK_PRICING)), 0.0)
 
     name = (model or "").lower()
     if not name:

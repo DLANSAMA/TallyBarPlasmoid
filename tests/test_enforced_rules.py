@@ -77,12 +77,10 @@ def test_python_exec_is_a_constant():
 
 
 # 7 -------------------------------------------------------------------------
-@pytest.mark.parametrize("model,end", sorted(pricing_data.INTRO_RATE_ENDS.items()))
-def test_introductory_price_has_not_expired(model, end):
+@pytest.mark.parametrize("model", sorted(pricing_data.LIST_RATE_FROM))
+def test_every_scheduled_list_rate_has_an_intro_row(model):
     assert any(k == model for k, _ in pricing_data._FALLBACK_PRICING), f"{model} row missing"
-    assert date.today() <= date.fromisoformat(end), (
-        f"{model}: introductory rate ended {end}. Update its row in pricing_data._FALLBACK_PRICING "
-        "to the list rate and fix/remove its INTRO_RATE_ENDS entry.")
+    date.fromisoformat(pricing_data.LIST_RATE_FROM[model][0])
 
 
 # 8 -------------------------------------------------------------------------

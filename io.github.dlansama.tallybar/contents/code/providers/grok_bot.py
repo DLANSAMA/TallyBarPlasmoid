@@ -43,10 +43,11 @@ GROK_BOT_SOURCE = "grok-bot"
 _DASHBOARD_SERVICE = "https://api2.cursor.sh/aiserver.v1.DashboardService"
 GROK_BOT_USAGE_URL = f"{_DASHBOARD_SERVICE}/GetSandUsageStatus"
 GROK_BOT_PERIOD_URL = f"{_DASHBOARD_SERVICE}/GetCurrentPeriodUsage"
+GROK_BOT_PREPAID_URL = f"{_DASHBOARD_SERVICE}/GetUserPrepaidBilling"
 
 # The installed app's version, sent as the app sends it. A constant on purpose: reading it
 # from the multi-MB app.asar on every refresh would cost more than it is worth.
-SAND_CLIENT_VERSION = "0.63.0"
+SAND_CLIENT_VERSION = "0.78.5"
 SAND_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
     f"Sand/{SAND_CLIENT_VERSION} Safari/537.36"
@@ -95,7 +96,7 @@ def _js_shr(value: int, shift: int) -> int:
 
 
 def cursor_checksum(machine_id: str, now_ms: int) -> str:
-    """The ``x-cursor-checksum`` header exactly as Grok Bot's ``Tg``/``kut`` build it
+    """The ``x-cursor-checksum`` header exactly as Grok Bot builds it (``Tg``/``kut`` in 0.63.0, ``w_``/``H9t`` in 0.78.5 — minified names change per build)
     (``dist/electron-main/main-app.cjs``): six bytes of ``floor(now_ms / 1e6)``, obfuscated
     with a running state of 165 and base64url'd unpadded, then the raw machine id.
 
@@ -358,9 +359,34 @@ def grok_bot_tier(usage: Any) -> str | None:
         value = usage.get(key)
         return value.strip() if isinstance(value, str) else ""
 
+    # X Subscription accounts get the product name in grokPlanLabel and the plan
+    # ("Premium") in cursorPlanName.
+    label = text("grokPlanLabel")
+    if label.lower() in _GENERIC_PLAN_LABELS:
+        label = ""
     if _is_grok_brand(usage.get("billingBrand")):
-        return (text("grokPlanLabel") or "Grok") + " week"
-    return text("grokPlanLabel") or text("cursorPlanName") or None
+        return (label or text("cursorPlanName") or "Grok") + " week"
+    return label or text("cursorPlanName") or None
+
+
+_GENERIC_PLAN_LABELS = frozenset({"grok bot plan", "grok bot"})
+
+
+def grok_bot_prepaid_text(billing: Any) -> str:
+    """"Prepaid usage: $X this month" from ``GetUserPrepaidBilling`` when the account bills
+    prepaid and has spent something; "" otherwise. The reply carries no balance. Connect
+    JSON sends the int64 cents as a string."""
+    mode = str(billing.get("billingMode") or "").upper() if isinstance(billing, dict) else ""
+    if not isinstance(billing, dict) or mode.rsplit("_", 1)[-1] != "PREPAID":
+        return ""
+    raw = billing.get("spentThisMonthCents")
+    if isinstance(raw, str) and re.fullmatch(r"\d{1,15}", raw.strip()):
+        cents: float | None = float(raw.strip())
+    else:
+        cents = _finite(raw)
+    if cents is None or cents <= 0:
+        return ""
+    return f"Prepaid usage: ${cents / 100.0:,.2f} this month"
 
 
 def _is_timeout(exc: BaseException) -> bool:
@@ -500,6 +526,16 @@ def run_grok_bot(
                 on_demand = map_grok_bot_on_demand(_json_object(period_body) if isinstance(period_body, str) else None)
                 if on_demand is not None:
                     limits.append(on_demand)
+        remaining = deadline - time.monotonic()
+        if usage.get("isUnified") is True and remaining >= 1.5:
+            try:
+                prepaid_status, prepaid_body = post(GROK_BOT_PREPAID_URL, remaining - 0.5)
+            except Exception:
+                prepaid_status, prepaid_body = 0, ""
+            if prepaid_status == 200:
+                prepaid = grok_bot_prepaid_text(_json_object(prepaid_body) if isinstance(prepaid_body, str) else None)
+                if prepaid:
+                    result["extraUsageText"] = prepaid
 
     if weekly is not None:
         message = "Grok Bot weekly usage"
