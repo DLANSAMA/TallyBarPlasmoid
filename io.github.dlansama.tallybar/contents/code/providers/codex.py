@@ -303,7 +303,7 @@ async def run_codex_rpc(timeout: float) -> dict[str, Any]:
 
         await child.request(
             "initialize",
-            {"clientInfo": {"name": "tallybar-plasma", "version": "0.2.0"}},
+            {"clientInfo": {"name": "tallybar-plasma", "version": "0.2.1"}},
             timeout=remaining(),
         )
         child.notify("initialized")

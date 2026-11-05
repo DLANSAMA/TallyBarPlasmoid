@@ -6,6 +6,8 @@ Notable changes to TallyBar. Format follows
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-11-05
+
 ### Changed
 - The Claude tab uses Anthropic's new plan names: Max 20x shows as Ultra and Max 5x as
   Max. The name comes from claude.ai, or from Claude Code's sign-in when claude.ai
