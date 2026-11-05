@@ -6,6 +6,8 @@ Notable changes to TallyBar. Format follows
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-11-05
+
 ### Added
 - A Grok Bot tab: the weekly usage bar from the Grok Bot desktop app's sign-in, plus
   an on-demand spend line when the account has a spend limit. It sits beside the Grok
@@ -21,6 +23,12 @@ Notable changes to TallyBar. Format follows
   Day / Week / Month switch shows. Codex, Gemini and Grok count prompt tokens served
   from cache as cache reads, so their input line is the uncached part only. Antigravity
   reports no cache writes. `backend.py --cost` carries the split as `typeBreakdown`.
+- The Claude tab keeps its Session row between sessions. claude.ai sends no 5-hour
+  window until your next message, and the row used to disappear; it now reads "Not
+  started". The panel icon and tab underline still show the weekly bar meanwhile.
+- The Claude Weekly row names where the week's usage went, e.g. "Claude Code 99% ·
+  Claude Duet 1%", from claude.ai's own split.
+- A Claude bar that claude.ai itself marks as near its limit pulses, even below 72%.
 - Right-click the panel icon to refresh, or to unlock KWallet when a tab needs it,
   without opening the popup.
 

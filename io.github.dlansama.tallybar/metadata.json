@@ -9,7 +9,7 @@
         ],
         "BugReportUrl": "https://github.com/DLANSAMA/TallyBarPlasmoid/issues",
         "Category": "System Information",
-        "Description": "Native KDE Plasma usage monitor for Codex, Gemini, Claude, Antigravity, and Grok sessions.",
+        "Description": "Native KDE Plasma usage monitor for Codex, Gemini, Claude, Antigravity, Grok, and Grok Bot sessions.",
         "EnabledByDefault": true,
         "FormFactors": [
             "desktop"
@@ -18,7 +18,7 @@
         "Id": "io.github.dlansama.tallybar",
         "License": "MIT",
         "Name": "TallyBar",
-        "Version": "0.1.0",
+        "Version": "0.2.0",
         "Website": "https://github.com/DLANSAMA/TallyBarPlasmoid"
     },
     "X-Plasma-API-Minimum-Version": "6.0"
