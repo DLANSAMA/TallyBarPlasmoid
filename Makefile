@@ -167,7 +167,7 @@ pot:
 	@xgettext --from-code=UTF-8 --language=JavaScript \
 	    --keyword=i18n:1 --keyword=i18nc:1c,2 --keyword=i18np:1,2 --keyword=i18ncp:1c,2,3 \
 	    --package-name=plasma_applet_$(APPLET) \
-	    --copyright-holder="Dylan Reed" \
+	    --copyright-holder="DLANSAMA" \
 	    --msgid-bugs-address="https://github.com/DLANSAMA/TallyBarPlasmoid/issues" \
 	    -o $(POT) $(APPLET)/contents/ui/*.qml $(APPLET)/contents/ui/components/*.qml $(APPLET)/contents/ui/lib/*.js
 	@sed -i \

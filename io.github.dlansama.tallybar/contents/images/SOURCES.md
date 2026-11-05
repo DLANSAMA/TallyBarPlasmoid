@@ -7,9 +7,8 @@ These assets are provider marks, not TallyBar-owned artwork. Keep them unmodifie
   (`Sources/CodexBar/Resources/ProviderIcon-*.svg`), which is MIT-licensed — see the
   copyright notice reproduced in [`../../NOTICE`](../../NOTICE). The inactive
   variants change only the SVG fill colour.
-- `tallybar-provider-icons/grok-*.svg`: The Grok mark, a trademark of xAI. Taken from
-  the author's own `grok-build-mobile` project assets and reused here unmodified except
-  for the fill colour (`#6d6978` inactive / `white` selected, matching the other switcher
+- `tallybar-provider-icons/grok-*.svg`: The Grok mark, a trademark of xAI. Reused
+  unmodified except for the fill colour (`#6d6978` inactive / `white` selected, matching the other switcher
   marks) and a tightened `viewBox` so it carries the same visual weight as its siblings —
   the path data is untouched. Replaces an earlier placeholder X mark drawn for this repo.
 - `tallybar-provider-icons/grokbot-*.svg`: The Grok Bot mark, a trademark of xAI /
