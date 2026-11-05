@@ -2075,7 +2075,7 @@ def test_grok_bot_grok_brand_tier_reads_as_a_week(tmp_path, brand):
     assert [r["label"] for r in res["limits"]] == ["Weekly"]   # not a second percent bar
     no_label = {k: v for k, v in _GB_USAGE.items() if k != "grokPlanLabel"}
     res, _ = _gb_run(tmp_path, _gb_usage_http({**no_label, "billingBrand": brand}))
-    assert res["tier"] == "SuperGrok week"
+    assert res["tier"] == "Grok week"   # xAI sells non-SuperGrok plans too
 
 
 def test_grok_bot_cursor_brand_falls_back_to_cursor_plan_name(tmp_path):

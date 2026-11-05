@@ -856,3 +856,10 @@ def test_parse_claude_tier_prefers_plan_display_name():
 def test_claude_no_idle_row_without_a_session_window():
     labels = [l["label"] for l in parsers.parse_claude_usage(_LIVE_IDLE_CLAUDE, session_window=False)]
     assert "Session" not in labels
+
+
+def test_claude_unverified_ultra_still_shows_a_running_session():
+    # Unverified Ultra accounts keep a temporary 5-hour window; when claude.ai sends one it is a bar.
+    running = dict(_LIVE_IDLE_CLAUDE, five_hour={"utilization": 40, "resets_at": "2099-11-05T23:00:00+00:00"})
+    rows = parsers.parse_claude_usage(running, session_window=False)
+    assert rows[0]["label"] == "Session" and rows[0]["percent"] == 40 and not rows[0].get("idle")

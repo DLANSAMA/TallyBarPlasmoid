@@ -695,3 +695,18 @@ def test_pricing_cache_version_tracks_converter_output():
         f"_litellm_to_tallybar output (or PRICING_CACHE_VERSION) changed: now {got}, pinned "
         f"{_CATALOG_PIN}. If the output changed, bump PRICING_CACHE_VERSION in pricing_data.py, "
         f"then repin _CATALOG_PIN.")
+
+
+@pytest.mark.parametrize("model, inp, out, cached", [
+    ("gpt-6.1-sol", 2.0, 10.0, 0.10), ("gpt-6.1-terra", 1.0, 5.0, 0.05),
+    ("gpt-6-sol", 2.0, 10.0, 0.20), ("gpt-6-luna", 0.10, 0.50, 0.01),
+    ("gpt-6-astra", 10.0, 50.0, 1.0), ("gpt-5.6-sol", 4.0, 20.0, 0.40),
+    ("gpt-5.6-terra", 2.0, 12.0, 0.20), ("gpt-5.6-luna", 0.20, 1.20, 0.02),
+    ("grok-4.7", 2.0, 6.0, 0.50),
+])
+def test_offline_fallback_prices_current_gpt_and_grok_models(model, inp, out, cached):
+    with patch.object(pricing_data, "_load_cache", return_value=None), \
+         patch.object(pricing_data, "_load_cache_stale", return_value=None):
+        prices = pricing_data.get_pricing(model)
+    assert (prices["input"], prices["output"], prices["cache_read"]) == (inp, out, cached)
+    assert "long_context_threshold" in prices

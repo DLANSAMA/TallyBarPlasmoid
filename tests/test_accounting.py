@@ -289,6 +289,7 @@ def test_antigravity_user_tier():
     }
     assert accounting.antigravity_user_tier(data) == "Google AI Ultra Premium"
     assert accounting.antigravity_user_tier({"userStatus": {"userTier": {"id": "g1-ultra-tier"}}}) == "Google AI Ultra"
+    assert accounting.antigravity_user_tier({"userStatus": {"userTier": {"id": "g1-plus-tier"}}}) == "Google AI Plus"
     assert accounting.antigravity_user_tier({"userStatus": {"userTier": {"id": "g1-pro-tier"}}}) == "Google AI Pro"
     assert accounting.antigravity_user_tier(None) == ""
 

@@ -107,6 +107,33 @@ _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
     # OpenAI / Codex
     # GPT-5.5 and 5.4 bill prompts over 272K tokens at their long-prompt tier (LiteLLM
     # catalog, 2026-10-07).
+    # GPT-6.x and GPT-5.6 (developers.openai.com/api/docs/pricing, 2026-11-05; the LiteLLM
+    # catalog agrees). Exact keys: "gpt-6" would otherwise family-match every variant.
+    # → tests/test_pricing_data.py::test_offline_fallback_prices_current_gpt_and_grok_models
+    ("gpt-6.1-sol",          {"input":  2.00, "output": 10.00, "cache_read":  0.10,
+                              "long_context_threshold": 272_000, "long_input":  4.00,
+                              "long_output": 15.00, "long_cache_read": 0.20}),
+    ("gpt-6.1-terra",        {"input":  1.00, "output":  5.00, "cache_read":  0.05,
+                              "long_context_threshold": 272_000, "long_input":  2.00,
+                              "long_output":  7.50, "long_cache_read": 0.10}),
+    ("gpt-6-astra",          {"input": 10.00, "output": 50.00, "cache_read":  1.00,
+                              "long_context_threshold": 272_000, "long_input": 20.00,
+                              "long_output": 75.00, "long_cache_read": 2.00}),
+    ("gpt-6-sol",            {"input":  2.00, "output": 10.00, "cache_read":  0.20,
+                              "long_context_threshold": 272_000, "long_input":  4.00,
+                              "long_output": 15.00, "long_cache_read": 0.40}),
+    ("gpt-6-luna",           {"input":  0.10, "output":  0.50, "cache_read":  0.01,
+                              "long_context_threshold": 272_000, "long_input":  0.20,
+                              "long_output":  0.75, "long_cache_read": 0.02}),
+    ("gpt-5.6-sol",          {"input":  4.00, "output": 20.00, "cache_read":  0.40,
+                              "long_context_threshold": 272_000, "long_input":  8.00,
+                              "long_output": 30.00, "long_cache_read": 0.80}),
+    ("gpt-5.6-terra",        {"input":  2.00, "output": 12.00, "cache_read":  0.20,
+                              "long_context_threshold": 272_000, "long_input":  4.00,
+                              "long_output": 18.00, "long_cache_read": 0.40}),
+    ("gpt-5.6-luna",         {"input":  0.20, "output":  1.20, "cache_read":  0.02,
+                              "long_context_threshold": 272_000, "long_input":  0.40,
+                              "long_output":  1.80, "long_cache_read": 0.04}),
     ("gpt-5.5",              {"input":  5.00, "output": 30.00, "cache_read":  0.50,
                               "long_context_threshold": 272_000, "long_input": 10.00,
                               "long_output": 45.00, "long_cache_read": 1.00}),
@@ -187,10 +214,13 @@ _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
                                    "long_context_threshold": 199_999, "long_input": 2.00,
                                    "long_output":  4.00, "long_cache_read": 0.40}),
     # Named Grok API models (pay-per-use rates from xAI price sheet).
-    # grok-4.6 needs its own exact key: get_pricing family-matches "grok-4" in "grok-4.6" and
+    # grok-4.7 / grok-4.6 need their own exact keys: get_pricing family-matches "grok-4" in them and
     # would bill grok-4's $3/$15 instead of $2/$6/$0.50 cache.
     # → tests/test_pricing_data.py::test_embedded_exact_match_grok_46_not_grok_4
-    # 4.6 / 4.5 / 4.20 / 4.3 rates and long-prompt tiers: the LiteLLM catalog.
+    # 4.7 (docs.x.ai/developers/models, 2026-11-05) / 4.6 / 4.5 / 4.20 / 4.3 rates and long-prompt tiers: the LiteLLM catalog.
+    ("grok-4.7",                  {"input":  2.00, "output":  6.00, "cache_read":  0.50,
+                                   "long_context_threshold": 199_999, "long_input": 4.00,
+                                   "long_output": 12.00, "long_cache_read": 1.00}),
     ("grok-4.6",                  {"input":  2.00, "output":  6.00, "cache_read":  0.50,
                                    "long_context_threshold": 199_999, "long_input": 4.00,
                                    "long_output": 12.00, "long_cache_read": 1.00}),

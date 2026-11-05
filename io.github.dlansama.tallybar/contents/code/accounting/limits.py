@@ -164,6 +164,8 @@ def antigravity_user_tier(data: Any) -> str:
     tier_id = str(user_tier.get("id") or "").strip().lower()
     if "ultra" in tier_id:
         return "Google AI Ultra"
+    if "plus" in tier_id:
+        return "Google AI Plus"
     if "pro" in tier_id:
         return "Google AI Pro"
     if "free" in tier_id:

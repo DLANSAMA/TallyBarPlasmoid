@@ -359,7 +359,7 @@ def grok_bot_tier(usage: Any) -> str | None:
         return value.strip() if isinstance(value, str) else ""
 
     if _is_grok_brand(usage.get("billingBrand")):
-        return (text("grokPlanLabel") or "SuperGrok") + " week"
+        return (text("grokPlanLabel") or "Grok") + " week"
     return text("grokPlanLabel") or text("cursorPlanName") or None
 
 

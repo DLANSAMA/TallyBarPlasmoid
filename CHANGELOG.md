@@ -13,6 +13,12 @@ Notable changes to TallyBar. Format follows
 - Ultra accounts have no 5-hour limit, so the Claude tab no longer shows a "Not
   started" Session row for them. Max, Pro and the other plans still show it between
   sessions.
+- Offline cost estimates know OpenAI's GPT-6.1 Sol and Terra, GPT-6 Sol, Luna and Astra,
+  the GPT-5.6 models, and xAI's Grok 4.7. Before, they were billed at a neighbouring
+  model's rate until the online price list loaded.
+- A Grok Bot plan with no name from xAI reads "Grok week" instead of "SuperGrok week":
+  xAI now sells plans that aren't SuperGrok.
+- Antigravity shows a Google AI Plus plan by name when Google sends only its id.
 
 ## [0.2.0] — 2026-11-05
 
