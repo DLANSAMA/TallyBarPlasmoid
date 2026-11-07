@@ -327,12 +327,14 @@ def test_static_enum_table_prices_gemini_3_8_flash_without_learned_names(monkeyp
 
 def test_static_enum_table_names_and_prices_gemini_4_argon(monkeypatch, tmp_path):
     """Offline (no catalog on disk), the embedded row prices Argon at $2 in / $0.10 cache
-    read / $10 out."""
+    read / $10 out until its intro rate ends on 2026-12-01, then at the $4 / $0.20 / $20
+    list rate (2x)."""
     monkeypatch.setattr(pricing_data, "PRICING_CACHE_PATH", tmp_path / "missing" / "pricing_cache.json")
+    rate = 1.0 if dt.date.today().isoformat() < "2026-12-01" else 2.0
     for me in (1417, 1418, 1419):
         summary = _summary_for_disk_entry(monkeypatch, tmp_path, me, pinned_catalog=False)
         assert {row["model"] for row in summary["modelBreakdown"]} == {"Gemini 4 Argon"}
-        assert summary["cost30d"] == pytest.approx((1000 * 2.0 + 200 * 0.10 + 500 * 10.0) / 1e6), me
+        assert summary["cost30d"] == pytest.approx((1000 * 2.0 + 200 * 0.10 + 500 * 10.0) / 1e6 * rate), me
 
 
 def test_antigravity_model_breakdown_per_window(monkeypatch, tmp_path):

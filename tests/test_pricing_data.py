@@ -3,6 +3,7 @@ fallback) and the bidirectional substring match. A regression here mis-prices ev
 cost line, so it's worth guarding even though failures degrade gracefully."""
 
 import sys
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -93,7 +94,7 @@ def test_offline_fallback_prices_every_current_claude_model_exactly(monkeypatch,
     monkeypatch.setattr(pricing_data, "PRICING_CACHE_PATH", tmp_path / "missing" / "pricing_cache.json")
     for model, expected in _CLAUDE_5_PRICES.items():
         assert pricing_data.get_pricing(model) == expected, model
-    assert pricing_data._active_pricing == list(pricing_data._FALLBACK_PRICING)
+    assert pricing_data._active_pricing == pricing_data._apply_list_rates(list(pricing_data._FALLBACK_PRICING))
     for key, prices in pricing_data._FALLBACK_PRICING:
         if key.startswith("claude-"):
             assert pricing_data.get_pricing(key), key
@@ -106,8 +107,12 @@ def test_offline_fallback_prices_gemini_at_the_published_rates(monkeypatch, tmp_
     read, a 200K tier)."""
     monkeypatch.setattr(pricing_data, "PRICING_CACHE_PATH", tmp_path / "missing" / "pricing_cache.json")
     flash = {"input": 0.75, "output": 3.75, "cache_read": 0.075}
+    # Argon's intro rate ends 2026-12-01; the list rate applies from then on.
+    argon = ({"input": 2.00, "output": 10.00, "cache_read": 0.10}
+             if time.strftime("%Y-%m-%d") < "2026-12-01"
+             else {"input": 4.00, "output": 20.00, "cache_read": 0.20})
     expected = {
-        "gemini-4-argon": {"input": 2.00, "output": 10.00, "cache_read": 0.10},
+        "gemini-4-argon": argon,
         "gemini-3.6-flash": flash,
         "gemini-3.8-flash": flash,
         "gemini-3.5-flash-lite": {"input": 0.30, "output": 2.50, "cache_read": 0.03},
@@ -150,7 +155,7 @@ def test_embedded_fallback_when_no_cache_at_all():
     with patch.object(pricing_data, "_load_cache", return_value=None), \
          patch.object(pricing_data, "_load_cache_stale", return_value=None):
         pricing_data.get_pricing("anything")
-        assert pricing_data._active_pricing == list(pricing_data._FALLBACK_PRICING)
+        assert pricing_data._active_pricing == pricing_data._apply_list_rates(list(pricing_data._FALLBACK_PRICING))
         assert len(pricing_data._FALLBACK_PRICING) > 0          # embedded defaults exist
 
 
@@ -717,7 +722,7 @@ def test_intro_rate_moves_to_list_rate_on_its_date():
     before = dict(pricing_data._apply_list_rates(fb, today="2026-11-30"))
     after = dict(pricing_data._apply_list_rates(fb, today="2026-12-01"))
     assert before["gemini-4-argon"]["input"] == 2.00
-    assert (after["gemini-4-argon"]["input"], after["gemini-4-argon"]["output"]) == (4.00, 20.00)
+    assert after["gemini-4-argon"] == {"input": 4.00, "output": 20.00, "cache_read": 0.20}
     assert after["gemini-3.8-flash"]["input"] == 0.75          # its list rate starts 2027-01-01
     assert dict(pricing_data._apply_list_rates(fb, today="2027-01-01"))["gemini-3.8-flash"]["input"] == 1.50
     # A fetched catalog that already moved to a different rate is left alone.
