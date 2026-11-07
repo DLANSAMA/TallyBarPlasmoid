@@ -179,13 +179,9 @@ msgid "Antigravity isn't running — open it to read live session usage."
 msgstr ""
 
 #: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:430
-msgid "No recent Grok session — start one to see usage."
-msgstr ""
-
-#: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:431
 msgid ""
-"Not signed in to Grok Bot — open Grok Bot and sign in to see its weekly "
-"usage."
+"No Grok usage found — use the grok CLI or sign in to the Grok Bot app to see "
+"the shared weekly limit."
 msgstr ""
 
 #: io.github.dlansama.tallybar/contents/ui/FullRepresentation.qml:432

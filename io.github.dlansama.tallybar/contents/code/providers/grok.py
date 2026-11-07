@@ -432,6 +432,7 @@ def _roll_ended_period(result: dict[str, Any], period: dict[str, Any], now: dt.d
         return
     limit = dict(result["limits"][0])
     limit["percent"] = 0.0
+    limit.pop("sublabel", None)  # the ended week's split describes nothing current
     limit.pop("resetAt", None)
     limit["reset"] = ""
     rolled: dict[str, Any] = {k: v for k, v in period.items() if k not in ("start", "end")}
@@ -442,3 +443,42 @@ def _roll_ended_period(result: dict[str, Any], period: dict[str, Any], now: dt.d
     result["limits"] = [limit] + list(result["limits"][1:])
     result["period"] = rolled
     result["message"] = "Grok billing period ended — 0% until the next Grok session reports usage"
+
+
+# Statuses of a Grok Bot reading that still say something the Grok tab's own "no CLI" state can't
+# (a locked wallet to unlock, a sign-in to renew) when it is the only Grok source there is.
+_GROK_BOT_REMEDIES = frozenset(("wallet-locked", "wallet-state-unknown", "unauthorized", "api-error", "timeout"))
+
+
+def fold_grok_bot(grok: dict[str, Any], bot: Any) -> dict[str, Any]:
+    """The Grok tab with Grok Bot's reading folded in: all Grok products draw on ONE limit.
+
+    The pool bar stays the billing endpoint's (``grok``). Grok Bot adds its on-demand row,
+    its prepaid line and a plan name when ``grok`` has none, and only ever as extra: a failed
+    Grok Bot read never touches a Grok reading. With no Grok CLI reading at all, Grok Bot's
+    own weekly bar stands in for it, and a failure that has a remedy (unlock KWallet, sign in
+    again) is shown. → tests/test_providers.py::test_fold_grok_bot_*"""
+    if not isinstance(bot, dict):
+        return grok
+    bot_ok = bot.get("status") == "ok"
+    bot_limits = [lim for lim in bot.get("limits") or [] if isinstance(lim, dict)]
+    out = dict(grok)
+    if grok.get("status") == "ok" and grok.get("limits"):
+        if not bot_ok:
+            return grok
+        out["limits"] = list(grok["limits"]) + [lim for lim in bot_limits if lim.get("label") != "Weekly"]
+        if bot.get("extraUsageText"):
+            out["extraUsageText"] = bot["extraUsageText"]
+        if not out.get("tier") and bot.get("tier"):
+            out["tier"] = bot["tier"]
+        return out
+    if bot_ok and bot_limits:
+        out.update(status="ok", message="Grok usage", source=bot.get("source") or out.get("source"),
+                   limits=bot_limits, fetchedAt=bot.get("fetchedAt") or out.get("fetchedAt"))
+        for key in ("tier", "extraUsageText"):
+            if bot.get(key):
+                out[key] = bot[key]
+        return out
+    if grok.get("status") == "not-running" and bot.get("status") in _GROK_BOT_REMEDIES:
+        out.update(status=bot["status"], message=bot.get("message") or out.get("message"))
+    return out

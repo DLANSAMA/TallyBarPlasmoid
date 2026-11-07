@@ -6,6 +6,15 @@ Notable changes to TallyBar. Format follows
 
 ## [Unreleased]
 
+### Changed
+- Grok and Grok Bot are one tab. All Grok products share a single weekly limit, so
+  two tabs could show two different numbers for it. The Grok tab shows xAI's weekly
+  bar with the week's split by product under it (for example "Grok Bot 53% · Grok
+  Build 8%"), read from the same billing reply as the bar. Grok Bot's plan name,
+  on-demand spend and prepaid line join the tab when the Grok Bot app is signed in,
+  and its weekly bar stands in when the `grok` CLI isn't set up. A saved Grok Bot
+  tab setting keeps the Grok tab on.
+
 ## [0.2.1] — 2026-11-05
 
 ### Changed

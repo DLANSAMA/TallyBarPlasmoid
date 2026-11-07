@@ -1618,6 +1618,30 @@ def test_grok_live_reading_replaces_the_log_reading(tmp_path):
     assert calls[0]["headers"]["Accept"] == "application/json"
 
 
+def test_grok_live_reading_carries_the_product_split(tmp_path):
+    from providers import grok as grok_mod
+    home = _grok_live_home(tmp_path)
+    http, _ = _fake_http((200, _LIVE_BODY))
+    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, network=True, http=http)
+    assert res["limits"][0]["sublabel"] == "Grok Build 8%"
+
+
+def test_grok_ended_period_drops_the_product_split(tmp_path):
+    from providers import grok as grok_mod
+    home = _grok_live_home(tmp_path)
+    log = home / "logs" / "unified.jsonl"
+    event = json.loads(log.read_text().splitlines()[0])
+    event["ctx"]["config"]["productUsage"] = [{"product": "GrokBot", "usagePercent": 42.5}]
+    log.write_text(json.dumps(event) + "\n")
+    during = dt.datetime(2030, 7, 8, tzinfo=dt.timezone.utc)
+    after = dt.datetime(2030, 7, 12, tzinfo=dt.timezone.utc)     # the reading's week has ended
+    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, now=during)
+    assert res["limits"][0]["percent"] == 42.5 and res["limits"][0]["sublabel"] == "Grok Bot 43%"
+    res = grok_mod.run_grok_local(timeout=1.0, grok_home=home, now=after)
+    assert res["limits"][0]["percent"] == 0.0
+    assert "sublabel" not in res["limits"][0]
+
+
 def test_grok_live_reading_is_off_without_network(tmp_path):
     from providers import grok as grok_mod
     home = _grok_live_home(tmp_path)
@@ -2432,3 +2456,63 @@ def test_grok_bot_prepaid_text_feeds_the_extra_usage_line():
     p = {"limits": [{"label": "Weekly", "percent": 10}], "extraUsageText": "Prepaid usage: $1.00 this month"}
     enrich_ui_formatting({"grokbot": p})
     assert p["formattedExtraUsageDetail"] == "Prepaid usage: $1.00 this month"
+
+
+# --- Grok Bot folded into the one Grok tab ------------------------------------------
+
+def _fold_grok(**kw):
+    base = {"label": "Grok", "status": "ok", "message": "Grok Build usage", "source": "grok-billing-api",
+            "fetchedAt": "2026-11-07T12:00:00+00:00",
+            "limits": [{"label": "Weekly", "percent": 53.0, "unit": "percent", "sublabel": "Grok Bot 53%"}]}
+    return {**base, **kw}
+
+
+def _fold_bot(**kw):
+    base = {"label": "Grok Bot", "status": "ok", "source": "grok-bot", "tier": "SuperGrok week",
+            "fetchedAt": "2026-11-07T12:01:00+00:00", "extraUsageText": "Prepaid $12.00 spent this month",
+            "limits": [{"label": "Weekly", "percent": 53.76, "unit": "percent"},
+                       {"label": "On-demand", "percent": 10.0, "unit": "usd", "used": 5.0, "limit": 50.0}]}
+    return {**base, **kw}
+
+
+def test_fold_grok_bot_keeps_the_pool_bar_and_adds_the_extras():
+    from providers.grok import fold_grok_bot
+    out = fold_grok_bot(_fold_grok(), _fold_bot())
+    assert [lim["label"] for lim in out["limits"]] == ["Weekly", "On-demand"]
+    assert out["limits"][0]["percent"] == 53.0                      # not Grok Bot's 53.76
+    assert out["source"] == "grok-billing-api"
+    assert out["extraUsageText"] == "Prepaid $12.00 spent this month"
+    assert out["tier"] == "SuperGrok week"                          # only because Grok had none
+    assert fold_grok_bot(_fold_grok(tier="SuperGrok Plus"), _fold_bot())["tier"] == "SuperGrok Plus"
+
+
+def test_fold_grok_bot_failure_never_touches_a_grok_reading():
+    from providers.grok import fold_grok_bot
+    grok = _fold_grok()
+    for status in ("wallet-locked", "unauthorized", "api-error", "timeout", "not-running", "idle"):
+        assert fold_grok_bot(grok, {"status": status, "message": "x", "limits": []}) == grok
+    assert fold_grok_bot(grok, None) == grok
+
+
+def test_fold_grok_bot_weekly_bar_stands_in_when_there_is_no_cli_reading():
+    from providers.grok import fold_grok_bot
+    cli_less = {"label": "Grok", "status": "not-running", "message": "Grok Build data dir (~/.grok) not found",
+                "limits": []}
+    out = fold_grok_bot(cli_less, _fold_bot())
+    assert out["status"] == "ok" and out["label"] == "Grok"
+    assert [lim["percent"] for lim in out["limits"]] == [53.76, 10.0]
+    assert out["tier"] == "SuperGrok week" and out["source"] == "grok-bot"
+
+
+def test_fold_grok_bot_shows_a_failure_with_a_remedy_only_when_it_is_the_sole_source():
+    from providers.grok import fold_grok_bot
+    cli_less = {"label": "Grok", "status": "not-running", "message": "no ~/.grok", "limits": []}
+    locked = {"status": "wallet-locked", "message": "KWallet is locked — unlock it to read the Grok Bot sign-in",
+              "limits": []}
+    out = fold_grok_bot(cli_less, locked)
+    assert out["status"] == "wallet-locked" and "KWallet" in out["message"]
+    # Grok Bot simply not signed in is not a failure worth a banner on the Grok tab.
+    assert fold_grok_bot(cli_less, {"status": "not-running", "message": "x", "limits": []}) == cli_less
+    # A CLI that reports "api-empty" (installed, no usage yet) is not "not-running": left alone.
+    quiet = {"label": "Grok", "status": "api-empty", "message": "No Grok Build usage data yet", "limits": []}
+    assert fold_grok_bot(quiet, locked) == quiet

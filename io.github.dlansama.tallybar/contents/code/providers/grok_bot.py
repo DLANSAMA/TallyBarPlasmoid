@@ -1,8 +1,8 @@
 """Grok Bot weekly usage, read through the Grok Bot desktop app's own sign-in.
 
-Grok Bot (xAI's ``sand`` Electron app) meters a weekly allowance through Cursor's
-dashboard service. This is a different product and a different meter from Grok Build
-(``providers/grok.py``, the CLI's local ``~/.grok`` logs) — the two never share a tab.
+Grok Bot (xAI's ``sand`` Electron app) reports its weekly allowance, plan and spend
+through Cursor's dashboard service. All Grok products share one limit, so this reading is
+folded into the Grok tab (``providers.grok.fold_grok_bot``) rather than shown on its own.
 
 The bearer token lives in the app's secret store, ``~/.config/Grok Bot/sand-secrets.json``
 (layout from ``sand`` 0.63.0, ``dist/electron-main/main-core.cjs``): a JSON object of

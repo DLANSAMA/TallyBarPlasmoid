@@ -1038,6 +1038,30 @@ def extract_limits_from_json(data: Any, preferred_labels: tuple[str, ...] = ()) 
     return limits[:4]
 
 
+_GROK_PRODUCT_NAMES = {"grokbot": "Grok Bot", "grokbuild": "Grok Build"}
+
+
+def grok_product_split(config: Any) -> str:
+    """The week's split of Grok's one shared limit by product ("Grok Bot 53% · Grok Build 8%"):
+    the largest non-zero shares of ``productUsage``, each a percent of the whole limit.
+    Empty when the reply carries no usable list. → tests/test_parsers.py::test_grok_product_split"""
+    items = config.get("productUsage") if isinstance(config, dict) else None
+    if not isinstance(items, list):
+        return ""
+    shares: list[tuple[float, str]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        pct = item.get("usagePercent")
+        raw = str(item.get("product") or "").strip()
+        if not raw or isinstance(pct, bool) or not isinstance(pct, (int, float)) or not 0 < pct <= 100:
+            continue
+        name = _GROK_PRODUCT_NAMES.get(raw.lower()) or re.sub(r"(?<=[a-z])(?=[A-Z])", " ", raw)
+        shares.append((float(pct), name))
+    shares.sort(key=lambda s: -s[0])
+    return " · ".join(f"{name} {int(pct + 0.5)}%" for pct, name in shares[:3])  # half-up, like the bar
+
+
 def parse_grok_billing_config(event: Any) -> dict[str, Any] | None:
     """Parse a Grok Build ``billing: fetched credits config`` unified-log event.
 
@@ -1132,6 +1156,9 @@ def parse_grok_billing_config(event: Any) -> dict[str, Any] | None:
     }
     if reset_iso:
         limit["resetAt"] = reset_iso
+    split = grok_product_split(config)
+    if split:
+        limit["sublabel"] = split
 
     tier_raw = ctx.get("subscriptionTier") or ctx.get("subscription_tier") or config.get("subscriptionTier")
     tier = str(tier_raw).strip() if isinstance(tier_raw, str) and tier_raw.strip() else None
