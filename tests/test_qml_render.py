@@ -72,7 +72,7 @@ def test_delegate_scanner_catches_the_original_bug():
     assert hit(bad) and not hit(good)
 
 
-@pytest.mark.parametrize("provider", ["claude", "antigravity"])
+@pytest.mark.parametrize("provider", ["claude", "antigravity", "grok"])
 def test_offscreen_render_matches_committed_screenshot(provider, tmp_path):
     # Local-only (needs qml6 + the QtQuick modules). The committed baselines ARE the
     # expected render of the mock fixture, so a UI change that alters them must be a
