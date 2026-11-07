@@ -143,6 +143,8 @@ render-baselines:
 	    echo "qml6 not found — install qt6-declarative (qt6-tools)"; exit 1; }
 	@mkdir -p tests/render-baselines
 	@$(MAKE) --no-print-directory _render OUTDIR=tests/render-baselines SOURCE="today=$(SHOT_DAY)"
+	@# Grok is a baseline only: `make screenshots` renders live usage and publishes it.
+	@$(SHOT_ENV) qml6 $(SHOT) -- today=$(SHOT_DAY) provider=grok out=tests/render-baselines/widget-grok.png
 	@tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && python3 $(DEMO) cursors "$$tmp" $(CURSOR_PX) && \
 	$(SHOT_ENV) qml6 $(SHOT) -- today=$(SHOT_DAY) component=CostPopout graphMode=day walk=hover \
 	    cursors="$$tmp" out=tests/render-baselines/cost-day-hover.png

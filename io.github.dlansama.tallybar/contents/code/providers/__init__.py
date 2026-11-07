@@ -3,7 +3,7 @@ from .gemini import GEMINI_DOMAINS, run_gemini_web, run_google_one_credits, goog
 from .claude import apply_claude_statusline_fallback, load_claude_statusline, run_claude_api
 from .codex import run_openai_cookie_api, run_codex_rpc
 from .antigravity import choose_antigravity_result, run_antigravity_remote, run_antigravity_local, apply_google_one_credits
-from .grok import run_grok_local
+from .grok import fold_grok_bot, run_grok_local
 from .grok_bot import run_grok_bot
 from .cost import compute_local_cost_summaries, apply_cost_summaries
 
@@ -21,6 +21,7 @@ __all__ = [
     "run_antigravity_remote",
     "run_antigravity_local",
     "apply_google_one_credits",
+    "fold_grok_bot",
     "run_grok_local",
     "run_grok_bot",
     "compute_local_cost_summaries",

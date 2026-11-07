@@ -36,7 +36,7 @@ Item {
         if (root.configError.length > 0)
             root.settingsDrawerOpen = true;
     }
-    property var tabs: ["codex", "claude", "gemini", "antigravity", "grok", "grokbot"]
+    property var tabs: ["codex", "claude", "gemini", "antigravity", "grok"]
     property var screenGeometry: null
     property bool hostExpanded: true
     property bool costDrawerOpen: false
@@ -427,8 +427,7 @@ Item {
         switch (providerKey) {
         case "codex": return i18n("Codex isn't running — start the Codex app to read usage.");
         case "antigravity": return i18n("Antigravity isn't running — open it to read live session usage.");
-        case "grok": return i18n("No recent Grok session — start one to see usage.");
-        case "grokbot": return i18n("Not signed in to Grok Bot — open Grok Bot and sign in to see its weekly usage.");
+        case "grok": return i18n("No Grok usage found — use the grok CLI or sign in to the Grok Bot app to see the shared weekly limit.");
         default: return i18n("%1 isn't running.", root.tabLabel(providerKey));
         }
     }
@@ -507,10 +506,10 @@ Item {
         // fires when there's no concrete problem status to show.
         if (root.loading && (status === "" || status === "ok"))
             return i18n("Fetching usage data…");
-        // Grok Bot's wallet need is its own sign-in, not browser cookies.
-        if (status === "wallet-locked" && root.selectedProvider === "grokbot")
+        // Grok's wallet need is the Grok Bot sign-in, not browser cookies.
+        if (status === "wallet-locked" && root.selectedProvider === "grok")
             return i18n("KWallet is locked. Unlock it to read your Grok Bot sign-in.");
-        if (status === "wallet-state-unknown" && root.selectedProvider === "grokbot")
+        if (status === "wallet-state-unknown" && root.selectedProvider === "grok")
             return i18n("KWallet state couldn't be checked. Unlock it and refresh to read your Grok Bot sign-in.");
         if (status === "wallet-locked")
             return i18n("KWallet is locked. Unlock it to read this provider's session cookies.");
@@ -856,7 +855,7 @@ Item {
         });
     }
 
-    readonly property var allProviderKeys: ["codex", "claude", "gemini", "antigravity", "grok", "grokbot"]
+    readonly property var allProviderKeys: ["codex", "claude", "gemini", "antigravity", "grok"]
     function providersValue() {
         const p = root.configValue("providers", root.allProviderKeys);
         return Array.isArray(p) && p.length > 0 ? p : root.allProviderKeys;
