@@ -14,6 +14,9 @@ Notable changes to TallyBar. Format follows
   on-demand spend and prepaid line join the tab when the Grok Bot app is signed in,
   and its weekly bar stands in when the `grok` CLI isn't set up. A saved Grok Bot
   tab setting keeps the Grok tab on.
+- The Grok tab's cost figures say they cover Grok Build only: the "This week" line
+  under the weekly bar and the cost card's heading. Grok Bot's share of the limit
+  has no token history, so those figures leave it out.
 
 ## [0.2.1] — 2026-11-05
 

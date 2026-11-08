@@ -64,10 +64,8 @@ Item {
         id: costTitle
 
         anchors.left: parent.left
-        anchors.right: costArrow.left
         anchors.top: parent.top
         anchors.topMargin: 18
-        anchors.rightMargin: 8
         color: root.primaryTextColor()
         elide: Text.ElideRight
         font.family: root.uiFont
@@ -75,6 +73,26 @@ Item {
         font.weight: Font.DemiBold
         textFormat: Text.PlainText
         text: costSection.cost.title || i18n("Cost")
+        width: Math.min(implicitWidth, Math.max(0, costArrow.x - 8 - (costScope.visible ? costScope.implicitWidth + 7 : 0)))
+    }
+
+    // Grok's cost figures come from the Grok Build log alone; Grok Bot's share of the limit has
+    // no token history.
+    Text {
+        id: costScope
+
+        anchors.left: costTitle.right
+        anchors.leftMargin: 7
+        anchors.baseline: costTitle.baseline
+        visible: text.length > 0
+        color: root.mutedTextColor(0.45)
+        elide: Text.ElideRight
+        font.family: root.uiFont
+        font.pixelSize: 11
+        font.weight: Font.Normal
+        textFormat: Text.PlainText
+        text: root.selectedProvider === "grok" ? i18n("Grok Build only") : ""
+        width: Math.min(implicitWidth, Math.max(0, costArrow.x - 8 - costTitle.x - costTitle.width - 7))
     }
 
     Text {
