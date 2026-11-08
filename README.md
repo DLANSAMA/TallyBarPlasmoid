@@ -37,7 +37,7 @@ as a month heat grid. Clicking any bar or day expands it into a per-model breakd
 | Provider        | Quota / limits                                    | Where that comes from                                                  |
 |-----------------|---------------------------------------------------|------------------------------------------------------------------------|
 | **Codex**       | session window, weekly window, plan               | the `codex` CLI's app-server over JSON-RPC; browser cookies as fallback |
-| **Claude**      | session window (not on Ultra), weekly window, per-model windows, plan | claude.ai, using your browser's existing session; plan read from disk   |
+| **Claude**      | session window (not on Ultra), weekly window, per-model windows, plan | claude.ai, using your browser's existing session; else Claude Code's sign-in; plan read from disk |
 | **Gemini**      | daily usage, Google One AI credit pool            | gemini.google.com, using your browser's existing session                |
 | **Antigravity** | Gemini window, Claude/GPT window, plan            | the local Antigravity language server, plus Google's Cloud Code API     |
 | **Grok**        | the one weekly limit all Grok products share, split by product; on-demand spend when capped | xAI's billing service via the `grok` CLI's sign-in; else the CLI's log; the Grok Bot desktop app's sign-in adds plan and spend |
@@ -122,6 +122,10 @@ Each provider connects itself:
   (Chrome, Chromium, Brave, Edge or Firefox). If you are signed in to claude.ai
   or gemini.google.com in one of those, there is nothing to configure; if you
   are not, the widget shows a **Sign in** button that opens the right page.
+- **Claude** also reads Claude Code's own sign-in (`~/.claude/.credentials.json`)
+  when the browser route has nothing: no cookie, a locked KWallet, or a rejected
+  session. So with Claude Code signed in, the Claude tab works without a browser
+  session. The browser route stays first.
 - **Grok Bot** adds its plan name and on-demand spend to the Grok tab through the
   sign-in the Grok Bot desktop app keeps: open the app and sign in once. That
   sign-in is encrypted with the Chromium Safe Storage key, so reading it needs
@@ -257,6 +261,11 @@ pushing a `v*` tag builds the `.plasmoid`, stamps the version into
   same ones their own apps call, with your own session. They are not public APIs and
   can change without notice. When one does, that provider degrades to a status
   message and the others keep working.
+- **The Claude Code sign-in route lasts as long as Claude Code's access token.**
+  TallyBar sends the access token Claude Code keeps and never renews it; it lapses
+  about eight hours after Claude Code last did. Past that the Claude tab asks you to
+  open Claude Code (which renews it), or uses the browser route or the statusLine
+  capture if you have them.
 - **Grok's live bar lasts as long as the CLI's sign-in.** TallyBar uses the access
   token the `grok` CLI keeps in `~/.grok/auth.json` and never renews it; it lapses
   about six hours after the CLI last did. After that the bar shows xAI's last reading

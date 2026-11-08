@@ -6,6 +6,16 @@ Notable changes to TallyBar. Format follows
 
 ## [Unreleased]
 
+### Added
+- The Claude tab can read its limits with Claude Code's own sign-in when the browser
+  route has nothing: no claude.ai cookie, a locked KWallet, a rejected session, or
+  claude.ai rate-limiting. The browser route is still tried first, and the Claude Code
+  statusLine capture remains the last resort. TallyBar only uses the access token
+  Claude Code keeps in `~/.claude/.credentials.json`: it never renews it, never reads
+  the refresh token and never writes the file. When that token has lapsed (about eight
+  hours after Claude Code last ran) and there is no browser cookie either, the tab asks
+  you to open Claude Code to renew it.
+
 ### Changed
 - Grok and Grok Bot are one tab. All Grok products share a single weekly limit, so
   two tabs could show two different numbers for it. The Grok tab shows xAI's weekly

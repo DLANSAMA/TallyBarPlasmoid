@@ -27,10 +27,12 @@ from http_helpers import bounded_provider, run_threaded_provider, scrub_credenti
 from io_helpers import atomic_write_text as _atomic_write_text, flock_with_timeout, to_daemon_thread
 from providers import (
     GEMINI_DOMAINS,
+    apply_claude_oauth_fallback,
     apply_claude_statusline_fallback,
     apply_cost_summaries,
     apply_google_one_credits,
     choose_antigravity_result,
+    claude_needs_oauth,
     compute_local_cost_summaries,
     fold_grok_bot,
     google_one_credit_fresh,
@@ -38,6 +40,7 @@ from providers import (
     run_antigravity_local,
     run_antigravity_remote,
     run_claude_api,
+    run_claude_oauth,
     run_codex_rpc,
     run_gemini_web,
     run_google_one_credits,
@@ -55,6 +58,7 @@ __all__ = [
     "SNAPSHOT_PATH",
     "all_ai_month_to_date_cost",
     "all_ai_projected_month_cost",
+    "apply_claude_oauth_fallback",
     "apply_claude_statusline_fallback",
     "apply_cost_summaries",
     "apply_google_one_credits",
@@ -81,7 +85,9 @@ __all__ = [
     "refresh_worst_case_seconds",
     "run_antigravity_local",
     "run_antigravity_remote",
+    "claude_needs_oauth",
     "run_claude_api",
+    "run_claude_oauth",
     "run_codex_rpc",
     "run_gemini_web",
     "run_google_one_credits",
@@ -1151,6 +1157,17 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     grok_bot = carry_forward_provider_last_good(
         providers.pop("grokbot"), _cached_grok_bot_view(cached_snapshot), "grokbot")
     providers["grok"] = {**fold_grok_bot(providers["grok"], grok_bot), "grokBotReading": grok_bot}
+
+    # Claude Code sign-in (OAuth) fallback: when the cookie path produced no live limits (no
+    # cookies, locked wallet, rejected session, rate limit), ask Anthropic's usage endpoint with
+    # the token Claude Code keeps. It runs before the statusLine capture, which stays the last
+    # resort, and never touches a live cookie reading. → tests/test_claude_oauth.py
+    if not args.no_network and claude_needs_oauth(providers["claude"]):
+        providers["claude"] = apply_claude_oauth_fallback(
+            providers["claude"],
+            await bounded_provider(run_claude_oauth(args.timeout, prev_claude), args.timeout,
+                                   {"label": "Claude", "source": "claude-oauth", "limits": []}),
+        )
 
     # Claude Code statusLine fallback (integrations/claude_code/statusline_capture.py): when
     # the claude.ai cookie path produced no live limits — Cloudflare 403/429, signed out,

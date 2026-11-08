@@ -1,4 +1,5 @@
-"""Claude provider: browser-API path and the Claude Code statusLine fallback."""
+"""Claude provider: browser-API path, the Claude Code sign-in (OAuth) fallback and the
+statusLine fallback."""
 from __future__ import annotations
 
 import asyncio
@@ -12,6 +13,8 @@ from accounting import (
     now_iso,
 )
 from cookies import BrowserCookie, cookiejar_for_domains, has_session_cookies
+from http.cookiejar import CookieJar
+
 from http_helpers import RETRY_AFTER_KEY, http_json_async, scrub_credentials
 from parsers import (
     fresh_credit_balance,
@@ -26,23 +29,30 @@ from parsers import (
 )
 
 
-def claude_tier_from_credentials() -> str | None:
-    """Best-effort, zero-network tier label from the Claude Code OAuth creds file
-    (``~/.claude/.credentials.json`` → ``claudeAiOauth.rateLimitTier`` or, as a fallback,
-    ``subscriptionType``), mapped through the SAME ``claude_plan_name`` the
-    /organizations API path uses so the display label matches (e.g.
-    "default_claude_max_20x" → "Ultra"). Read-only; never logs the token. Any error
-    (missing file / bad JSON / missing keys) → None."""
+def _claude_oauth_block() -> dict[str, Any] | None:
+    """The ``claudeAiOauth`` object of ``~/.claude/.credentials.json``, or None when the file
+    is missing, unreadable or shaped otherwise. Callers read only the keys they need."""
     try:
         raw = (Path.home() / ".claude" / ".credentials.json").read_text(encoding="utf-8")
         oauth = json.loads(raw).get("claudeAiOauth")
-        if not isinstance(oauth, dict):
-            return None
-        # rateLimitTier first: subscriptionType "max" is both Max and Ultra since the rename.
-        tier = claude_plan_name(oauth.get("rateLimitTier")) or claude_plan_name(oauth.get("subscriptionType"))
-        return tier or None
     except Exception:
         return None
+    return oauth if isinstance(oauth, dict) else None
+
+
+def _oauth_plan_name(oauth: dict[str, Any]) -> str | None:
+    # rateLimitTier first: subscriptionType "max" is both Max and Ultra since the rename.
+    return claude_plan_name(oauth.get("rateLimitTier")) or claude_plan_name(oauth.get("subscriptionType")) or None
+
+
+def claude_tier_from_credentials() -> str | None:
+    """Best-effort, zero-network tier label from the Claude Code OAuth creds file
+    (``claudeAiOauth.rateLimitTier`` or, as a fallback, ``subscriptionType``), mapped through
+    the SAME ``claude_plan_name`` the /organizations API path uses so the display label
+    matches (e.g. "default_claude_max_20x" → "Ultra"). Read-only; never logs the token.
+    Any error (missing file / bad JSON / missing keys) → None."""
+    oauth = _claude_oauth_block()
+    return _oauth_plan_name(oauth) if oauth else None
 
 
 CLAUDE_DOMAINS = ("claude.ai",)
@@ -96,11 +106,11 @@ RATE_LIMIT_BACKOFF_SECONDS = 300
 RATE_LIMIT_BACKOFF_RANGE = (60, 1800)
 
 
-def _rate_limited_until(prev: Any) -> dt.datetime | None:
-    """The previous snapshot's ``rateLimitedUntil`` while it is still in the future, else None."""
+def _rate_limited_until(prev: Any, key: str = "rateLimitedUntil") -> dt.datetime | None:
+    """The previous snapshot's ``key`` stamp while it is still in the future, else None."""
     if not isinstance(prev, dict):
         return None
-    until = prev.get("rateLimitedUntil")
+    until = prev.get(key)
     if not isinstance(until, str) or not until:
         return None
     try:
@@ -123,8 +133,8 @@ def _backoff_until(data: Any) -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=min(hi, max(lo, float(wait))))
 
 
-def _rate_limited_message(until: dt.datetime) -> str:
-    return f"claude.ai is rate-limiting; retrying after {until.astimezone().strftime('%H:%M')}"
+def _rate_limited_message(until: dt.datetime, host: str = "claude.ai") -> str:
+    return f"{host} is rate-limiting; retrying after {until.astimezone().strftime('%H:%M')}"
 
 
 def _prev_monthly_limit(prev: Any) -> dict[str, Any] | None:
@@ -261,6 +271,126 @@ def apply_claude_statusline_fallback(provider: dict[str, Any], capture: Any,
         result["stale"] = True
         result["staleAsOf"] = result["fetchedAt"]
     return result
+
+
+# Claude Code sign-in (OAuth) fallback
+
+# Claude Code keeps an access token for the subscriber's account in ~/.claude/.credentials.json
+# and renews it itself. Used only when the cookie path has no live limits, so a user with no
+# browser cookie (or a locked KWallet) still gets the numbers. The token is NEVER renewed here
+# and the refresh token is never read: only Claude Code renews the sign-in, so this works while
+# its token is valid and the other routes cover the rest. Nothing from the request (token,
+# headers, response body, exception text) reaches a message or diagnostic.
+# → tests/test_claude_oauth.py
+CLAUDE_OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+CLAUDE_OAUTH_BETA = "oauth-2025-04-20"
+OAUTH_TOKEN_EXPIRY_MARGIN_SECONDS = 60
+OAUTH_RATE_LIMIT_KEY = "oauthRateLimitedUntil"
+_OAUTH_RENEW_MESSAGE = "Claude Code sign-in expired; open Claude Code to renew it"
+# Stamps of the cookie path that must outlive a replacement of its result: dropping
+# rateLimitedUntil would make the next refresh poll claude.ai through its own 429.
+_COOKIE_PATH_STAMPS = ("rateLimitedUntil", "usageSummaryUnavailableSince", "creditBalance")
+
+
+def _access_token(oauth: dict[str, Any], now: dt.datetime) -> str | None:
+    """The stored access token, or None when absent or within the expiry margin of its end."""
+    token = oauth.get("accessToken")
+    expires_ms = oauth.get("expiresAt")
+    if not isinstance(token, str) or not token:
+        return None
+    if isinstance(expires_ms, bool) or not isinstance(expires_ms, (int, float)):
+        return None
+    if expires_ms / 1000.0 - now.timestamp() <= OAUTH_TOKEN_EXPIRY_MARGIN_SECONDS:
+        return None
+    return token
+
+
+def claude_needs_oauth(provider: Any) -> bool:
+    """True when the Claude provider has no live limits (none, or only a carried last-good one)."""
+    return isinstance(provider, dict) and not (provider.get("limits") and not provider.get("stale"))
+
+
+async def run_claude_oauth(timeout: float, prev: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Read the Claude limits with the Claude Code sign-in. ``{}`` when this machine has no
+    Claude Code sign-in at all (nothing to try); otherwise a provider-shaped reading whose
+    ``status`` is ok, unauthorized, api-error or timeout."""
+    oauth = _claude_oauth_block()
+    if oauth is None or not isinstance(oauth.get("accessToken"), str) or not oauth["accessToken"]:
+        return {}
+    result: dict[str, Any] = {"label": "Claude", "source": "claude-oauth", "limits": []}
+    tier = _oauth_plan_name(oauth)
+    if tier:
+        result["tier"] = tier
+    limited_until = _rate_limited_until(prev, OAUTH_RATE_LIMIT_KEY)
+    if limited_until is not None:
+        result.update(status="api-error", message=_rate_limited_message(limited_until, "Claude usage API"),
+                      **{OAUTH_RATE_LIMIT_KEY: prev[OAUTH_RATE_LIMIT_KEY]})  # type: ignore[index]
+        return result
+    token = _access_token(oauth, dt.datetime.now(dt.timezone.utc))
+    if token is None:
+        result.update(status="unauthorized", message=_OAUTH_RENEW_MESSAGE)
+        return result
+    try:
+        status, data = await http_json_async(
+            CLAUDE_OAUTH_USAGE_URL, CookieJar(), timeout,
+            headers={"Authorization": f"Bearer {token}", "anthropic-beta": CLAUDE_OAUTH_BETA},
+        )
+    except Exception as exc:
+        import socket
+        import urllib.error
+        reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+        if isinstance(reason, (socket.timeout, TimeoutError)):
+            result.update(status="timeout", message="Claude usage API request timed out")
+        else:
+            result.update(status="api-error", message="Claude usage API request failed")
+        return result
+    if status in (401, 403):
+        result.update(status="unauthorized", message=_OAUTH_RENEW_MESSAGE)
+    elif status == 429:
+        until = _backoff_until(data)
+        result.update(status="api-error", message=_rate_limited_message(until, "Claude usage API"),
+                      **{OAUTH_RATE_LIMIT_KEY: until.isoformat(timespec="seconds")})
+    elif status < 200 or status >= 300:
+        result.update(status="api-error", message=f"Claude usage API returned HTTP {status}")
+    else:
+        limits = parse_claude_usage(data, tier not in CLAUDE_PLANS_WITHOUT_SESSION)
+        if limits:
+            result.update(status="ok", message="Read Claude Code sign-in quota", limits=limits,
+                          fetchedAt=now_iso())
+        else:
+            result.update(status="api-empty", message="Claude usage API returned no recognizable limits")
+    return result
+
+
+def apply_claude_oauth_fallback(provider: dict[str, Any], oauth: dict[str, Any]) -> dict[str, Any]:
+    """Merge a ``run_claude_oauth`` reading into a Claude provider that has no live limits.
+
+    A good reading replaces the provider (a carried last-good one included) and keeps the
+    cookie path's own stamps. A failed one never hides what the cookie path reported, with two
+    exceptions: its rate-limit stamp is kept, and when there are no browser cookies at all the
+    expired Claude Code sign-in is the actionable fact (an unlock or sign-in prompt for a
+    locked wallet or a rejected session would still be right)."""
+    if not isinstance(provider, dict) or not oauth or not claude_needs_oauth(provider):
+        return provider
+    if oauth.get("status") == "ok":
+        original = str(provider.get("message") or provider.get("status") or "").strip()
+        explain = original and not provider.get("stale") and provider.get("status") != "cookies-ready"
+        result: dict[str, Any] = {
+            **{k: oauth[k] for k in ("label", "status", "source", "limits", "fetchedAt")},
+            "message": oauth["message"] + (f" (claude.ai: {original})" if explain else ""),
+        }
+        for key in ("accentColor", "tier"):
+            if provider.get(key) or oauth.get(key):
+                result[key] = provider.get(key) or oauth.get(key)
+        for key in _COOKIE_PATH_STAMPS:
+            if provider.get(key):
+                result[key] = provider[key]
+        return result
+    if oauth.get("status") == "unauthorized" and provider.get("status") == "missing-cookies":
+        return {**provider, "status": "unauthorized", "message": oauth["message"]}
+    if oauth.get(OAUTH_RATE_LIMIT_KEY):
+        return {**provider, OAUTH_RATE_LIMIT_KEY: oauth[OAUTH_RATE_LIMIT_KEY]}
+    return provider
 
 
 async def _claude_get(url: str, jar: Any, timeout: float) -> tuple[int, Any] | None:
