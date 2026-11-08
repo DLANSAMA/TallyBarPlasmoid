@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: plasma_applet_io.github.dlansama.tallybar\n"
 "Report-Msgid-Bugs-To: https://github.com/DLANSAMA/TallyBarPlasmoid/issues\n"
-"POT-Creation-Date: 2026-11-08 01:19+0000\n"
+"POT-Creation-Date: 2026-11-08 01:25+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -400,7 +400,7 @@ msgid "Reset"
 msgstr ""
 
 #: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:151
-#: io.github.dlansama.tallybar/contents/ui/components/CostSection.qml:77
+#: io.github.dlansama.tallybar/contents/ui/components/CostSection.qml:75
 msgid "Cost"
 msgstr ""
 
@@ -543,23 +543,23 @@ msgid ""
 "logged without their final usage."
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/components/CostSection.qml:77
-msgid "%1 · Grok Build only"
+#: io.github.dlansama.tallybar/contents/ui/components/CostSection.qml:94
+msgid "Grok Build only"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/components/CostSection.qml:102
+#: io.github.dlansama.tallybar/contents/ui/components/CostSection.qml:120
 msgid "Cost details"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/components/CostSection.qml:103
+#: io.github.dlansama.tallybar/contents/ui/components/CostSection.qml:121
 msgid "Toggle the cost graph drawer"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/components/CostSection.qml:150
+#: io.github.dlansama.tallybar/contents/ui/components/CostSection.qml:168
 msgid "Local estimate unavailable"
 msgstr ""
 
-#: io.github.dlansama.tallybar/contents/ui/components/CostSection.qml:181
+#: io.github.dlansama.tallybar/contents/ui/components/CostSection.qml:199
 msgid "No local token cost summary found"
 msgstr ""
 
