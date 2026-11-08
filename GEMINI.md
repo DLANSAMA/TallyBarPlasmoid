@@ -8,3 +8,5 @@ working here — nothing in it is Claude-specific.
 
 Antigravity's *global* rules live at `~/.gemini/GEMINI.md`; this file is
 project-scoped.
+
+Area contracts (Antigravity ledger, cost and pricing, providers, Grok, QML) live in `.claude/rules/*.md`. Claude Code loads them by file path; you won't, so read the one matching the area you're editing (index at the end of `CLAUDE.md`).

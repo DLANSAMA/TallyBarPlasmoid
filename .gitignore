@@ -10,6 +10,7 @@ __pycache__/
 .DS_Store
 .agents/
 .jules/
-.claude/
+.claude/*
+!.claude/rules/
 *.swp
 *.log
