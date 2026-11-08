@@ -368,7 +368,8 @@ def _attach_grok_billing_week_detail(p_data: dict[str, Any]) -> None:
             continue
         if limit.get("detailText") or limit.get("detail"):
             break
-        parts = [f"This week: {compact_token_count(int(tokens))} tokens"]
+        # Grok Build's own log only: Grok Bot's share of the pool has no token history.
+        parts = [f"This week (Grok Build): {compact_token_count(int(tokens))} tokens"]
         cost = cs.get("billingWeekCost")
         if isinstance(cost, (int, float)) and cost > 0:
             parts.append(_money_text(float(cost), "USD"))

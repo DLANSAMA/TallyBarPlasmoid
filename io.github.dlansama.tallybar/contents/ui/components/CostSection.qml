@@ -74,7 +74,7 @@ Item {
         font.pixelSize: 13
         font.weight: Font.DemiBold
         textFormat: Text.PlainText
-        text: costSection.cost.title || i18n("Cost")
+        text: root.selectedProvider === "grok" ? i18n("%1 · Grok Build only", costSection.cost.title || i18n("Cost")) : (costSection.cost.title || i18n("Cost"))
     }
 
     Text {
