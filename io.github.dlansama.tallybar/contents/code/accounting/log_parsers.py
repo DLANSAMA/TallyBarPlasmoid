@@ -46,7 +46,7 @@ _CACHE_SCHEMA_VERSION = 1          # bump to invalidate ALL parse caches at once
 _CLAUDE_PARSE_VERSION = 6
 _CODEX_PARSE_VERSION = 3
 _GROK_PARSE_VERSION = 3
-_GEMINI_PARSE_VERSION = 3
+_GEMINI_PARSE_VERSION = 4
 # The shape of a Claude file's folded state (_claude_state) in the Claude store; bump it
 # on any change to that shape. → tests/test_claude_log_store.py::test_state_shape_is_pinned
 _CLAUDE_STATE_VERSION = 1
@@ -1427,24 +1427,46 @@ def _gemini_session_files(base: Path):
     for dirpath, dirnames, filenames in os.walk(base):
         dirnames[:] = [d for d in dirnames if not d.startswith("antigravity")]
         for fn in filenames:
-            if fn.startswith("session-") and fn.endswith(".json"):
+            if fn.startswith("session-") and fn.endswith((".json", ".jsonl")):
                 yield Path(dirpath) / fn
 
 
-def _parse_gemini_file(path: Path) -> list[dict[str, Any]] | None:
+def _gemini_session_messages(path: Path) -> list[Any] | None:
+    """The messages of a Gemini CLI session: one JSON document (``.json``), or an
+    append-only JSON-lines log (``.jsonl``) that carries a header line, ``$set`` updates
+    and each message again whenever it is amended."""
     try:
         handle = path.open("r", encoding="utf-8", errors="replace")
     except OSError:
         return None
     with handle:
+        if path.suffix == ".jsonl":
+            messages: list[Any] = []
+            for line in handle:
+                try:
+                    messages.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+            return messages
         try:
             session = json.load(handle)
-        except (json.JSONDecodeError, UnicodeDecodeError):
+        except json.JSONDecodeError:
             return []
     if not isinstance(session, dict) or not isinstance(session.get("messages"), list):
         return []
+    return session["messages"]
+
+
+def _parse_gemini_file(path: Path) -> list[dict[str, Any]] | None:
+    """Per-message usage records. A message re-logged under the same ``id`` (the CLI
+    rewrites it as its tool calls land) keeps one record, the one with the most tokens;
+    ``r`` carries the id so the summary can drop a copy held by another file."""
+    messages = _gemini_session_messages(path)
+    if messages is None:
+        return None
     out: list[dict[str, Any]] = []
-    for msg in session["messages"]:
+    by_id: dict[str, int] = {}
+    for msg in messages:
         if not isinstance(msg, dict) or msg.get("type") != "gemini":
             continue
         ts = msg.get("timestamp")
@@ -1453,7 +1475,17 @@ def _parse_gemini_file(path: Path) -> list[dict[str, Any]] | None:
             continue
         if usage_token_total(tokens_data) <= 0:
             continue
-        out.append({"t": ts, "m": msg.get("model"), "u": slim_usage(tokens_data)})
+        rec: dict[str, Any] = {"t": ts, "m": msg.get("model"), "u": slim_usage(tokens_data)}
+        msg_id = msg.get("id")
+        if isinstance(msg_id, str) and msg_id:
+            rec["r"] = msg_id
+            at = by_id.get(msg_id)
+            if at is not None:
+                if usage_token_total(rec["u"]) > usage_token_total(out[at]["u"]):
+                    out[at] = rec
+                continue
+            by_id[msg_id] = len(out)
+        out.append(rec)
     return out
 
 
@@ -1484,12 +1516,18 @@ def local_gemini_token_summary(
     monthly_buckets = empty_monthly_token_buckets(current)
     hourly = empty_hourly_token_buckets(current)
 
+    seen_ids: set[str] = set()
     for record in _cached_log_records(root, "session-*.json", cache_path,
                                        _parse_gemini_file, _GEMINI_PARSE_VERSION,
                                        walker=_gemini_session_files, deadline=deadline):
         timestamp = parse_timestamp(record.get("t") or "")
         if timestamp is None or timestamp < history_start:
             continue
+        msg_id = record.get("r")
+        if msg_id:
+            if msg_id in seen_ids:
+                continue
+            seen_ids.add(msg_id)
         tokens_data = record.get("u")
         if not isinstance(tokens_data, dict):
             continue
