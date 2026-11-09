@@ -34,6 +34,7 @@ from accounting import (
     empty_type_split,
     empty_weekly_token_buckets,
     exact_usd,
+    has_catalog_price,
     hourly_token_usage,
     model_breakdown_rows,
     model_pricing,
@@ -981,6 +982,9 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
     # An entry bills the rate of its own day (``d``); an entry with no date bills today's.
     _default_cache: dict[str | None, dict[str, Any]] = {}
     _price_cache: dict[tuple[str, str | None], dict[str, Any]] = {}
+    # Resolved model names billed at an estimate rather than a catalog row of their own.
+    _estimated: dict[str, bool] = {}
+    unpriced: set[str] = set()
 
     def _prices_for(e: dict[str, Any]) -> dict[str, Any]:
         day = e.get("d") or None
@@ -1002,10 +1006,12 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
             if "claude" in key:
                 spellings.reverse()
             chosen = default_prices
+            _estimated[key] = True
             for cand in spellings:
                 p = model_pricing(cand, day)
                 if p.get("input"):
                     chosen = p
+                    _estimated[key] = not has_catalog_price(cand)
                     break
                 if cand in _EXTRA_MODEL_PRICES:  # catalog miss -> our estimate (e.g. gpt-oss)
                     chosen = _EXTRA_MODEL_PRICES[cand]
@@ -1085,6 +1091,9 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
             mname = _model_family(_resolve_model_display(e, learned=learned_names))
             family_cache[fk] = mname
         if d >= m30_iso:
+            resolved = _resolve_model_key(e, learned_names)
+            if resolved and _estimated.get(_normalize_model_name(resolved)):
+                unpriced.add(_normalize_model_name(resolved))
             month_cost += c
             month_tok += tok
             type_split_add(split_month, split)
@@ -1148,6 +1157,8 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
     line = cost_breakdown_line(*breakdown_from_split(split_month))
     if line:
         result["breakdown"] = line
+    if unpriced:
+        result["unpricedModels"] = sorted(unpriced)
     return result
 
 

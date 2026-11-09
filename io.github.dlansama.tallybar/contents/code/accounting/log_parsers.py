@@ -990,6 +990,17 @@ def _claude_state_in_window(path: Path, off: int, state: dict[str, Any],
                           if (t := _epoch_seconds(r["t"])) is not None and t >= window_start])
 
 
+def _with_unpriced(summary: dict[str, Any] | None, models: Any) -> dict[str, Any] | None:
+    """``summary`` with ``unpricedModels`` naming each of ``models`` that has no price of
+    its own (one newer than both the live catalog and the embedded fallback, billed at a
+    sibling's or the family default's rate), so build_snapshot can surface it as a
+    diagnostic rather than mis-price it silently."""
+    unpriced = sorted(m for m in models if not has_catalog_price(m))
+    if summary is not None and unpriced:
+        summary["unpricedModels"] = unpriced
+    return summary
+
+
 def local_claude_token_summary(
     projects_dir: Path | None = None,
     now: dt.datetime | None = None,
@@ -1109,13 +1120,7 @@ def local_claude_token_summary(
                             model_costs_7d=buckets_model_costs(daily),
                             model_costs_1d=daily.get(today.isoformat(), {}).get("models"),
                             estimated_output_tokens=estimated_output)
-    # A model with no price of its own (one newer than both the live catalog and the
-    # embedded fallback) is billed at the claude-sonnet-4 family default. Name it, so
-    # build_snapshot can surface it as a diagnostic rather than mis-price it silently.
-    unpriced = sorted(m for m in model_costs if not has_catalog_price(m))
-    if summary is not None and unpriced:
-        summary["unpricedModels"] = unpriced
-    return summary
+    return _with_unpriced(summary, model_costs)
 
 
 def local_codex_token_summary(
@@ -1178,15 +1183,16 @@ def local_codex_token_summary(
             type_split_add(split_today, split)
             bucket_add(hourly[timestamp.hour], tokens, cost, model)
 
-    return token_summary(today_tokens, month_tokens, "local-codex-logs", today_cost, month_cost, tier,
-                         now=current,
-                         type_split={"today": split_today, "7d": split_week, "30d": split_month},
-                         daily=weekly_token_usage(daily),
-                         monthly=monthly_token_usage(monthly_buckets),
-                         hourly=hourly_token_usage(hourly),
-                         model_costs=model_costs,
-                         model_costs_7d=buckets_model_costs(daily),
-                         model_costs_1d=daily.get(today.isoformat(), {}).get("models"))
+    summary = token_summary(today_tokens, month_tokens, "local-codex-logs", today_cost, month_cost, tier,
+                            now=current,
+                            type_split={"today": split_today, "7d": split_week, "30d": split_month},
+                            daily=weekly_token_usage(daily),
+                            monthly=monthly_token_usage(monthly_buckets),
+                            hourly=hourly_token_usage(hourly),
+                            model_costs=model_costs,
+                            model_costs_7d=buckets_model_costs(daily),
+                            model_costs_1d=daily.get(today.isoformat(), {}).get("models"))
+    return _with_unpriced(summary, model_costs)
 
 
 def _load_grok_session_models(sessions_dir: Path | None = None) -> dict[str, str]:
@@ -1253,6 +1259,7 @@ def local_grok_token_summary(
     hourly = empty_hourly_token_buckets(current)
     week_tokens_billing = 0
     week_cost_billing = 0.0
+    grok_priced: set[str] = set()
     live_days: dict[str, dict[str, Any]] = {}
 
     seen: set[str] = set()
@@ -1265,7 +1272,7 @@ def local_grok_token_summary(
         sessions_root = Path.home() / ".grok" / "sessions"
     session_models = _load_grok_session_models(sessions_root)
 
-    rows: list[tuple[dt.datetime, str, Any, str]] = []
+    rows: list[tuple[dt.datetime, str, Any, str, str]] = []
     live_week: dict[str, list[Any]] = {}
     for record in _cached_log_records(root, "unified.jsonl*", cache_path,
                                        _parse_grok_file, _GROK_PARSE_VERSION,
@@ -1284,11 +1291,12 @@ def local_grok_token_summary(
             raw_model = session_models.get(sid)
         display_model = _display_grok_model(raw_model)
         day_key = timestamp.date().isoformat()
-        split = usage_split(record["u"], _grok_cli_pricing_model(raw_model or display_model), day_key)
+        pricing_model = _grok_cli_pricing_model(raw_model or display_model)
+        split = usage_split(record["u"], pricing_model, day_key)
         if split.tokens <= 0:
             continue
         tokens, cost = split.tokens, split.cost
-        rows.append((timestamp, day_key, split, display_model))
+        rows.append((timestamp, day_key, split, display_model, pricing_model))
         lrec = live_days.setdefault(day_key, {"tokens": 0, "cost": 0.0, "in": 0, "out": 0,
                                               "cached": 0, "types": empty_type_split(),
                                               "models": {}})
@@ -1325,13 +1333,14 @@ def local_grok_token_summary(
             archived = {}
     archive_wins = {day for day in archived if day in live_days}
 
-    for timestamp, day_key, split, display_model in rows:
+    for timestamp, day_key, split, display_model, pricing_model in rows:
         tokens, cost = split.tokens, split.cost
         if timestamp.date() == today:
             bucket_add(hourly[timestamp.hour], tokens, cost, display_model)
         if day_key in archive_wins:
             continue
         if timestamp.date() >= first_day:
+            grok_priced.add(pricing_model)
             month_tokens += tokens
             month_cost += cost
             type_split_add(split_month, split)
@@ -1404,6 +1413,8 @@ def local_grok_token_summary(
                             model_costs=model_costs,
                             model_costs_7d=buckets_model_costs(daily),
                             model_costs_1d=daily.get(today.isoformat(), {}).get("models"))
+    # Priced by the CLI's pricing model, not the display name the breakdown groups under.
+    _with_unpriced(summary, grok_priced)
     if summary is not None and week_start is not None:
         summary["billingWeekTokens"] = int(week_tokens_billing)
         summary["billingWeekCost"] = round(float(week_cost_billing), 6)
@@ -1632,12 +1643,13 @@ def local_gemini_token_summary(
             type_split_add(split_today, split)
             bucket_add(hourly[timestamp.hour], tokens, cost, model)
 
-    return token_summary(today_tokens, month_tokens, "local-gemini-logs", today_cost, month_cost, tier,
-                         now=current,
-                         type_split={"today": split_today, "7d": split_week, "30d": split_month},
-                         daily=weekly_token_usage(daily),
-                         monthly=monthly_token_usage(monthly_buckets),
-                         hourly=hourly_token_usage(hourly),
-                         model_costs=model_costs,
-                         model_costs_7d=buckets_model_costs(daily),
-                         model_costs_1d=daily.get(today.isoformat(), {}).get("models"))
+    summary = token_summary(today_tokens, month_tokens, "local-gemini-logs", today_cost, month_cost, tier,
+                            now=current,
+                            type_split={"today": split_today, "7d": split_week, "30d": split_month},
+                            daily=weekly_token_usage(daily),
+                            monthly=monthly_token_usage(monthly_buckets),
+                            hourly=hourly_token_usage(hourly),
+                            model_costs=model_costs,
+                            model_costs_7d=buckets_model_costs(daily),
+                            model_costs_1d=daily.get(today.isoformat(), {}).get("models"))
+    return _with_unpriced(summary, model_costs)
