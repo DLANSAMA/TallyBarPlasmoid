@@ -18,6 +18,7 @@ function compactCount(value) {
     let amount = Math.max(0, Math.round(Number(value || 0)));
     if (!isFinite(amount)) return "0";
     const units = [
+        { div: 1e12, suffix: "T" },
         { div: 1e9, suffix: "B" },
         { div: 1e6, suffix: "M" },
         { div: 1e3, suffix: "K" }
@@ -25,7 +26,9 @@ function compactCount(value) {
     for (let i = 0; i < units.length; ++i) {
         const u = units[i];
         if (amount >= u.div) {
-            let n = amount / u.div;
+            const n = amount / u.div;
+            // The top tier has nowhere to carry to: "1000T" stays "1000T".
+            const top = i === 0;
 
             if (u.suffix === "K") {
                 let rounded = Math.round(n);
@@ -38,7 +41,7 @@ function compactCount(value) {
 
             if (n >= 100) {
                 let rounded = Math.round(n);
-                if (rounded >= 1000) {
+                if (rounded >= 1000 && !top) {
                     amount = Math.round(amount / u.div) * u.div;
                     return compactCount(amount);
                 }
@@ -47,7 +50,7 @@ function compactCount(value) {
 
             if (n >= 10) {
                 let formatted = trimDecimals(n.toFixed(1));
-                if (Number(formatted) >= 100) {
+                if (Number(formatted) >= 100 && !top) {
                     amount = Math.round(amount / u.div) * u.div;
                     return compactCount(amount);
                 }
@@ -55,7 +58,7 @@ function compactCount(value) {
             }
 
             let formatted = trimDecimals(n.toFixed(2));
-            if (Number(formatted) >= 10) {
+            if (Number(formatted) >= 10 && !top) {
                 amount = Math.round(amount / u.div) * u.div;
                 return compactCount(amount);
             }

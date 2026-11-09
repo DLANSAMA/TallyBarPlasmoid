@@ -24,12 +24,13 @@ def test_compact_token_count():
 
 
 def test_compact_token_count_fixed_point_at_1e12_does_not_recurse():
-    """999_500_000_000 rounds to n=1000 at the "B" tier, the largest unit — there's no
-    bigger tier to carry into. Recursing into compact_token_count(1e12) round-trips to the
-    SAME value (a numeric fixed point), so it must format directly against "B" instead."""
-    assert accounting.compact_token_count(999_500_000_000) == "1000B"
-    assert accounting.compact_token_count(10**12) == "1000B"
-    assert accounting.compact_token_count(5_000_000_000_000) == "5000B"
+    """999_500_000_000 rounds to n=1000 at the "B" tier and carries into "T", the largest
+    unit. Past it there is nowhere to carry: 1000T would round-trip to the SAME value (a
+    numeric fixed point), so the top tier formats directly instead of recursing."""
+    assert accounting.compact_token_count(999_500_000_000) == "1T"
+    assert accounting.compact_token_count(10**12) == "1T"
+    assert accounting.compact_token_count(5_000_000_000_000) == "5T"
+    assert accounting.compact_token_count(10**18) == "1000000T"
 
 def test_exact_usd():
     assert accounting.exact_usd(0.0) == "$0.00"

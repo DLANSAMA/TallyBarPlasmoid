@@ -20,7 +20,7 @@ def parse_timestamp(value: Any) -> dt.datetime | None:
     return parsed.astimezone()
 
 
-_COUNT_TIERS = ((1_000, "K"), (1_000_000, "M"), (1_000_000_000, "B"))
+_COUNT_TIERS = ((1_000, "K"), (1_000_000, "M"), (1_000_000_000, "B"), (1_000_000_000_000, "T"))
 
 
 def _format_in_tier(amount: int, div: int, suffix: str) -> tuple[str, int | None]:
