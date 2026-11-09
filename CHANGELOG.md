@@ -8,7 +8,7 @@ Notable changes to TallyBar. Format follows
 
 ### Fixed
 - The Codex tab showed no numbers on `codex` 0.167 and newer, which no longer accept the `untrusted`
-  approval setting TallyBar asked for. TallyBar now starts it with `never`, which every release accepts.
+  approval setting TallyBar asked for. TallyBar now starts it with `never`, which current releases accept.
 
 ### Added
 - The Claude tab can read its limits with Claude Code's own sign-in when the browser
