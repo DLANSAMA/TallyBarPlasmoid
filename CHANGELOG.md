@@ -6,6 +6,10 @@ Notable changes to TallyBar. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- The Codex tab showed no numbers on `codex` 0.167 and newer, which no longer accept the `untrusted`
+  approval setting TallyBar asked for. TallyBar now starts it with `never`, which every release accepts.
+
 ### Added
 - The Claude tab can read its limits with Claude Code's own sign-in when the browser
   route has nothing: no claude.ai cookie, a locked KWallet, a rejected session, or
