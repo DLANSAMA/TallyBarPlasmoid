@@ -35,7 +35,7 @@ def _reference_summary(root: Path, now: dt.datetime):
     order: the definition the cached states must reproduce."""
     current = now.astimezone()
     today = current.date()
-    thirty_days_ago = (current - dt.timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
+    thirty_days_ago = dt.datetime.combine(current.date() - dt.timedelta(days=29), dt.time.min).astimezone()
     month_start = current.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     history_start = min(thirty_days_ago, month_start)
     today_tokens = month_tokens = 0
@@ -165,7 +165,7 @@ def _summary(root, cache=None):
 def test_cached_states_reproduce_the_record_level_fold(tmp_path, seed):
     root = tmp_path / "projects"
     current = _NOW.astimezone()
-    edge = min((current - dt.timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0),
+    edge = min(dt.datetime.combine(current.date() - dt.timedelta(days=29), dt.time.min).astimezone(),
                current.replace(day=1, hour=0, minute=0, second=0, microsecond=0))
     _write_history(root, seed, edge)
     cache = tmp_path / "cache"
@@ -189,7 +189,7 @@ def test_window_straddling_message_counts_only_its_lines_inside_the_window(tmp_p
     root = tmp_path / "projects"
     root.mkdir()
     current = _NOW.astimezone()
-    edge = min((current - dt.timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0),
+    edge = min(dt.datetime.combine(current.date() - dt.timedelta(days=29), dt.time.min).astimezone(),
                current.replace(day=1, hour=0, minute=0, second=0, microsecond=0))
     rng = random.Random(1)
     # The line before the window start has the most output; only the one after it counts.

@@ -1005,7 +1005,10 @@ def local_claude_token_summary(
 
     current = now.astimezone() if now is not None else dt.datetime.now(dt.timezone.utc).astimezone()
     today = current.date()
-    thirty_days_ago = (current - dt.timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
+    # "Last 30 days" = 30 local calendar dates including today. Counting dates rather than
+    # subtracting a timedelta from now keeps it 30 across a DST change.
+    # → tests/test_log_windows.py
+    thirty_days_ago = dt.datetime.combine(today - dt.timedelta(days=29), dt.time.min).astimezone()
     current_month_start = current.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     history_start = min(thirty_days_ago, current_month_start)
     today_tokens = 0
@@ -1129,7 +1132,10 @@ def local_codex_token_summary(
 
     current = now.astimezone() if now is not None else dt.datetime.now(dt.timezone.utc).astimezone()
     today = current.date()
-    thirty_days_ago = (current - dt.timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
+    # "Last 30 days" = 30 local calendar dates including today. Counting dates rather than
+    # subtracting a timedelta from now keeps it 30 across a DST change.
+    # → tests/test_log_windows.py
+    thirty_days_ago = dt.datetime.combine(today - dt.timedelta(days=29), dt.time.min).astimezone()
     current_month_start = current.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     history_start = min(thirty_days_ago, current_month_start)
     today_tokens = 0
@@ -1229,7 +1235,10 @@ def local_grok_token_summary(
 
     current = now.astimezone() if now is not None else dt.datetime.now(dt.timezone.utc).astimezone()
     today = current.date()
-    thirty_days_ago = (current - dt.timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
+    # "Last 30 days" = 30 local calendar dates including today. Counting dates rather than
+    # subtracting a timedelta from now keeps it 30 across a DST change.
+    # → tests/test_log_windows.py
+    thirty_days_ago = dt.datetime.combine(today - dt.timedelta(days=29), dt.time.min).astimezone()
     current_month_start = current.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     history_start = min(thirty_days_ago, current_month_start)
     first_day = thirty_days_ago.date()
@@ -1567,7 +1576,10 @@ def local_gemini_token_summary(
 
     current = now.astimezone() if now is not None else dt.datetime.now(dt.timezone.utc).astimezone()
     today = current.date()
-    thirty_days_ago = (current - dt.timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
+    # "Last 30 days" = 30 local calendar dates including today. Counting dates rather than
+    # subtracting a timedelta from now keeps it 30 across a DST change.
+    # → tests/test_log_windows.py
+    thirty_days_ago = dt.datetime.combine(today - dt.timedelta(days=29), dt.time.min).astimezone()
     current_month_start = current.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     history_start = min(thirty_days_ago, current_month_start)
     today_tokens = 0
