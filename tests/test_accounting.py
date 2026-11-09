@@ -1638,6 +1638,15 @@ def _claude_line(i, out_tokens=10):
     })
 
 
+def _keyless_line(i):
+    """A usage line with no requestId, message id or uuid: it is never deduplicated."""
+    return json.dumps({
+        "type": "assistant", "timestamp": "2026-09-05T10:00:00Z",
+        "message": {"model": "claude-opus-4-5",
+                    "usage": {"input_tokens": 300 + i, "output_tokens": 7}},
+    })
+
+
 def _run(tmp_path, cache_dir):
     """One _cached_claude_states pass over tmp_path; the state of its one file."""
     [(_path, _off, state)] = _lp._cached_claude_states(tmp_path, cache_dir / "claude_logs.json")
@@ -1669,6 +1678,21 @@ def test_incremental_tail_parse_matches_cold_parse(tmp_path):
 
     assert incremental == _state(f), "tail parse diverged from a cold parse"
     assert len(incremental["g"]) == 12
+
+
+def test_incremental_tail_parse_counts_keyless_lines_once(tmp_path):
+    logs, cache = tmp_path / "logs", tmp_path / "cache"
+    logs.mkdir(); cache.mkdir()
+    f = logs / "session.jsonl"
+    f.write_text("\n".join([_claude_line(0), _keyless_line(1), _keyless_line(2)]) + "\n")
+    assert len(_run(logs, cache)["k"]) == 2
+
+    with f.open("a") as handle:
+        handle.write("\n".join([_keyless_line(3), _claude_line(4), _keyless_line(5)]) + "\n")
+    _bump_mtime(f)
+    out = _run(logs, cache)
+    assert out == _state(f)
+    assert [row[2]["input_tokens"] for row in out["k"]] == [301, 302, 303, 305]
 
 
 def test_incremental_handles_a_torn_trailing_line(tmp_path):

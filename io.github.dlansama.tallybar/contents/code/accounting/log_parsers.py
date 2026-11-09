@@ -476,7 +476,6 @@ class _ClaudeLogStore:
         dirty: set[int] = set()
         hot_dirty = self.hot_dirty or changed
         if complete:
-            # Deleted transcripts leave the store; an unreadable shard is rewritten whole.
             dirty |= self.bad_shards
             for key, index in self.found_in.items():
                 if key not in entries:

@@ -117,7 +117,7 @@ def _reference_summary(root: Path, now: dt.datetime):
                          estimated_output_tokens=estimated_output)
 
 
-def _line(rng, ts, key=None, out=None, final=None, model=None):
+def _line(rng, ts, key=None, out=None, final=None, model=None, keyless=False):
     usage = {"input_tokens": rng.randint(1, 50), "output_tokens": out if out is not None else rng.randint(1, 900),
              "cache_read_input_tokens": rng.choice([0, rng.randint(1_000, 190_000)]),
              "cache_creation_input_tokens": rng.randint(0, 9_000)}
@@ -127,8 +127,11 @@ def _line(rng, ts, key=None, out=None, final=None, model=None):
         message["id"] = key
     if final:
         message["stop_reason"] = "end_turn"
-    return json.dumps({"type": "assistant", "timestamp": ts.isoformat().replace("+00:00", "Z"),
-                       "uuid": f"u{rng.randrange(10 ** 9)}", "message": message})
+    record = {"type": "assistant", "timestamp": ts.isoformat().replace("+00:00", "Z"),
+              "uuid": f"u{rng.randrange(10 ** 9)}", "message": message}
+    if keyless:
+        del record["uuid"]
+    return json.dumps(record)
 
 
 def _write_history(root: Path, seed: int, window_edge: dt.datetime) -> None:
@@ -422,9 +425,10 @@ def test_merging_states_equals_folding_the_joined_records(tmp_path):
     for i in range(80):
         lines.append(_line(rng, _NOW - dt.timedelta(seconds=rng.randint(0, 999)),
                            key=rng.choice(["a", "b", "c", None]), out=rng.choice([3, 3, 9, None]),
-                           final=rng.random() < 0.2))
+                           final=rng.random() < 0.2, keyless=rng.random() < 0.3))
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     records = lp._parse_claude_file(path)
+    assert sum(1 for r in records if not r["r"]) > 5
     for cut in range(0, len(records) + 1, 7):
         merged = lp._merge_claude_state(lp._claude_state(records[:cut]), lp._claude_state(records[cut:]))
         assert merged == lp._claude_state(records)
@@ -436,8 +440,40 @@ def test_state_shape_is_pinned(tmp_path):
     sub.mkdir(parents=True)
     path = sub / "agent.jsonl"
     path.write_text("\n".join(_line(rng, _NOW, key=k, final=f) for k, f in
-                              (("a", False), ("a", False), ("b", True), (None, False))) + "\n")
+                              (("a", False), ("a", False), ("b", True), (None, False))) + "\n"
+                              + _line(rng, _NOW, keyless=True) + "\n")
     state = json.loads(json.dumps(lp._claude_state(lp._parse_claude_file(path))))
+    assert len(state["k"]) == 1
     digest = hashlib.sha256(json.dumps(state, sort_keys=True).encode()).hexdigest()[:16]
-    assert (lp._CLAUDE_STATE_VERSION, digest) == (1, "e57387ed17d1f223"), (
+    assert (lp._CLAUDE_STATE_VERSION, digest) == (1, "1cf56fded8a9c177"), (
         f"_claude_state output changed (now {digest}): bump _CLAUDE_STATE_VERSION and repin")
+
+
+def _append_keyless(path, rng, n=1):
+    with path.open("a", encoding="utf-8") as handle:
+        for _ in range(n):
+            handle.write(_line(rng, _NOW, keyless=True) + "\n")
+    os.utime(path, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns + 10 ** 9))
+
+
+def test_a_stale_hot_delta_of_keyless_lines_is_not_applied_twice(tmp_path, monkeypatch):
+    """Keyless lines are not deduplicated, so a delta re-applied to a cold entry that
+    already holds its lines would double them."""
+    root = _project(tmp_path, sessions=2)
+    cache = tmp_path / "cache"
+    target = root / "proj" / "sess1.jsonl"
+    with patch("accounting.pricing.model_pricing", return_value=_PRICES):
+        monkeypatch.setattr(lp, "_CLAUDE_HOT_LIMIT", 1)
+        _summary(root, cache)
+        monkeypatch.setattr(lp, "_CLAUDE_HOT_LIMIT", 256 * 1024)
+        rng = random.Random(8)
+        _append_keyless(target, rng, 2)
+        assert _summary(root, cache) == _reference_summary(root, _NOW)   # delta in the hot file
+        stale_hot = (cache / "claude_logs.hot.json").read_text()
+        assert '"base"' in stale_hot
+        _append_keyless(target, rng, 2)
+        monkeypatch.setattr(lp, "_CLAUDE_HOT_LIMIT", 1)
+        _summary(root, cache)                                  # folded into the shard
+        (cache / "claude_logs.hot.json").write_text(stale_hot)  # as if the hot write was lost
+        monkeypatch.setattr(lp, "_CLAUDE_HOT_LIMIT", 256 * 1024)
+        assert _summary(root, cache) == _reference_summary(root, _NOW)
