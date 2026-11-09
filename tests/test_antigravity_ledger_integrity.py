@@ -315,6 +315,94 @@ def test_marker_check_retries_after_a_deadline_cut(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# CLI ownership flip and steps re-ingest
+# ---------------------------------------------------------------------------
+
+def _step_blob(secs: int, **usage) -> bytes:
+    """A steps.metadata row: createdAt Timestamp at field 1, the usage record nested at 9."""
+    return _ld(1, _field(1, secs)) + _ld(9, _usage(24, **usage))
+
+
+def _cli_session(monkeypatch, tmp_path, harvest):
+    conv = tmp_path / "antigravity-cli" / "conversations"
+    conv.mkdir(parents=True)
+    days = ["2026-06-05", "2026-06-06", "2026-06-07"]
+    _make_db(conv / "sess.db", steps=[(i, _step_blob(_noon(d), u=100 + i)) for i, d in enumerate(days)])
+    _set_mtime(conv / "sess.db", "2026-06-08")
+    _wire(monkeypatch, tmp_path, conv, harvest=harvest)
+    _write_ledger(tmp_path, rpcWatermarks={"sess": "2026-06-07T10:00:00Z"}, entries={
+        f"sess#{i}": {"d": d, "h": 12, "u": 100 + i, "c": 0, "o": 80, "me": 1132}
+        for i, d in enumerate(days)})
+    return days
+
+
+def test_cli_stem_flip_keeps_each_rows_own_day(monkeypatch, tmp_path):
+    days = _cli_session(monkeypatch, tmp_path, None)
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert {k: e["d"] for k, e in res["entries"].items()} == \
+        {f"sess:{i}": d for i, d in enumerate(days)}
+
+
+@pytest.mark.parametrize("harvest", [
+    agmod.RpcHarvest(listing_complete=False),          # a server could not be listed
+    agmod.RpcHarvest(listed={"sess"}),                 # listed, but its metadata call failed
+])
+def test_cli_stem_does_not_flip_on_a_failed_listing(monkeypatch, tmp_path, harvest):
+    _cli_session(monkeypatch, tmp_path, lambda *a, **k: harvest)
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert sorted(res["entries"]) == ["sess#0", "sess#1", "sess#2"]
+
+
+def test_harvest_reports_an_unlisted_server(monkeypatch):
+    monkeypatch.setattr(agmod, "find_antigravity_processes", lambda: [(1, "tok", "http")])
+    monkeypatch.setattr(agmod, "antigravity_ports", lambda pid: ([1234], ""))
+
+    def refused(*_a, **_k):
+        raise ConnectionRefusedError
+
+    monkeypatch.setattr(agmod, "_post_local_rpc", refused)
+    assert agmod.collect_antigravity_rpc_usage(1.0).listing_complete is False
+    calls: list = []
+    _stub_language_server(monkeypatch, {"a": _LMT, "b": _LMT}, [], calls)
+    harvest = agmod.collect_antigravity_rpc_usage(1.0, known={"a": _LMT})
+    assert (harvest.listed, harvest.listing_complete) == ({"a", "b"}, True)
+
+
+def test_pruned_steps_rows_are_not_reingested(monkeypatch, tmp_path):
+    conv = tmp_path / "convs"
+    conv.mkdir()
+    db = conv / "cas.db"
+    _make_db(db, steps=[(0, _usage(24, u=11)), (1, _usage(24, u=22))])   # no step timestamps
+    _set_mtime(db, "2026-06-08")
+    _wire(monkeypatch, tmp_path, conv)
+    _write_ledger(tmp_path, entries={
+        "cas:0": {"d": "2026-04-20", "u": 11, "c": 30, "o": 80, "me": 1132},   # past the horizon
+        "cas:1": {"d": "2026-06-08", "u": 22, "c": 30, "o": 80, "me": 1132},
+    })
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert sorted(res["entries"]) == ["cas:1"]
+    con = sqlite3.connect(str(db))
+    con.execute("INSERT INTO steps (idx, metadata) VALUES (2, ?)", (_usage(24, u=33),))
+    con.commit()
+    con.close()
+    _set_mtime(db, "2026-06-09")
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert sorted(res["entries"]) == ["cas:1", "cas:2"]
+
+
+def test_old_timestamped_steps_rows_are_never_ingested(monkeypatch, tmp_path):
+    conv = tmp_path / "convs"
+    conv.mkdir()
+    _make_db(conv / "cas.db", steps=[(0, _step_blob(_noon("2026-04-20"), u=11)),
+                                     (1, _step_blob(_noon("2026-06-07"), u=22))])
+    _set_mtime(conv / "cas.db", "2026-06-08")
+    _wire(monkeypatch, tmp_path, conv)
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert {k: e["d"] for k, e in res["entries"].items()} == {"cas:1": "2026-06-07"}
+    assert res["stepsPruned"] == {"cas": 0}
+
+
+# ---------------------------------------------------------------------------
 # The 30-day window
 # ---------------------------------------------------------------------------
 

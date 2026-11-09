@@ -168,6 +168,24 @@ def _dedupe_usage_records(found: list[dict[int, int]]) -> list[dict[int, int]]:
     return out
 
 
+def _pb_step_secs(buf: bytes) -> int | None:
+    """Creation time (unix seconds) of a ``steps.metadata`` blob, else ``None``.
+
+    The step's ``createdAt`` is a ``google.protobuf.Timestamp`` at metadata field 1, seconds
+    in its field 1 — the same instant the language server's GetCascadeTrajectorySteps reply
+    names ``metadata.createdAt``. A blob whose field 1 is not a message holding a plausible
+    epoch second (2001..2286, so a model enum or token count read from another layout can't
+    pass) has no timestamp.
+    """
+    _, subs = _pb_fields(buf)
+    for fn, sub in subs:
+        if fn == 1:
+            va, _ = _pb_fields(sub)
+            secs = va.get(1)
+            return secs if isinstance(secs, int) and 1_000_000_000 <= secs < 10_000_000_000 else None
+    return None
+
+
 def _pb_generations(buf: bytes, require_timestamp: bool = True) -> list[dict[str, Any]]:
     """Extract per-generation usage from a ``gen_metadata.data`` blob.
 

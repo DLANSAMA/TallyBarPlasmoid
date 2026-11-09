@@ -80,6 +80,9 @@ ANTIGRAVITY_RETENTION_DAYS = 35
 _DATED_FROM_MODIFIED = "dlm"
 # Ledger flag: stored '@' entries have been checked for marker-24 duplicates.
 _AT_MARKERS_CHECKED = "atMarkersChecked"
+# Ledger map {stem: highest steps idx past the retention horizon}; the steps scan never
+# ingests a row at or below it.
+_STEPS_PRUNED = "stepsPruned"
 # compute_local_cost_summaries' map entry naming each provider whose summary raised:
 # {provider: "<ExceptionClass>: <message>"}. Present only when one did; not a provider.
 COST_SUMMARY_ERRORS_KEY = "_errors"
@@ -109,6 +112,7 @@ from proto_wire import (  # noqa: F401
     _pb_find_usage,
     _pb_generations,
     _pb_read_varint,
+    _pb_step_secs,
     USAGE_CACHED,
     USAGE_INPUT,
     USAGE_MODEL,
@@ -257,15 +261,16 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
        (history / LS not running); skipped for any conversation the RPC already covers.
 
     Each entry is keyed per generation (dedup-safe), so re-scanning never double-counts. RPC entries
-    are dated by ``createdAt`` (or their first step's), else their cascade's lastModifiedTime; steps-pass entries get today for a stem already holding ``:`` entries,
-    else the DB mtime; the ``gen_metadata`` pass (``<stem>@<idx>.<gi>``) uses embedded protobuf timestamps.
+    are dated by ``createdAt`` (or their first step's), else their cascade's lastModifiedTime. Both
+    disk passes use embedded protobuf timestamps; a steps row without one gets today for a stem
+    already holding ``:`` entries, else the DB mtime.
 
     An exclusive file lock (fcntl.flock) protects the read-modify-write cycle against concurrent
     executions (e.g. overlapping widget refreshes).
     """
     import fcntl
 
-    from .antigravity import _rpc_local_date, collect_antigravity_rpc_usage
+    from .antigravity import RpcHarvest, _rpc_local_date, collect_antigravity_rpc_usage
 
     current = now.astimezone() if now is not None else dt.datetime.now(dt.timezone.utc).astimezone()
     today_iso = current.date().isoformat()
@@ -352,9 +357,9 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
         known = {k: v for k, v in marks.items() if k not in hourless_stems}
         try:
             harvest = collect_antigravity_rpc_usage(4.0, known=known, deadline=deadline)
-            rpc_usage, live_marks, learned_placeholders = harvest.usage, harvest.marks, harvest.learned_names
         except Exception:
-            rpc_usage, live_marks, learned_placeholders = {}, {}, {}
+            harvest = RpcHarvest(listing_complete=False)
+        rpc_usage, live_marks, learned_placeholders = harvest.usage, harvest.marks, harvest.learned_names
         rpc_covered: set[str] = set()
         for cascade_id, records in rpc_usage.items():
             rpc_covered.add(cascade_id)
@@ -459,6 +464,14 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
         old_memo = ledger.get("dbScanned")
         old_memo = old_memo if isinstance(old_memo, dict) else {}
         seen_memo: dict[str, str] = {}
+        # Per-stem highest steps idx known to be past the retention horizon (pruned, or
+        # skipped for age). Additive ledger key, change-gated like dbScanned.
+        old_pruned_raw = ledger.get(_STEPS_PRUNED)
+        old_pruned: dict[str, int] = {
+            k: v for k, v in (old_pruned_raw.items() if isinstance(old_pruned_raw, dict) else ())
+            if isinstance(v, int)}
+        new_pruned: dict[str, int] = dict(old_pruned)
+        visited_stems: set[str] = set()
         for conv_dir in ANTIGRAVITY_CONVERSATION_DIRS:
             if deadline_passed(deadline):
                 break
@@ -468,10 +481,15 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                 if deadline_passed(deadline):
                     break
                 stem = db_path.stem
+                visited_stems.add(stem)
                 force_scan = False
                 if stem in rpc_stems:
+                    # A server that could not be listed this run may be serving this very
+                    # cascade: only a complete listing proves the session is gone.
+                    # → tests/test_antigravity_ledger_integrity.py::test_cli_stem_does_not_flip_on_a_failed_listing
                     if (conv_dir.parent.name != "antigravity-cli"
-                            or stem in live_marks or stem in rpc_covered):
+                            or stem in live_marks or stem in rpc_covered
+                            or stem in harvest.listed or not harvest.listing_complete):
                         continue  # RPC is authoritative for this conversation
                     # ...but a CLI cascade NOT listed by any live language server can
                     # never be re-harvested: agy's RPC server is in-process and died
@@ -483,7 +501,8 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                     # — double-count). The stale watermark drops in the merge below
                     # (stem no longer '#'-entry-bearing). If agy later resumes this
                     # exact conversation, the RPC re-harvest purges ':' and takes the
-                    # stem back — ownership follows liveness.
+                    # stem back — ownership follows liveness. The rescan dates each row by
+                    # its own step timestamp, so the session keeps its real days.
                     for key in [k for k in entries if k.startswith(f"{stem}#")]:
                         del entries[key]
                         changed = True
@@ -496,7 +515,9 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                     seen_memo[stem] = sig
                     continue
                 db_ok = True   # any sqlite failure below blocks this run's memo
-                # Backlog dating for the steps pass (mirrors the gen pass below).
+                # A row carries its own step timestamp (_pb_step_secs) and is dated by it.
+                # Without one: today for a stem already holding ':' entries, else the DB
+                # mtime (a first-scan backlog, mirroring the gen pass below).
                 if stem in colon_stems:
                     steps_date = today_iso
                 else:
@@ -507,11 +528,16 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                     if steps_date < cutoff:
                         continue  # whole-DB backlog already past the prune horizon (see above)
                 # Read indices only, drop seen keys, fetch ONLY unseen blobs (see _read_rows).
+                # Rows at or below the stem's highest pruned index were pruned for age (or
+                # are older still): they never come back as new.
+                # → tests/test_antigravity_ledger_integrity.py::test_pruned_steps_rows_are_not_reingested
+                pruned_floor = old_pruned.get(stem, -1)
                 new_idx = []
                 try:
                     new_idx = [i for (i,) in _read_rows(
                         db_path, "SELECT idx FROM steps WHERE metadata IS NOT NULL")
-                        if f"{stem}:{i}" not in entries]
+                        if f"{stem}:{i}" not in entries
+                        and not (isinstance(i, int) and i <= pruned_floor)]
                 except sqlite3.Error:
                     db_ok = False
 
@@ -535,8 +561,14 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                         found = _dedupe_usage_records(_pb_find_usage(bytes(blob)))
                         if not found:
                             continue
+                        step_secs = _pb_step_secs(bytes(blob))
+                        row_date = (_local_iso(step_secs) if step_secs else None) or steps_date
+                        if row_date < cutoff:
+                            if isinstance(idx, int):
+                                new_pruned[stem] = max(new_pruned.get(stem, -1), idx)
+                            continue
                         entries[f"{stem}:{idx}"] = {
-                            "d": steps_date,
+                            "d": row_date,
                             "u": sum(vd.get(USAGE_INPUT, 0) for vd in found),
                             "c": sum(vd.get(USAGE_CACHED, 0) for vd in found),
                             "o": sum(vd.get(USAGE_OUTPUT, 0) for vd in found),
@@ -679,6 +711,18 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
             if e.get("d", "") < cutoff:
                 del entries[key]
                 changed = True
+                if ":" in key:
+                    stem, idx_str = key.rsplit(":", 1)
+                    if idx_str.isdigit():
+                        new_pruned[stem] = max(new_pruned.get(stem, -1), int(idx_str))
+        # A complete scan drops the floors of DBs that are gone; a cut one keeps them all.
+        if scan_complete:
+            live_colon_stems = {k.rsplit(":", 1)[0] for k in entries if ":" in k}
+            new_pruned = {k: v for k, v in new_pruned.items()
+                          if k in visited_stems or k in live_colon_stems}
+        if new_pruned != old_pruned:
+            ledger[_STEPS_PRUNED] = new_pruned
+            changed = True
 
         # Merge + prune watermarks AFTER the entry prune: keep marks only for cascades live
         # this run or with persisted ``#`` entries. The ``new_marks != marks`` gate is

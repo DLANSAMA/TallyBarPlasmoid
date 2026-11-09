@@ -553,10 +553,17 @@ class RpcHarvest:
     ``learned_names``: every ``MODEL_PLACEHOLDER_M<N>`` -> displayName pair the
     ``GetAvailableModels`` call(s) returned, i.e. the exact picker names for every model
     CURRENTLY on offer, not just ones with usage this run.
+    ``listed``: every cascade id a language server listed, queried or not — the cascades
+    that are alive right now.
+    ``listing_complete``: False when some running server could not be listed (no port,
+    every probe failed, the deadline cut the loop), so a cascade missing from ``listed``
+    may still be alive.
     """
     usage: dict[str, list[dict[str, Any]]] = dataclasses.field(default_factory=dict)
     marks: dict[str, str] = dataclasses.field(default_factory=dict)
     learned_names: dict[str, str] = dataclasses.field(default_factory=dict)
+    listed: set[str] = dataclasses.field(default_factory=set)
+    listing_complete: bool = True
 
 
 def _cascade_step_times(base: str, token: str, cascade_id: str, timeout: float,
@@ -615,11 +622,15 @@ def collect_antigravity_rpc_usage(
     out: dict[str, list[dict[str, Any]]] = {}
     marks: dict[str, str] = {}
     learned: dict[str, str] = {}
+    listed: set[str] = set()
+    listing_complete = True
     for pid, token, scheme in find_antigravity_processes():
         if deadline_passed(deadline, inclusive=True):
+            listing_complete = False
             break
         ports, _ = antigravity_ports(pid)
         if not ports:
+            listing_complete = False
             continue
         schemes = (scheme, "http" if scheme == "https" else "https")
         base = None
@@ -643,7 +654,9 @@ def collect_antigravity_rpc_usage(
             if base:
                 break
         if not base or not isinstance(summaries, dict):
+            listing_complete = False
             continue
+        listed.update(summaries)
         # Exact picker display names, live from THIS language server: one cheap call per
         # LS per refresh mapping model id ("MODEL_PLACEHOLDER_M132" / "MODEL_OPENAI_…")
         # -> displayName ("Gemini 3.5 Flash (High)"). Records carry it as model_display
@@ -732,7 +745,7 @@ def collect_antigravity_rpc_usage(
             # Watermark only on success (including zero-usage conversations: marks them so they
             # stop being re-queried each refresh until they actually change).
             marks[cascade_id] = lmt
-    return RpcHarvest(out, marks, learned)
+    return RpcHarvest(out, marks, learned, listed, listing_complete)
 
 
 def normalized_antigravity_lanes(limits: list[dict[str, Any]], include_missing: bool = False) -> list[dict[str, Any]]:
