@@ -2213,3 +2213,26 @@ def test_usage_cost_usd_claude_fast_mode_doubles_every_lane():
     assert pricing.slim_usage(dict(usage, speed="standard")).get("speed") is None
     gpt = {"input_tokens": 1000, "output_tokens": 100}
     assert pricing.usage_cost_usd(dict(gpt, speed="fast"), "gpt-5.5") == pricing.usage_cost_usd(gpt, "gpt-5.5")
+
+
+def test_session_row_shows_its_forecast_in_plain_words():
+    def row(**extra):
+        return {"label": "Session", "percent": 40.0, "unit": "%", "windowMinutes": 300,
+                "resetAt": "2026-09-17T20:00:00+00:00", **extra}
+
+    providers = {"claude": {"label": "Claude", "status": "ok", "limits": [
+        row(forecastText="Runs out in 3h 0m", detailLeftText="3% in deficit", detailRightText="Runs out in 3h 0m"),
+        row(),                                  # too early to forecast: no line
+        row(forecastText="Lasts to reset", idle=True),
+        row(forecastText="Lasts to reset", detailText="Own detail"),
+        {"label": "Weekly", "percent": 17.0, "unit": "%", "windowMinutes": 10080,
+         "forecastText": "Runs out in 4d 14h", "pacePercent": 12.5,
+         "detailLeftText": "3% in deficit", "detailRightText": "Runs out in 4d 14h"},
+    ]}}
+    accounting.enrich_ui_formatting(providers)
+    forecast, early, idle, own, weekly = providers["claude"]["limits"]
+    assert forecast["formattedDetailText"] == "At this pace: runs out in 3h 0m"
+    assert early["formattedDetailText"] == ""
+    assert idle["formattedDetailText"] == ""
+    assert own["formattedDetailText"] == "Own detail"
+    assert weekly["formattedDetailText"].startswith("Pace: ")
