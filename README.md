@@ -38,7 +38,7 @@ as a month heat grid. Clicking any bar or day expands it into a per-model breakd
 |-----------------|---------------------------------------------------|------------------------------------------------------------------------|
 | **Codex**       | session window, weekly window, plan               | the `codex` CLI's app-server over JSON-RPC; browser cookies as fallback |
 | **Claude**      | session window (not on Ultra), weekly window, per-model windows, plan | claude.ai, using your browser's existing session; plan read from disk   |
-| **Gemini**      | daily usage, Google One AI credit pool            | gemini.google.com, using your browser's existing session                |
+| **Gemini**      | daily usage, Google One AI credit pool            | gemini.google.com and one.google.com, using your browser's existing session |
 | **Antigravity** | Gemini window, Claude/GPT window, plan            | the local Antigravity language server, plus Google's Cloud Code API     |
 | **Grok**        | weekly window                                     | xAI's billing service via the `grok` CLI's sign-in; else the CLI's log  |
 | **Grok Bot**    | weekly window; on-demand spend when capped        | the Grok Bot desktop app's sign-in, against Cursor's dashboard service  |
@@ -184,7 +184,9 @@ with them:
 
 - **Nothing is sent anywhere but the provider it belongs to.** There is no
   telemetry, no analytics, no update check. The only hosts contacted are the
-  ones in the table above plus `raw.githubusercontent.com` for the price catalog.
+  ones in the table above, Google's token service (`oauth2.googleapis.com`) to
+  renew Antigravity's own sign-in, and `raw.githubusercontent.com` for the price
+  catalog.
 - **Browser cookies are read, never kept.** The browser's own database is never
   opened directly (that would fight the browser for the lock). It is copied into
   a private `0700` directory under `$XDG_RUNTIME_DIR` — tmpfs, cleared at logout
@@ -210,7 +212,7 @@ with them:
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
-make test         # 530 tests
+make test         # the pytest suite
 make lint         # pyflakes (what CI runs)
 make check        # flake8 + Qt6 qmllint (fails on QML errors) + mypy
 make preview      # load a UI component in a standalone window, no Plasma needed
@@ -238,7 +240,7 @@ that can't be guessed.
 Scrubbing is best-effort: read the file before attaching it to an issue.
 
 The arithmetic lives in modules that don't reach the network — `parsers.py` is
-pure (payload in, limit rows out) and `accounting.py` does token and cost maths
+pure (payload in, limit rows out) and the `accounting/` package does token and cost maths
 against local files only. That is what most of the test suite exercises. The UI
 can be run without Plasma — see
 [`tools/preview/README.md`](tools/preview/README.md).
@@ -250,8 +252,8 @@ pushing a `v*` tag builds the `.plasmoid`, stamps the version into
 ## Known limitations
 
 - **Linux/KDE only.** It is a Plasma 6 applet; there is no port to anything else.
-- **The Claude, Gemini and Grok Bot readings depend on unofficial endpoints** — the
-  same ones their own apps call, with your own session. They are not public APIs and
+- **Every reading except the `codex` CLI's own depends on unofficial endpoints** — the
+  same ones the providers' own apps call, with your own session. They are not public APIs and
   can change without notice. When one does, that provider degrades to a status
   message and the others keep working.
 - **Grok's live bar lasts as long as the CLI's sign-in.** TallyBar uses the access
