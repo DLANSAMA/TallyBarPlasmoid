@@ -370,9 +370,10 @@ class _ClaudeLogStore:
     folded in entry by entry as the walk reaches each file, and deleted once a complete
     walk has taken it all in."""
 
-    def __init__(self, legacy_path: Path | None, root: Path):
+    def __init__(self, legacy_path: Path | None, root: Path, extra_roots: tuple[Path, ...] = ()):
         self.legacy_path = legacy_path
         self.root = root
+        self.roots = (root, *extra_roots)
         self.cold: list[dict[str, dict[str, Any]]] = [{} for _ in range(_CLAUDE_SHARDS)]
         self.found_in: dict[str, int] = {}
         self.hot_keys: set[str] = set()
@@ -403,10 +404,13 @@ class _ClaudeLogStore:
         return data["files"], False
 
     def _shard_of(self, key: str) -> int:
-        try:
-            parts = Path(key).relative_to(self.root).parts
-        except ValueError:
-            parts = Path(key).parts
+        parts = Path(key).parts
+        for root in self.roots:
+            try:
+                parts = Path(key).relative_to(root).parts
+                break
+            except ValueError:
+                continue
         session = "/".join(parts[:2]).removesuffix(".jsonl")
         return zlib.crc32(session.encode("utf-8", "surrogateescape")) % _CLAUDE_SHARDS
 
@@ -514,8 +518,11 @@ class _ClaudeLogStore:
 
 
 def _cached_claude_states(root: Path, legacy_path: Path | None,
-                          deadline: float | None = None) -> list[tuple[Path, int, dict[str, Any]]]:
-    """``(path, off, state)`` for every Claude transcript under ``root``, in walk order,
+                          deadline: float | None = None,
+                          extra_roots: tuple[Path, ...] = ()) -> list[tuple[Path, int, dict[str, Any]]]:
+    """``(path, off, state)`` for every Claude transcript under ``root`` and
+    ``extra_roots``, in walk order (a file's key is its absolute path, so roots share one
+    store without colliding),
     where ``state`` is _claude_state of the parse of bytes ``[0, off)``. Files whose mtime
     and size match their stored entry are not read; a file that grew is extended from
     ``off`` (tail-incremental) and anything else is parsed whole.
@@ -526,14 +533,14 @@ def _cached_claude_states(root: Path, legacy_path: Path | None,
 
     A walk cut by ``deadline`` checkpoints and raises LogScanIncomplete, as
     _cached_log_records does."""
-    store = _ClaudeLogStore(legacy_path, root)
+    store = _ClaudeLogStore(legacy_path, root, extra_roots)
     stored = store.load()
     visited: dict[str, dict[str, Any]] = {}
     out: list[tuple[Path, int, dict[str, Any]]] = []
     changed = False
     complete = True
     stop_at = None if deadline is None else deadline - _CHECKPOINT_MARGIN_SECONDS
-    for path in root.rglob("*.jsonl"):
+    for path in (p for r in (root, *extra_roots) if r.is_dir() for p in r.rglob("*.jsonl")):
         if stop_at is not None and time.time() >= stop_at:
             complete = False
             break
@@ -544,6 +551,8 @@ def _cached_claude_states(root: Path, legacy_path: Path | None,
         if not stat.S_ISREG(st.st_mode):
             continue
         key = str(path)
+        if key in visited:
+            continue
         prev = stored.get(key)
         if prev is None and store.legacy:
             prev = store.from_legacy(key)
@@ -579,6 +588,59 @@ def _cached_claude_states(root: Path, legacy_path: Path | None,
     if not complete:
         raise LogScanIncomplete(f"log scan of {root.name or root} ran out of time; progress saved")
     return out
+
+
+# Directories under the Claude desktop app's local-agent-mode-sessions tree that hold
+# plugins, mounts or bulk files and never a transcript root.
+_COWORK_SKIP_DIRS = frozenset({"skills-plugin", "cowork_plugins", "node_modules", "rpm",
+                               "backups", "sessions", "mnt", "outputs", "uploads"})
+_COWORK_MAX_DEPTH = 8
+
+
+def _claude_extra_roots(primary: Path, deadline: float | None = None) -> tuple[Path, ...]:
+    """Claude transcript roots besides ``primary`` (``~/.claude/projects``) that exist:
+    ``$CLAUDE_CONFIG_DIR/projects``, ``<config>/claude/projects`` and every
+    ``.claude/projects`` the Claude desktop app keeps under ``<config>/Claude/
+    local-agent-mode-sessions`` (Cowork and agent sessions, at varying depth), where
+    ``<config>`` is ``$XDG_CONFIG_HOME`` or ``~/.config``. A ``.jsonl`` elsewhere in that
+    tree (an audit log) is not a transcript. Missing directories are normal.
+
+    The walk stops descending where it finds a root and skips bulk directories, because it
+    runs on every refresh inside the cost-scan deadline; one that runs out of time raises
+    LogScanIncomplete, since a partial root list would make the store drop the transcripts
+    of the roots it did not reach."""
+    config = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+    candidates: list[Path] = []
+    override = os.environ.get("CLAUDE_CONFIG_DIR")
+    if override:
+        candidates.append(Path(override) / "projects")
+    candidates.append(config / "claude" / "projects")
+    base = config / "Claude" / "local-agent-mode-sessions"
+    stop_at = None if deadline is None else deadline - _CHECKPOINT_MARGIN_SECONDS
+    if base.is_dir():
+        for dirpath, dirnames, _files in os.walk(base):
+            if stop_at is not None and time.time() >= stop_at:
+                raise LogScanIncomplete("transcript root discovery ran out of time")
+            here = Path(dirpath)
+            if ".claude" in dirnames and (here / ".claude" / "projects").is_dir():
+                candidates.append(here / ".claude" / "projects")
+                dirnames[:] = []
+                continue
+            depth = len(here.relative_to(base).parts)
+            dirnames[:] = [] if depth >= _COWORK_MAX_DEPTH else sorted(
+                d for d in dirnames if d not in _COWORK_SKIP_DIRS
+                and (not d.startswith(".") or d == ".claude"))
+    seen = {primary.resolve()}
+    roots: list[Path] = []
+    for candidate in candidates:
+        if not candidate.is_dir():
+            continue
+        real = candidate.resolve()
+        if real in seen:
+            continue
+        seen.add(real)
+        roots.append(candidate)
+    return tuple(roots)
 
 
 def _resolve_cache_path(explicit_dir, provided_root, name: str) -> Path | None:
@@ -936,7 +998,8 @@ def local_claude_token_summary(
     deadline: float | None = None,
 ) -> dict[str, str] | None:
     root = projects_dir or (Path.home() / ".claude" / "projects")
-    if not root.is_dir():
+    extra_roots = () if projects_dir is not None else _claude_extra_roots(root, deadline)
+    if not root.is_dir() and not extra_roots:
         return None
     cache_path = _resolve_cache_path(cache_dir, projects_dir, "claude_logs.json")
 
@@ -967,7 +1030,8 @@ def local_claude_token_summary(
     visible_chars: dict[str, dict[str, int]] = {}
     estimated_output = 0
 
-    for path, off, state in _cached_claude_states(root, cache_path, deadline=deadline):
+    for path, off, state in _cached_claude_states(root, cache_path, deadline=deadline,
+                                                    extra_roots=extra_roots):
         if state["hi"] is None or state["hi"] < window_start:
             continue
         if state["lo"] < window_start:

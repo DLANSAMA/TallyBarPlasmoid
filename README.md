@@ -44,7 +44,9 @@ as a month heat grid. Clicking any bar or day expands it into a per-model breakd
 | **Grok Bot**    | weekly window; on-demand spend when capped        | the Grok Bot desktop app's sign-in, against Cursor's dashboard service  |
 
 Cost is computed separately, from **local log files only** — the transcripts
-each CLI already writes to `~/.claude`, `~/.codex`, `~/.gemini`, `~/.grok` and
+each CLI already writes to `~/.claude` (plus `$CLAUDE_CONFIG_DIR` and the Claude
+desktop app's Cowork and agent sessions under `~/.config/Claude`), `~/.codex`,
+`~/.gemini`, `~/.grok` and
 Antigravity's trajectory databases. Tokens are priced against the
 [LiteLLM](https://github.com/BerriAI/litellm) model catalog (fetched once and
 cached on disk), which is why the heading reads *"Cost (if pay-per-use)"* — it
