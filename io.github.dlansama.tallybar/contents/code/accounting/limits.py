@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import datetime as dt
 from typing import Any
 
-from parsers import as_dict, relative_reset
+from parsers import as_dict, epoch_to_utc, relative_reset
 from .formatting import compact_token_count, now_iso, numeric_value, _money_text
 
 
@@ -41,10 +40,9 @@ def codex_limit_from_window(key: str, label: str, window: Any) -> dict[str, Any]
     if not isinstance(percent, (int, float)):
         return None
     resets_at = window.get("resetsAt")
-    if isinstance(resets_at, (int, float)) and resets_at > 0:
-        reset_text = relative_reset(
-            dt.datetime.fromtimestamp(float(resets_at), tz=dt.timezone.utc).isoformat()
-        )
+    reset_dt = epoch_to_utc(resets_at) if isinstance(resets_at, (int, float)) and resets_at > 0 else None
+    if reset_dt is not None:
+        reset_text = relative_reset(reset_dt.isoformat())
     else:
         reset_text = str(window.get("resetDescription") or "")
     limit: dict[str, Any] = {
@@ -106,9 +104,15 @@ def codex_credit_balance(rate_limits: Any) -> dict[str, Any] | None:
         "amount": amount,
         "currency": "credits",
         "source": "codex-rate-limit-credits",
-        "detail": f"Credits: {compact_token_count(amount)} available",
+        "detail": f"Credits: {_credit_amount_text(amount)} available",
         "fetchedAt": now_iso(),
     }
+
+
+def _credit_amount_text(amount: float) -> str:
+    if amount != int(amount) and abs(amount) < 1000:
+        return f"{amount:.2f}".rstrip("0").rstrip(".")
+    return compact_token_count(amount)
 
 
 def codex_rate_limit_rows(rate_limits: Any, rate_limits_by_id: Any = None) -> list[dict[str, Any]]:
@@ -407,7 +411,8 @@ def enrich_ui_formatting(providers: dict[str, Any]) -> None:
             elif pct < 10 and pct != round(pct):
                 limit["formattedUsedText"] = f"{pct:.1f}% used"
             else:
-                limit["formattedUsedText"] = f"{pct:.0f}% used"
+                whole = min(99, int(pct + 0.5)) if pct < 100 else 100
+                limit["formattedUsedText"] = f"{whole}% used"
 
             pace = _metric_pace_line(limit)
             if pace:

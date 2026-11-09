@@ -201,6 +201,20 @@ def short_duration(seconds: float) -> str:
     return f"{minutes}m"
 
 
+MIN_PROJECTION_ELAPSED_FRACTION = 0.05
+
+
+def epoch_to_utc(value: Any) -> dt.datetime | None:
+    """Epoch seconds or milliseconds (a value above 1e11 is ms) -> UTC datetime; None if unparseable."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    seconds = float(value) / 1000.0 if value > 1e11 else float(value)
+    try:
+        return dt.datetime.fromtimestamp(seconds, tz=dt.timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
 def usage_pace_detail(percent: float, reset_iso: str, window_minutes: int) -> dict[str, Any]:
     if not reset_iso or window_minutes <= 0:
         return {}
@@ -235,7 +249,9 @@ def usage_pace_detail(percent: float, reset_iso: str, window_minutes: int) -> di
         pace_percent = expected
 
     right = ""
-    if elapsed > 0 and actual > 0:
+    if elapsed < duration_seconds * MIN_PROJECTION_ELAPSED_FRACTION:
+        pass  # too little of the window has passed for a stable run-out estimate
+    elif elapsed > 0 and actual > 0:
         rate = actual / elapsed
         if rate > 0:
             seconds_until_empty = max(0.0, 100.0 - actual) / rate

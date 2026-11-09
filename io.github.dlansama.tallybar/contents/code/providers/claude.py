@@ -17,6 +17,7 @@ from parsers import (
     fresh_credit_balance,
     add_pace_detail,
     claude_org_ids,
+    epoch_to_utc,
     CLAUDE_PLANS_WITHOUT_SESSION,
     claude_plan_name,
     parse_claude_credit_balance,
@@ -198,8 +199,8 @@ def claude_statusline_limits(capture: Any, now: dt.datetime | None = None) -> li
             continue
         if not isinstance(resets, (int, float)) or isinstance(resets, bool) or resets <= 0:
             continue
-        reset_at = dt.datetime.fromtimestamp(float(resets), tz=dt.timezone.utc)
-        if reset_at <= current:
+        reset_at = epoch_to_utc(resets)
+        if reset_at is None or reset_at <= current:
             continue
         reset_iso = reset_at.isoformat()
         rows.append(add_pace_detail({
@@ -250,9 +251,11 @@ def apply_claude_statusline_fallback(provider: dict[str, Any], capture: Any,
         "limits": rows,
         "fetchedAt": captured.astimezone().isoformat(timespec="seconds"),
     }
-    for key in ("accentColor", "tier"):
+    for key in ("accentColor", "tier", "creditBalance", "usageSummaryUnavailableSince"):
         if provider.get(key):
             result[key] = provider[key]
+    if _rate_limited_until(provider) is not None:
+        result["rateLimitedUntil"] = provider["rateLimitedUntil"]
     if "tier" not in result:
         disk_tier = claude_tier_from_credentials()
         if disk_tier:
@@ -263,15 +266,31 @@ def apply_claude_statusline_fallback(provider: dict[str, Any], capture: Any,
     return result
 
 
+_FAILED = 0
+_FAILED_TIMEOUT = -1
+
+
+def _is_timeout(exc: BaseException) -> bool:
+    import socket
+    import urllib.error
+    if isinstance(exc, (socket.timeout, TimeoutError)):
+        return True
+    return isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, (socket.timeout, TimeoutError))
+
+
 async def _claude_get(url: str, jar: Any, timeout: float) -> tuple[int, Any] | None:
     """GET + JSON-decode, returning (status, data) or None on any failure — so a single
     endpoint's error is treated as 'absent' 
     instead of aborting the concurrent per-org batch."""
     try:
         return await http_json_async(url, jar, timeout)
-    except Exception:
-        return None
+    except Exception as exc:
+        return (_FAILED_TIMEOUT if _is_timeout(exc) else _FAILED, None)
 
+
+
+def _transient_usage_status(code: int) -> bool:
+    return code in (_FAILED, _FAILED_TIMEOUT, 403, 429, 401) or code >= 500
 
 
 async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
@@ -302,12 +321,7 @@ async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
     try:
         status, data = await http_json_async(CLAUDE_ORGANIZATIONS_URL, jar, timeout)
     except Exception as exc:
-        import socket
-        import urllib.error
-        is_timeout = isinstance(exc, (socket.timeout, TimeoutError))
-        if not is_timeout and isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, (socket.timeout, TimeoutError)):
-            is_timeout = True
-        if is_timeout:
+        if _is_timeout(exc):
             result.update(status="timeout", message="Claude API request timed out")
         else:
             result.update(status="api-error", message=scrub_credentials(str(exc))[:160])
@@ -345,6 +359,7 @@ async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
     summary_skip_since = _usage_summary_skip_since(prev)
     summary_unavailable_since: str | None = summary_skip_since
 
+    usage_failure: tuple[int, Any] | None = None
     for org_id in claude_org_ids(data):
         base = f"{CLAUDE_ORGANIZATIONS_URL}/{org_id}"
         # usage_summary is the PREFERRED source; only fetch the (heavier) /usage endpoint when
@@ -399,6 +414,11 @@ async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
             usage = await _claude_get(f"{base}/usage", jar, timeout)
             if usage is not None and usage[0] == 200:
                 org_limits = parse_claude_usage(usage[1], session_window)
+            elif usage is not None and _transient_usage_status(usage[0]):
+                usage_failure = usage
+            if not org_limits and usage_failure is None and summary is not None \
+                    and _transient_usage_status(summary[0]) and (usage is None or usage[0] in _USAGE_SUMMARY_GONE):
+                usage_failure = summary
         if org_limits:
             limits = org_limits
             break
@@ -412,6 +432,21 @@ async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
         result["creditBalance"] = credit_balance
     if summary_unavailable_since:
         result["usageSummaryUnavailableSince"] = summary_unavailable_since
+    if not limits and usage_failure is not None:
+        code, body = usage_failure
+        if code == _FAILED_TIMEOUT:
+            result.update(status="timeout", message="Claude API request timed out")
+        elif code == 429:
+            until = _backoff_until(body)
+            result.update(status="api-error", message=_rate_limited_message(until),
+                          rateLimitedUntil=until.isoformat(timespec="seconds"))
+        elif code in (401, 403):
+            result.update(status="unauthorized", message=f"API rejected session cookies ({code})",
+                          actionUrl="https://claude.ai")
+        else:
+            result.update(status="api-error",
+                          message="Claude usage request failed" if code == _FAILED else f"API returned HTTP {code}")
+        return result
     result.update(
         status="ok" if limits else "api-empty",
         message="Usage API returned data" if limits else "API returned no recognizable limits",
