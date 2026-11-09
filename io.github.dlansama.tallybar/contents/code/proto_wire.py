@@ -30,12 +30,14 @@ def _pb_read_varint(buf: bytes, i: int) -> tuple[int, int]:
             raise IndexError("Unexpected EOF while reading varint")
         byte = buf[i]
         i += 1
+        # The tenth byte holds bit 63 alone: anything more (a higher bit or a continuation)
+        # is not a uint64.
+        if shift == 63 and byte > 1:
+            raise ValueError("Malformed varint: exceeds 64 bits")
         result |= (byte & 0x7F) << shift
         if not (byte & 0x80):
             return result, i
         shift += 7
-        if shift > 64:
-            raise ValueError("Malformed varint: exceeds 64 bits")
 
 
 def _dominant_enum(found: list[dict[int, int]]) -> int:
