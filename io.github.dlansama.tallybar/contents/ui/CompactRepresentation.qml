@@ -69,7 +69,7 @@ Item {
         const count = Math.min(2, limits.length);
         for (let i = 0; i < count; ++i) {
             const pct = Math.max(0, Math.min(100, Number(limits[i].percent || 0)));
-            parts.push(pct.toFixed(0) + "%");
+            parts.push(UIHelpers.displayPercent(pct) + "%");
         }
         return parts.join("/");
     }
@@ -94,6 +94,11 @@ Item {
         return muted.indexOf(root.selectedProvider) >= 0;
     }
     readonly property bool statusBad: root.statusIsBad(root.providerStatus()) && !root.isMuted()
+    // The shown reading is a carried-forward / logged one, not a fresh fetch: a hollow amber
+    // ring in the badge's corner, so an old number never reads as live.
+    readonly property bool readingStale: root.providerData().stale === true && !root.statusBad
+    // Bumped every 30 s by main.qml so the panel's reset countdown advances.
+    property int nowTick: 0
 
     // Short human phrase for the bad status, for the screen-reader description.
     function statusText() {
@@ -146,8 +151,9 @@ Item {
     }
 
     function panelResetText() {
+        const _ = root.nowTick;  // re-evaluate with the shared 30 s tick
         const l = root.primaryLimit();
-        let r = String(l && l.reset ? l.reset : "").replace(/^Resets in\s*/i, "").trim();
+        let r = UIHelpers.resetText(l, Date.now()).replace(/^Resets in\s*/i, "").trim();
         const m = r.match(/\d+\s*[dhm]/);   // first unit, e.g. "3d" / "20m"
         if (m)
             return m[0].replace(/\s+/g, "");
@@ -174,7 +180,7 @@ Item {
         const l = root.primaryLimit();
         if (!l)
             return "--";
-        const session = Math.round(Number(l.percent || 0));
+        const session = UIHelpers.displayPercent(Number(l.percent || 0));
         const limits = root.usageRows();
         const lane = String(l.label || "");
         for (let i = 1; i < limits.length; i++) {
@@ -185,7 +191,7 @@ Item {
             // Antigravity carries two lanes (Gemini / Claude·GPT) — pair the
             // primary limit with its own lane's weekly, not another lane's.
             if (weekly && (String(w.label || "") === lane || /^week/i.test(String(w.label || ""))))
-                return session + "/" + Math.round(Number(w.percent || 0)) + "%";
+                return session + "/" + UIHelpers.displayPercent(Number(w.percent || 0)) + "%";
         }
         return session + "%";
     }
@@ -204,7 +210,7 @@ Item {
     Accessible.name: i18n("%1 usage monitor", providerData().label)
     Accessible.description: root.statusBad
         ? i18n("%1 — %2", providerData().label, root.statusText())
-        : providerData().label + " " + usageSummary()
+        : providerData().label + " " + usageSummary() + (root.readingStale ? i18n(" (cached)") : "")
     // In text mode the icon sizes to the value (e.g. "$1.2k" / "3d 18h"); in percent
     // mode it keeps the original compact bar-glyph width.
     Layout.minimumWidth: root.textMode ? (panelLabel.implicitWidth + 8) : (vertical ? 24 : 32)
@@ -339,6 +345,20 @@ Item {
         height: 5
         radius: 2.5
         color: "#e0a23c"
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.topMargin: 1
+        anchors.rightMargin: 1
+    }
+
+    Rectangle {
+        visible: root.readingStale
+        width: 6
+        height: 6
+        radius: 3
+        color: "transparent"
+        border.width: 1
+        border.color: "#e0a23c"
         anchors.top: parent.top
         anchors.right: parent.right
         anchors.topMargin: 1

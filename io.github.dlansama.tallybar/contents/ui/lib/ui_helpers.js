@@ -71,12 +71,16 @@ function statusUrl(providerKey) {
     return "https://status.openai.com/";
 }
 
+// The ONE bad-status set: the tab warning glyph, the panel badge and the empty-state link all
+// read it. ok / loading / idle / cookies-ready are healthy or still in progress.
 function statusIsBad(status) {
     switch (status) {
     case "missing-cookies":
     case "missing-cli":
     case "unauthorized":
     case "api-error":
+    case "api-empty":
+    case "partial":
     case "error":
     case "timeout":
     case "wallet-locked":
@@ -176,13 +180,133 @@ function costLineValue(text, label) {
 
 function compactUsd(value) {
     const v = Number(value || 0);
-    if (v >= 1000)
+    // Thresholds apply after rounding, so $999.50 carries to "$1K" the way $1000 does.
+    if (Math.round(v) >= 1000)
         return "$" + (v / 1000).toFixed(1).replace(/\.0$/, "") + "K";
-    if (v >= 100)
+    if (Math.round(v) >= 100)
         return "$" + Math.round(v);
     if (v > 0 && v < 0.01)
         return "<$0.01";
     return "$" + v.toFixed(2);
+}
+
+// A percent the UI rounds itself: never "100" for a value below 100 (99.6 reads 99, as in the
+// backend's text), so a bar that is not full never claims it is. No upper clamp, so a budget
+// percent over 100 stays as it is.
+function displayPercent(value) {
+    const n = Number(value);
+    if (!isFinite(n))
+        return 0;
+    const rounded = Math.round(n);
+    return (n < 100 && rounded >= 100) ? 99 : rounded;
+}
+
+// Epoch ms of an ISO-8601 timestamp, NaN when unparseable. A string without an offset is UTC,
+// as in the backend's parsers.relative_reset (Date.parse would read it as local time), and
+// fraction digits beyond milliseconds are dropped (the QML JS engine rejects them).
+function parseIsoMs(value) {
+    const text = String(value === undefined || value === null ? "" : value);
+    const m = /^\s*(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2})(?::(\d{2})(?::(\d{2})(?:[.,](\d+))?)?)?)?\s*(Z|z|[+-]\d{2}(?::?\d{2})?)?\s*$/.exec(text);
+    if (!m)
+        return NaN;
+    const year = Number(m[1]), month = Number(m[2]), day = Number(m[3]);
+    const hour = m[4] ? Number(m[4]) : 0, minute = m[5] ? Number(m[5]) : 0;
+    const second = m[6] ? Number(m[6]) : 0;
+    const millis = m[7] ? Number((m[7] + "00").slice(0, 3)) : 0;
+    if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59)
+        return NaN;
+    const utc = Date.UTC(year, month - 1, day, hour, minute, second, millis);
+    if (new Date(utc).getUTCDate() !== day)
+        return NaN;
+    let offsetMinutes = 0;
+    if (m[8] && m[8].toUpperCase() !== "Z") {
+        const digits = m[8].replace(":", "");
+        offsetMinutes = (digits.charAt(0) === "-" ? -1 : 1)
+            * (Number(digits.slice(1, 3)) * 60 + (digits.length > 3 ? Number(digits.slice(3, 5)) : 0));
+    }
+    return utc - offsetMinutes * 60000;
+}
+
+// "Resets in 2h 5m" counted from an ISO reset time against nowMs, word for word what the
+// backend's parsers.relative_reset bakes at fetch time; `fallback` (the baked string) when the
+// timestamp is missing or unparseable. → tests/test_frontend_display_state.py::test_relative_reset_js_matches_python_word_for_word
+function relativeReset(resetAt, nowMs, fallback) {
+    const at = parseIsoMs(resetAt);
+    if (isNaN(at))
+        return String(fallback || "");
+    const diff = (at - nowMs) / 1000;
+    const seconds = diff < 0 ? Math.ceil(diff) : Math.floor(diff);
+    if (seconds <= 0)
+        return "Reset due";
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    if (days)
+        return "Resets in " + days + "d " + hours + "h";
+    if (hours)
+        return "Resets in " + hours + "h " + minutes + "m";
+    return "Resets in " + minutes + "m";
+}
+
+// A limit row's reset text, counted down live from `resetAt` when the row's baked `reset` is a
+// countdown ("Resets in ..." / "Reset due") or empty; any other text ("Monthly credit pool")
+// is the backend's own and stays.
+function resetText(limit, nowMs) {
+    const baked = String(limit && limit.reset ? limit.reset : "");
+    if (!limit || !limit.resetAt)
+        return baked;
+    if (baked.length > 0 && !/^(Resets in |Reset due$)/.test(baked))
+        return baked;
+    return relativeReset(limit.resetAt, nowMs, baked);
+}
+
+// Epoch ms a STALE provider reading was actually fetched: staleAsOf (a carried reading), else
+// fetchedAt (the Grok log, the Claude statusLine). NaN for a fresh reading or when neither
+// parses, so the caller falls back to the snapshot's own timestamp.
+function staleAsOfMs(provider) {
+    if (!provider || provider.stale !== true)
+        return NaN;
+    const carried = parseIsoMs(provider.staleAsOf);
+    return isNaN(carried) ? parseIsoMs(provider.fetchedAt) : carried;
+}
+
+// Age in seconds of the reading a provider shows: a stale provider from its own fetch time,
+// everything else from the snapshot timestamp. -1 when no usable timestamp exists.
+function readingAgeSeconds(provider, snapshotTimestamp, nowMs) {
+    let at = staleAsOfMs(provider);
+    if (isNaN(at))
+        at = parseIsoMs(snapshotTimestamp);
+    if (isNaN(at))
+        return -1;
+    return Math.max(0, (nowMs - at) / 1000);
+}
+
+// An age as {unit, n} in the units the "Updated ..." subtitle and the tooltip word: "now"
+// under 45 s, then minutes, hours, days.
+function ageParts(seconds) {
+    if (seconds < 45)
+        return { "unit": "now", "n": 0 };
+    const mins = Math.round(seconds / 60);
+    if (mins < 60)
+        return { "unit": "m", "n": mins };
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24)
+        return { "unit": "h", "n": hrs };
+    return { "unit": "d", "n": Math.round(hrs / 24) };
+}
+
+// Model names the backend priced at an inherited or default rate for one provider
+// (diagnostics.unpriced_models[provider]), as a clean list of strings.
+function unpricedModels(diagnostics, providerKey) {
+    const map = diagnostics && diagnostics.unpriced_models;
+    const list = map ? map[providerKey] : null;
+    const out = [];
+    for (let i = 0; list && i < list.length; ++i) {
+        const name = String(list[i] || "").trim();
+        if (name.length > 0)
+            out.push(name);
+    }
+    return out;
 }
 
 // Parse a user-typed amount under the given locale's separators (Qt.locale().decimalPoint /
@@ -237,6 +361,14 @@ if (typeof module !== 'undefined') {
         normalizedCostLine: normalizedCostLine,
         costLineValue: costLineValue,
         compactUsd: compactUsd,
+        displayPercent: displayPercent,
+        parseIsoMs: parseIsoMs,
+        relativeReset: relativeReset,
+        resetText: resetText,
+        staleAsOfMs: staleAsOfMs,
+        readingAgeSeconds: readingAgeSeconds,
+        ageParts: ageParts,
+        unpricedModels: unpricedModels,
         parseLocaleAmount: parseLocaleAmount,
         prettyModelName: prettyModelName
     };

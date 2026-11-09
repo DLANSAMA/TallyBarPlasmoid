@@ -224,7 +224,30 @@ PlasmoidItem {
             root.selectedProvider = tabs[0];
     }
 
+    // Ticks every 30 s so the tooltip's and the panel's reset countdowns and ages advance
+    // between refreshes (the countdowns are computed from each limit's resetAt).
+    property int nowTick: 0
+    Timer {
+        interval: 30000
+        repeat: true
+        running: true
+        onTriggered: root.nowTick = root.nowTick + 1
+    }
+
+    // "3m ago" / "2h ago" / "1d ago" for a reading's age in seconds.
+    function agoText(seconds) {
+        const age = UIHelpers.ageParts(Math.max(0, seconds));
+        if (age.unit === "now")
+            return i18n("just now");
+        if (age.unit === "m")
+            return i18n("%1m ago", age.n);
+        if (age.unit === "h")
+            return i18n("%1h ago", age.n);
+        return i18n("%1d ago", age.n);
+    }
+
     function tooltipText() {
+        const _ = root.nowTick;  // re-evaluate with the shared tick
         const provider = root.providerData(root.selectedProvider);
         const limits = provider.limits || [];
         if (root.loading)
@@ -240,11 +263,16 @@ PlasmoidItem {
             const limit = limits[i];
             const pct = Math.max(0, Math.min(100, Number(limit.percent || 0)));
             const label = String(limit.label || "").trim();
-            let line = (label.length > 0 ? label + " " : "") + pct.toFixed(0) + "%";
-            const reset = String(limit.reset || "").trim();
+            let line = (label.length > 0 ? label + " " : "") + UIHelpers.displayPercent(pct) + "%";
+            const reset = UIHelpers.resetText(limit, Date.now()).trim();
             if (reset.length > 0)
                 line += " · " + reset;
             lines.push(line);
+        }
+        // A carried-forward / logged reading says how old it really is.
+        if (provider.stale === true) {
+            const age = UIHelpers.readingAgeSeconds(provider, root.telemetry ? root.telemetry.timestamp : "", Date.now());
+            lines.push(age >= 0 ? i18n("Cached reading · updated %1", root.agoText(age)) : i18n("Cached reading"));
         }
         return lines.join("\n");
     }
@@ -558,6 +586,7 @@ PlasmoidItem {
         vertical: Plasmoid.formFactor === PlasmaCore.Types.Vertical
         selectedProvider: root.selectedProvider
         telemetry: root.telemetry
+        nowTick: root.nowTick
         onToggleRequested: () => {
             root.expanded = !root.expanded;
         }

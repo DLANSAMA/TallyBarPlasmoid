@@ -5,6 +5,7 @@ paths:
   - "tests/test_qml_text_format.py"
   - "tests/test_ui_helpers.py"
   - "tests/test_compact_count_parity.py"
+  - "tests/test_frontend_display_state.py"
   - "tools/preview/**/*"
 ---
 
@@ -18,7 +19,13 @@ Area contracts moved out of the root CLAUDE.md; they load only when a matching f
 
 **Every QML `Text` that renders a DYNAMIC string pins `textFormat: Text.PlainText`.** Provider messages, model names and error strings originate outside the app (API responses, local logs, the `GetAvailableModels` RPC); Qt's default AutoText would render markup in them, and an `<img src=…>` becomes an outbound network fetch from the widget. Static bindings (a string literal or `i18n()` of literals) are exempt. → `tests/test_qml_text_format.py`.
 
-**Shared QML helpers live in `lib/format.js` (imported `as Fmt`) — don't re-inline them.** `Fmt.compactCount`/`trimDecimals` (the backend-parity formatter), `Fmt.providerAccent` (the per-provider fallback colour map), and `Fmt.pickFont(availableFonts, prefs)` (Apple-first font resolution) are each the SINGLE source shared by CompactRepresentation and FullRepresentation. `providerAccent` mirrors the backend accents; keep them aligned (→ `tests/test_enforced_rules.py::test_qml_provider_accents_match_backend`). The CommonJS `module.exports` at the file end is only for the `node` parity test — QML ignores it. → `tests/test_compact_count_parity.py`.
+**Shared QML helpers live in `lib/format.js` (imported `as Fmt`) — don't re-inline them.** `Fmt.compactCount`/`trimDecimals` (the backend-parity formatter, K/M/B/T tiers, the top tier never carries), `Fmt.providerAccent` (the per-provider fallback colour map), and `Fmt.pickFont(availableFonts, prefs)` (Apple-first font resolution) are each the SINGLE source shared by CompactRepresentation and FullRepresentation. `providerAccent` mirrors the backend accents; keep them aligned (→ `tests/test_enforced_rules.py::test_qml_provider_accents_match_backend`). The CommonJS `module.exports` at the file end is only for the `node` parity test — QML ignores it. → `tests/test_compact_count_parity.py`.
+
+**Time-dependent text is computed from ISO timestamps, not shown from backend strings.** A limit's `reset` is baked at fetch time; the card, the panel's reset mode and the tooltip count down from `resetAt` (`UIHelpers.resetText` / `relativeReset`, the wording and units of `parsers.relative_reset`, falling back to the baked string without a parseable `resetAt`) against the 30-second `nowTick` (`main.qml` for the tooltip and panel, `FullRepresentation` while the popup is open). A stale provider (`stale: true`) ages from `staleAsOf`, else `fetchedAt`, not from the snapshot's timestamp (`UIHelpers.readingAgeSeconds`): the "Updated…" subtitle, the tooltip and the compact amber ring all say so. `costSummary.stale` / `staleAsOf` mark the cost title "as of …". → `tests/test_frontend_display_state.py`.
+
+**One bad-status set, and every non-ok state with no limits says so.** `UIHelpers.statusIsBad` is the only list (tab glyph, panel badge, empty-state link; `tabStatusBad` delegates and keeps only the muted-provider rule); `ok`, `loading`, `idle` and `cookies-ready` are not bad. `emptyStateMode()` is `full` (nothing else to show: the message fills the body), `compact` (no limits, status not ok, cost or extra-usage still showing: a 50 px message strip, plus 40 px for its sign-in / unlock button, above them, mirrored by `emptyStateCompactHeight()` in `metricsBodyHeight()`) or `none`. A failed refresh (`lastError`) with readings on screen rides the one-line degraded strip; the empty state prints it itself. `diagnostics.unpriced_models[<provider>]` shows as a one-line "Estimated rate: …" under the cost lines (`costUnpricedLineHeight`, in `costSectionHeight()`). A percent the QML rounds itself goes through `UIHelpers.displayPercent` (never 100 below 100). → `tests/test_frontend_display_state.py`.
+
+**`tools/preview/probe.qml` evaluates expressions against the real component** (`item.updatedText()`, `item.emptyStateMode()`…) and prints the results; tests that assert what the widget would show use it instead of pixel comparison.
 
 **Interactive controls carry `Accessible.role`/`Accessible.name` (and `.checked` for toggles).** All SettingsPopout chips/toggles and the close buttons are annotated for screen readers — match the pattern when adding a control. New user-visible prose gets `i18n()` (then `make pot`); brand names, match-keys, `$`/`×`/`$50` glyphs stay bare (see `po/`).
 

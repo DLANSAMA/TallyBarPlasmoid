@@ -317,6 +317,13 @@ Item {
         return root.tabAccentColor(providerKey);
     }
 
+    // A row's reset countdown, counted live from its resetAt (the baked string is frozen at
+    // fetch time). nowTick re-evaluates it every 30 s while the popup is open.
+    function limitResetText(limit) {
+        const _ = root.nowTick;
+        return UIHelpers.resetText(limit, Date.now());
+    }
+
     function metricUsedText(limit) {
         return String(limit.formattedUsedText || "").trim();
     }
@@ -393,7 +400,7 @@ Item {
     function degradedText() {
         const d = root.telemetry && root.telemetry.diagnostics;
         if (!d)
-            return "";
+            return root.refreshFailedText();
         // A whole-refresh fatal, or a post-snapshot (cache/notify) failure, reprints STALE
         // cached data with ok:true — the most severe cases, surfaced first. Truncate to ~80
         // chars so a stack string can't overflow the one-line banner (no raw tracebacks).
@@ -401,6 +408,9 @@ Item {
             return i18n("Backend error — showing last values (%1)", String(d.fatal).slice(0, 80));
         if (d.post_snapshot_error)
             return i18n("Post-refresh step failed — alerts and cache may be stale");
+        const failed = root.refreshFailedText();
+        if (failed.length > 0)
+            return failed;
         if (d.cost_summary_timeout)
             return i18n("Cost scan timed out — totals may be stale");
         const wallet = d.browser && d.browser.kwallet ? d.browser.kwallet.status : "";
@@ -419,6 +429,14 @@ Item {
         // metrics body into a scrollbar. The paused state rides the "Updated…" subtitle
         // suffix instead — same footprint, no layout shift (updatedText()/refreshPaused()).
         return "";
+    }
+
+    // A refresh that failed while readings are on screen: the values below are the last good
+    // ones. The empty state already prints lastError itself, so no strip repeats it there.
+    function refreshFailedText() {
+        if (root.lastError.length === 0 || root.emptyStateMode() === "full")
+            return "";
+        return i18n("Refresh failed, showing last values: %1", root.lastError.slice(0, 80));
     }
 
     // A short, actionable hint for a provider whose local server/CLI isn't running
@@ -494,6 +512,26 @@ Item {
         return s === "wallet-locked" || s === "wallet-state-unknown";
     }
 
+    // "full": nothing else to show, so the message fills the body. "compact": the provider has
+    // no limits and a status that is not ok, but cost or extra-usage data still shows below
+    // it, so the message and its action take a short strip above them. "none" otherwise.
+    function emptyStateMode() {
+        if (root.providerLimits().length > 0)
+            return "none";
+        if (!root.hasCostSection() && !root.hasExtraUsage())
+            return "full";
+        return String(root.providerData().status || "") !== "ok" ? "compact" : "none";
+    }
+
+    // The compact strip: a message of up to three 12 px lines, plus the action button
+    // (32 px and one 8 px gap) when the status has one.
+    readonly property int emptyStateCompactMessageHeight: 50
+    readonly property int emptyStateCompactButtonHeight: 40
+    function emptyStateCompactHeight() {
+        return root.emptyStateCompactMessageHeight
+            + ((root.emptyStateShowsUnlock() || root.emptyStateShowsSignIn()) ? root.emptyStateCompactButtonHeight : 0);
+    }
+
     // The empty-state message, enriched with a remediation hint per status. Falls
     // back to the provider message / generic "No usage data".
     function emptyStateMessage() {
@@ -505,7 +543,7 @@ Item {
         // empty state while the very first fetch runs. Without this branch it reads "No usage
         // data" — looks like failure though the hero subtitle already says "Refreshing". Only
         // fires when there's no concrete problem status to show.
-        if (root.loading && (status === "" || status === "ok"))
+        if (root.loading && (status === "" || status === "ok" || status === "loading"))
             return i18n("Fetching usage data…");
         // Grok Bot's wallet need is its own sign-in, not browser cookies.
         if (status === "wallet-locked" && root.selectedProvider === "grokbot")
@@ -550,18 +588,39 @@ Item {
         // A muted provider never shows the amber warning glyph / bad-status badge.
         if (root.providerMuted(providerKey))
             return false;
-        const s = String(p.status || "");
-        // choose_antigravity_result (providers/antigravity.py) can terminate on any of
-        // these — they are real, reachable "bad" states, not just the generic ones above.
-        return s === "api-error" || s === "error" || s === "timeout" || s === "unauthorized" || s === "wallet-locked" ||
-               s === "wallet-state-unknown" ||
-               s === "no-port" || s === "missing-oauth" || s === "oauth-expired" || s === "oauth-unavailable";
+        return root.statusIsBad(String(p.status || ""));
     }
 
     function tabStatusMessage(providerKey) {
         const providers = root.telemetry && root.telemetry.providers ? root.telemetry.providers : ({});
         const p = providers[providerKey];
         return p ? (String(p.message || "") || String(p.status || "")) : "";
+    }
+
+    // The cost block's title, marked "as of" when the backend kept previous totals because
+    // the cost scan timed out.
+    function costTitleText(cost) {
+        const _ = root.nowTick;
+        const title = String(cost.title || "") || i18n("Cost");
+        if (!cost.stale)
+            return title;
+        const at = UIHelpers.parseIsoMs(cost.staleAsOf);
+        if (isNaN(at))
+            return i18n("%1 · stale", title);
+        const age = UIHelpers.ageParts(Math.max(0, (Date.now() - at) / 1000));
+        if (age.unit === "now")
+            return i18n("%1 · as of just now", title);
+        if (age.unit === "m")
+            return i18n("%1 · as of %2m ago", title, age.n);
+        if (age.unit === "h")
+            return i18n("%1 · as of %2h ago", title, age.n);
+        return i18n("%1 · as of %2d ago", title, age.n);
+    }
+
+    // Models the selected provider's cost priced at an inherited or default rate.
+    function unpricedModelsText() {
+        const names = UIHelpers.unpricedModels(root.telemetry && root.telemetry.diagnostics, root.selectedProvider);
+        return names.length > 0 ? i18n("Estimated rate: %1", names.join(", ")) : "";
     }
 
     function hasCostSummary() {
@@ -1027,15 +1086,12 @@ Item {
         return !!(d && d.refresh_skipped === "screen-locked");
     }
 
-    // Age of the painted snapshot in seconds, or -1 when there's no usable timestamp.
+    // Age in seconds of the reading the selected provider shows, or -1 without a usable
+    // timestamp. A stale (carried / logged) provider ages from its own fetch time: the
+    // snapshot's timestamp is fresh whenever the OTHER providers refreshed.
     function snapshotAgeSeconds() {
         const _ = root.nowTick;  // register the per-minute tick as a binding dependency
-        if (!(root.telemetry && root.telemetry.timestamp))
-            return -1;
-        const t = Date.parse(root.telemetry.timestamp);
-        if (isNaN(t))
-            return -1;
-        return Math.max(0, (Date.now() - t) / 1000);
+        return UIHelpers.readingAgeSeconds(root.providerData(), root.telemetry ? root.telemetry.timestamp : "", Date.now());
     }
 
     // 0 = fresh, 1 = stale (older than ~2× the refresh interval). Keyed off nowTick so it
@@ -1075,17 +1131,14 @@ Item {
             let suffix = root.refreshPaused() ? i18n(" (paused: screen locked)") : "";
             if (!suffix && root.liveLoaded && root.providerStale())
                 suffix = i18n(" (cached)");
-            if (secs < 0)
+            const age = UIHelpers.ageParts(Math.max(0, secs));
+            if (age.unit === "now")
                 return prefix + i18n("Updated just now") + suffix;
-            if (secs < 45)
-                return prefix + i18n("Updated just now") + suffix;
-            const mins = Math.round(secs / 60);
-            if (mins < 60)
-                return prefix + i18n("Updated %1m ago", mins) + suffix;
-            const hrs = Math.round(mins / 60);
-            if (hrs < 24)
-                return prefix + i18n("Updated %1h ago", hrs) + suffix;
-            return prefix + i18n("Updated %1d ago", Math.round(hrs / 24)) + suffix;
+            if (age.unit === "m")
+                return prefix + i18n("Updated %1m ago", age.n) + suffix;
+            if (age.unit === "h")
+                return prefix + i18n("Updated %1h ago", age.n) + suffix;
+            return prefix + i18n("Updated %1d ago", age.n) + suffix;
         }
 
         return i18n("Waiting for update");
@@ -1136,10 +1189,13 @@ Item {
     // diverge (the documented scrollbar foot-gun).
     readonly property int costSectionBaseHeight: 107
     readonly property int costBreakdownLineHeight: 20
+    readonly property int costUnpricedLineHeight: 20
     function costSectionHeight() {
         if (!root.hasCostSection())
             return 0;
-        return root.costSectionBaseHeight + (root.costBreakdownText().length > 0 ? root.costBreakdownLineHeight : 0);
+        return root.costSectionBaseHeight
+            + (root.costBreakdownText().length > 0 ? root.costBreakdownLineHeight : 0)
+            + (root.unpricedModelsText().length > 0 ? root.costUnpricedLineHeight : 0);
     }
 
     // Usage by type, from the backend's typeBreakdown: uncached input, output, cache reads,
@@ -1278,6 +1334,9 @@ Item {
 
         if (root.hasCostSection())
             parts.push(root.costSectionHeight());
+
+        if (root.emptyStateMode() === "compact")
+            parts.unshift(root.emptyStateCompactHeight());
 
         if (parts.length === 0)
             // Empty state. The "Unlock KWallet" / "Sign in" button needs ~44px more
@@ -1450,6 +1509,14 @@ Item {
                     }
                 }
 
+            // Above the extra-usage and cost sections: a provider with no limits and a
+            // status that is not ok gets its message here, compactly, with them still below.
+            EmptyStateSection {
+                id: emptyStateSection
+                root: root
+                availableHeight: metricsScroller.height
+            }
+
             ExtraUsageSection {
                 id: extraUsageSection
                 root: root
@@ -1458,12 +1525,6 @@ Item {
             CostSection {
                 id: costSection
                 root: root
-            }
-
-            EmptyStateSection {
-                id: emptyStateSection
-                root: root
-                availableHeight: metricsScroller.height
             }
 
             }

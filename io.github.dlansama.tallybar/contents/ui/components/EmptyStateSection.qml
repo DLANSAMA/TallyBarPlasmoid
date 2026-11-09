@@ -12,9 +12,14 @@ ColumnLayout {
     property real availableHeight: 0
 
     Layout.fillWidth: true
-    Layout.preferredHeight: Math.max(120, availableHeight)
-    visible: root.providerLimits().length === 0 && !root.hasCostSection() && !root.hasExtraUsage()
-    spacing: 12
+    // "full" fills the body; "compact" is the short strip above the cost / extra-usage
+    // sections of a provider whose status is not ok (its height is root.emptyStateCompactHeight()).
+    readonly property string mode: root.emptyStateMode()
+    readonly property bool compact: mode === "compact"
+
+    Layout.preferredHeight: compact ? root.emptyStateCompactHeight() : Math.max(120, availableHeight)
+    visible: mode !== "none"
+    spacing: compact ? 8 : 12
 
     Text {
         id: emptyStateText
@@ -25,8 +30,10 @@ ColumnLayout {
         Layout.fillWidth: true
         Layout.fillHeight: true
         color: isLink ? root.accentColor() : root.mutedTextColor(0.68)
+        elide: emptyStateSection.compact ? Text.ElideRight : Text.ElideNone
         font.family: root.uiFont
-        font.pixelSize: 13
+        font.pixelSize: emptyStateSection.compact ? 12 : 13
+        maximumLineCount: emptyStateSection.compact ? 3 : 100
         font.underline: isLink && emptyStateLinkHover.hovered
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
@@ -54,7 +61,7 @@ ColumnLayout {
         Layout.alignment: Qt.AlignHCenter
         Layout.preferredHeight: 32
         Layout.preferredWidth: unlockLabel.implicitWidth + 32
-        Layout.bottomMargin: 8
+        Layout.bottomMargin: emptyStateSection.compact ? 0 : 8
         visible: root.emptyStateShowsUnlock()
         radius: 8
         color: unlockMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.18) : Qt.rgba(1, 1, 1, 0.10)
@@ -109,7 +116,7 @@ ColumnLayout {
         Layout.alignment: Qt.AlignHCenter
         Layout.preferredHeight: 32
         Layout.preferredWidth: signInLabel.implicitWidth + 32
-        Layout.bottomMargin: 8
+        Layout.bottomMargin: emptyStateSection.compact ? 0 : 8
         visible: root.emptyStateShowsSignIn()
         radius: 8
         color: signInMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.18) : Qt.rgba(1, 1, 1, 0.10)

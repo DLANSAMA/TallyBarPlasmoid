@@ -173,7 +173,7 @@ Item {
         font.pixelSize: 11
         horizontalAlignment: Text.AlignRight
         textFormat: Text.PlainText
-        text: (modelData && modelData.reset) ? modelData.reset : ""
+        text: (root && root.limitResetText) ? root.limitResetText(modelData) : ((modelData && modelData.reset) ? modelData.reset : "")
     }
 
     Text {

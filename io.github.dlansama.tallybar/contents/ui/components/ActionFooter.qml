@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
+import "../lib/ui_helpers.js" as UIHelpers
 
 ColumnLayout {
     id: actionFooter
@@ -63,7 +64,7 @@ ColumnLayout {
                     // it adds up to the tabs). With a monthly budget set, switch to
                     // month-to-date vs that budget — the window the budget alert tracks.
                     if (allAiRow.budget > 0) {
-                        const pct = Math.round(t.mtd / allAiRow.budget * 100);
+                        const pct = UIHelpers.displayPercent(t.mtd / allAiRow.budget * 100);
                         return i18n("%1 of %2 this month · %3%", root.compactUsd(t.mtd), root.compactUsd(allAiRow.budget), pct);
                     }
                     return i18n("%1 · last 30 days", root.compactUsd(t.m30));

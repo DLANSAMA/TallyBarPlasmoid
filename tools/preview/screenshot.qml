@@ -23,6 +23,7 @@
 //   snapshot=<abs path> a backend.py --once JSON snapshot to render as-is, in place of
 //                     the mock fixture. Its dates are real, so it is never rebased and
 //                     today= is ignored.
+//   lastError=<text>  the widget's `lastError` (a failed refresh); default empty.
 //   walk=<name>       CostPopout only: move a pointer through the flyout before grabbing.
 //                     The pointer is driven through Qt's own test events, so the widget's
 //                     real hover/click code runs. `hover` jumps from the bar beside the
@@ -271,7 +272,7 @@ Window {
                 if ("liveLoaded" in item)
                     item.liveLoaded = true;
                 if ("lastError" in item)
-                    item.lastError = "";
+                    item.lastError = shot.argValue("lastError", "");
                 if ("hostExpanded" in item)
                     item.hostExpanded = true;
                 if ("screenGeometry" in item)

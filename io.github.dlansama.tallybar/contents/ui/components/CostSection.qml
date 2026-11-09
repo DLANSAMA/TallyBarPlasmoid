@@ -74,7 +74,7 @@ Item {
         font.pixelSize: 13
         font.weight: Font.DemiBold
         textFormat: Text.PlainText
-        text: costSection.cost.title || i18n("Cost")
+        text: root.costTitleText(costSection.cost)
     }
 
     Text {
@@ -196,5 +196,22 @@ Item {
         textFormat: Text.PlainText
         text: costSection.breakdownLine
         visible: costSection.hasBreakdown
+    }
+
+    // Models billed at an inherited or default rate, so the totals above are estimates.
+    Text {
+        id: unpricedText
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.rightMargin: 8
+        anchors.top: costTitle.bottom
+        anchors.topMargin: costSection.hasBreakdown ? 89 : 69
+        color: root.mutedTextColor(0.5)
+        elide: Text.ElideRight
+        font.family: root.uiFont
+        font.pixelSize: 10
+        textFormat: Text.PlainText
+        text: root.unpricedModelsText()
+        visible: text.length > 0
     }
 }
