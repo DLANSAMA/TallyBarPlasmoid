@@ -638,9 +638,7 @@ def carry_forward_cost_summaries(providers: dict[str, Any], cached: Any,
     exists only through its cost summary (Grok) is recreated from the cached entry."""
     if not isinstance(cached, dict) or not isinstance(cached.get("providers"), dict):
         return
-    cached_dt = _parse_iso_utc(cached.get("timestamp"))
-    if cached_dt is None or cached_dt.astimezone().date() != dt.datetime.now().astimezone().date():
-        return
+    today = dt.datetime.now().astimezone().date()
     for name, entry in cached["providers"].items():
         if names is not None and name not in names:
             continue
@@ -648,6 +646,9 @@ def carry_forward_cost_summaries(providers: dict[str, Any], cached: Any,
             continue
         origin = _stale_origin(cached, entry["costSummary"])
         if origin is None or not 0 <= origin[1] <= _COST_CARRY_MAX_SECONDS:
+            continue
+        origin_dt = _parse_iso_utc(origin[0])
+        if origin_dt is None or origin_dt.astimezone().date() != today:
             continue
         target = providers.get(name)
         if not isinstance(target, dict):
