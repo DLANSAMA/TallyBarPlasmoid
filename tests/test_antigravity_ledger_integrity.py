@@ -261,6 +261,60 @@ def test_repaired_cascade_is_queried_once_then_left_alone(monkeypatch, tmp_path)
 
 
 # ---------------------------------------------------------------------------
+# Marker-24 gen_metadata records duplicate the steps rows
+# ---------------------------------------------------------------------------
+
+def test_dated_marker24_generation_is_not_ingested(monkeypatch, tmp_path):
+    conv = tmp_path / "antigravity-ide" / "conversations"
+    conv.mkdir(parents=True)
+    day = _noon("2026-06-08")
+    _make_db(conv / "cas.db",
+             steps=[(0, _usage(24, u=500))],
+             gen=[(0, _gen_blob(24, day, u=500)), (1, _gen_blob(26, day, u=70))])
+    _wire(monkeypatch, tmp_path, conv)
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert sorted(res["entries"]) == ["cas:0", "cas@1.0"]
+    assert res["entries"]["cas@1.0"]["u"] == 70
+
+
+def test_stored_marker24_duplicates_are_dropped(monkeypatch, tmp_path):
+    conv = tmp_path / "antigravity-ide" / "conversations"
+    conv.mkdir(parents=True)
+    day = _noon("2026-06-08")
+    undated26 = _ld(1, _ld(4, _usage(26, u=9)))
+    _make_db(conv / "cas.db",
+             steps=[(0, _usage(24, u=500))],
+             gen=[(0, _gen_blob(24, day, u=500)), (1, _gen_blob(26, day, u=70)), (2, undated26)])
+    _wire(monkeypatch, tmp_path, conv)
+
+    def entry(u):
+        return {"d": "2026-06-08", "u": u, "c": 0, "o": 1, "me": 1132}
+
+    _write_ledger(tmp_path, entries={
+        "cas:0": entry(500), "cas@0.0": entry(500), "cas@1.0": entry(70), "cas@2.0": entry(9),
+        "gone@0.0": entry(500),            # its DB no longer exists: nothing proves a duplicate
+    })
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert sorted(res["entries"]) == ["cas:0", "cas@1.0", "cas@2.0", "gone@0.0"]
+    assert res["atMarkersChecked"] is True
+    before = (tmp_path / "ledger.json").stat().st_mtime_ns
+    costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert (tmp_path / "ledger.json").stat().st_mtime_ns == before
+
+
+def test_marker_check_retries_after_a_deadline_cut(monkeypatch, tmp_path):
+    conv = tmp_path / "convs"
+    conv.mkdir()
+    _make_db(conv / "cas.db", gen=[(0, _gen_blob(24, _noon("2026-06-08"), u=500))])
+    _wire(monkeypatch, tmp_path, conv)
+    _write_ledger(tmp_path, entries={"cas@0.0": {"d": "2026-06-08", "u": 500, "c": 0, "o": 1}})
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW, deadline=0.0)
+    assert "cas@0.0" in res["entries"] and not res.get("atMarkersChecked")
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert "cas@0.0" not in res["entries"] and res["atMarkersChecked"] is True
+
+
+# ---------------------------------------------------------------------------
 # The 30-day window
 # ---------------------------------------------------------------------------
 

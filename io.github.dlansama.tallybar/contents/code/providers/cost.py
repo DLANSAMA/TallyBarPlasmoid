@@ -78,6 +78,8 @@ ANTIGRAVITY_RETENTION_DAYS = 35
 # Ledger-entry flag: a '#' entry the RPC had no time for, dated from its cascade's
 # lastModifiedTime. It leaves the re-query set until the cascade changes.
 _DATED_FROM_MODIFIED = "dlm"
+# Ledger flag: stored '@' entries have been checked for marker-24 duplicates.
+_AT_MARKERS_CHECKED = "atMarkersChecked"
 # compute_local_cost_summaries' map entry naming each provider whose summary raised:
 # {provider: "<ExceptionClass>: <message>"}. Present only when one did; not a provider.
 COST_SUMMARY_ERRORS_KEY = "_errors"
@@ -194,6 +196,52 @@ def _db_signature(db_path: Path) -> str | None:
         return f"{sig}:0:0"
 
 
+def _drop_marker24_at_entries(entries: dict[str, Any], deadline: float | None) -> tuple[bool, bool]:
+    """Delete stored ``<stem>@<idx>.<gi>`` entries whose generation is a marker-24 record.
+
+    Those duplicate the stem's ``steps`` usage. Proof comes from the DB itself: the entry's
+    row is re-read and only a dated generation (the path that took marker 24 too) whose
+    record is not marker 26 is dropped. An undated-path entry, a row or DB that is gone, or
+    a legacy ``@<idx>`` key is kept. Returns ``(removed_any, complete)``; ``complete`` is
+    False when a sqlite error or the deadline left some stem unchecked.
+    """
+    by_stem: dict[str, dict[int, list[tuple[str, int]]]] = {}
+    for key in entries:
+        if "@" not in key:
+            continue
+        stem, rest = key.rsplit("@", 1)
+        m = re.fullmatch(r"(\d+)\.(\d+)", rest)
+        if m:
+            by_stem.setdefault(stem, {}).setdefault(int(m[1]), []).append((key, int(m[2])))
+    removed = False
+    for stem, rows in by_stem.items():
+        if deadline_passed(deadline):
+            return removed, False
+        db_path = next((d / f"{stem}.db" for d in ANTIGRAVITY_CONVERSATION_DIRS
+                        if (d / f"{stem}.db").is_file()), None)
+        if db_path is None:
+            continue
+        idxs = list(rows)
+        fetched: list[Any] = []
+        try:
+            for j in range(0, len(idxs), 400):
+                chunk = idxs[j:j + 400]
+                fetched += _read_rows(
+                    db_path, f"SELECT idx, data FROM gen_metadata WHERE idx IN ({','.join('?' * len(chunk))})",
+                    chunk)
+        except sqlite3.Error:
+            return removed, False
+        for idx, blob in fetched:
+            if not isinstance(blob, (bytes, bytearray)):
+                continue
+            dated = _pb_generations(bytes(blob))
+            for key, gi in rows.get(idx, []):
+                if gi < len(dated) and dated[gi]["mk"] != 26:
+                    del entries[key]
+                    removed = True
+    return removed, True
+
+
 def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: float | None = None) -> dict[str, Any]:
     """Fold any newly-seen Antigravity generations into the persistent ledger.
 
@@ -266,6 +314,17 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
             if legacy is not None:
                 e["model"] = legacy
                 changed = True
+
+        # The gen pass's dated path once took marker-24 records too, duplicating the steps
+        # usage of the same stem. Checked once per ledger; a cut or failed check retries.
+        # → tests/test_antigravity_ledger_integrity.py::test_stored_marker24_duplicates_are_dropped
+        if not ledger.get(_AT_MARKERS_CHECKED):
+            removed, complete = _drop_marker24_at_entries(entries, deadline)
+            changed = changed or removed
+            if complete:
+                ledger[_AT_MARKERS_CHECKED] = True
+                # A ledger with no '@' entries stores the flag with its next real write.
+                changed = changed or any("@" in k for k in entries)
 
         # 1) Live RPC — authoritative for conversations loaded in the language server's memory.
         # Incremental harvest: load persisted lastModifiedTime watermarks so unchanged cascades
@@ -578,7 +637,12 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                                     }
                                     changed = True
                             continue
+                        # gi counts every dated generation, so keys stay stable; only
+                        # marker 26 is ingested (a 24-record duplicates a steps row).
+                        # → tests/test_antigravity_ledger_integrity.py::test_dated_marker24_generation_is_not_ingested
                         for gi, gen in enumerate(gens):
+                            if gen["mk"] != 26:
+                                continue
                             stamped = _local_iso(gen["secs"])
                             if stamped is None or stamped < cutoff:
                                 continue

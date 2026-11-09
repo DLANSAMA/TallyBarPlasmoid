@@ -1160,7 +1160,7 @@ def test_disk_scan_dates_by_embedded_timestamp_not_today(monkeypatch, tmp_path):
     old = dt.date.today() - dt.timedelta(days=5)
     secs = int(dt.datetime(old.year, old.month, old.day, 9, 0, 0).timestamp())
     _make_gen_metadata_db(conv_dir / "mydb.db",
-                          [_encode_gen_metadata_blob([{"u": 100, "c": 0, "o": 50, "me": 1133, "secs": secs}])])
+                          [_encode_gen_metadata_blob([{"u": 100, "c": 0, "o": 50, "me": 1133, "secs": secs, "marker": 26}])])
     monkeypatch.setattr(cm, "ANTIGRAVITY_CONVERSATION_DIRS", (conv_dir,))
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
@@ -1182,7 +1182,7 @@ def test_disk_scan_counts_generation_once_not_doubled(monkeypatch, tmp_path):
     conv_dir.mkdir()
     secs = int(dt.datetime.now().timestamp())
     _make_gen_metadata_db(conv_dir / "c.db",
-                          [_encode_gen_metadata_blob([{"u": 1000, "c": 0, "o": 300, "me": 1133, "secs": secs}])])
+                          [_encode_gen_metadata_blob([{"u": 1000, "c": 0, "o": 300, "me": 1133, "secs": secs, "marker": 26}])])
     monkeypatch.setattr(cm, "ANTIGRAVITY_CONVERSATION_DIRS", (conv_dir,))
     monkeypatch.setattr(cm, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
@@ -1204,7 +1204,7 @@ def test_disk_scan_rescans_changed_db_skips_unchanged(monkeypatch, tmp_path):
     conv_dir.mkdir()
     db = conv_dir / "grow.db"
     secs0 = int(dt.datetime.now().timestamp())
-    _make_gen_metadata_db(db, [_encode_gen_metadata_blob([{"u": 100, "c": 0, "o": 50, "me": 1133, "secs": secs0}])])
+    _make_gen_metadata_db(db, [_encode_gen_metadata_blob([{"u": 100, "c": 0, "o": 50, "me": 1133, "secs": secs0, "marker": 26}])])
     # Use a fixed mtime within the 35-day scan window (2 days ago) so the DB is not treated
     # as a stale-backlog and skipped.  The exact value is stable across run-1 and run-2 so the
     # content signature matches and run-2 is memoised (the skip-on-unchanged contract).
@@ -1236,8 +1236,8 @@ def test_disk_scan_rescans_changed_db_skips_unchanged(monkeypatch, tmp_path):
 
     secs1 = int(dt.datetime.now().timestamp())
     _make_gen_metadata_db(db, [
-        _encode_gen_metadata_blob([{"u": 100, "c": 0, "o": 50, "me": 1133, "secs": secs0}]),
-        _encode_gen_metadata_blob([{"u": 999, "c": 0, "o": 5, "me": 1016, "secs": secs1}]),
+        _encode_gen_metadata_blob([{"u": 100, "c": 0, "o": 50, "me": 1133, "secs": secs0, "marker": 26}]),
+        _encode_gen_metadata_blob([{"u": 999, "c": 0, "o": 5, "me": 1016, "secs": secs1, "marker": 26}]),
     ])
     os.utime(db, (mtime_changed, mtime_changed))
     res3 = costmod.update_antigravity_token_ledger()
@@ -1254,7 +1254,7 @@ def test_disk_dating_migration_resets_db_scanned(monkeypatch, tmp_path):
     conv_dir.mkdir()
     secs = int(dt.datetime.now().timestamp())
     db = conv_dir / "mig.db"
-    _make_gen_metadata_db(db, [_encode_gen_metadata_blob([{"u": 7, "c": 0, "o": 3, "me": 1133, "secs": secs}])])
+    _make_gen_metadata_db(db, [_encode_gen_metadata_blob([{"u": 7, "c": 0, "o": 3, "me": 1133, "secs": secs, "marker": 26}])])
     # Set mtime within the 35-day scan window so the DB is not treated as a stale-backlog.
     # The pre-seeded dbScanned value uses a different format so the sig never matches and the
     # DB is always re-scanned; the migration additionally clears the memo map.
@@ -1277,7 +1277,9 @@ def test_disk_dating_migration_resets_db_scanned(monkeypatch, tmp_path):
 
 
 def test_pb_generations_captures_2_0_marker_26(tmp_path, monkeypatch):
-    """End-to-end: a gen_metadata DB with Antigravity-2.0 usage marker (field6==26) is captured."""
+    """End-to-end: a gen_metadata DB with Antigravity-2.0 usage marker (field6==26) is captured.
+    The parser returns both markers; the scan ingests only the 26 (a 24 duplicates a steps row),
+    keeping the generation index of the full list in the key."""
     from providers import cost as cm
     secs = int(dt.datetime.now().timestamp())
     blob = _encode_gen_metadata_blob([
@@ -1297,10 +1299,8 @@ def test_pb_generations_captures_2_0_marker_26(tmp_path, monkeypatch):
     monkeypatch.setattr(cm, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
     monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", lambda *a, **k: agmod.RpcHarvest())
     res = costmod.update_antigravity_token_ledger()
-    folded = {k: v for k, v in res["entries"].items() if k.startswith("conv26@")}
-    assert len(folded) == 2
-    assert sum(v["u"] for v in folded.values()) == 300
-    assert sum(v["o"] for v in folded.values()) == 120
+    folded = {k: (v["u"], v["o"]) for k, v in res["entries"].items() if k.startswith("conv26@")}
+    assert folded == {"conv26@0.1": (200, 70)}
 
 
 def test_antigravity_summary_burn_rate_uses_unbiased_denominator(tmp_path, monkeypatch):
