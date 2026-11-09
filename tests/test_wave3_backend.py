@@ -56,3 +56,23 @@ def test_legacy_key_in_hold_band_stays_armed(tmp_path, monkeypatch):
     fired = set(json.loads(state.read_text())["fired"])
     assert fired == {"antigravity|Gemini|5h|90"}
     assert backend.compute_notifications(provs(92), cfg) == []
+
+
+def test_missing_config_is_defaults_not_backup(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.json"
+    monkeypatch.setattr(backend, "CONFIG_PATH", cfg)
+    (tmp_path / "config.json.bak").write_text(json.dumps({"monthlyBudget": 50}))
+    assert backend.load_config() == {}
+    cfg.write_text("{broken")
+    assert backend.load_config() == {"monthlyBudget": 50}
+    assert (tmp_path / "config.json.corrupt").exists()
+
+
+def test_last_snapshot_refreshes_config(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(backend, "SNAPSHOT_PATH", tmp_path / "snap.json")
+    monkeypatch.setattr(backend, "CONFIG_PATH", tmp_path / "config.json")
+    (tmp_path / "snap.json").write_text(json.dumps({"providers": {}, "config": {"monthlyBudget": 1}}))
+    (tmp_path / "config.json").write_text(json.dumps({"monthlyBudget": 77}))
+    monkeypatch.setattr(sys, "argv", ["backend.py", "--last-snapshot"])
+    assert backend.main() == 0
+    assert json.loads(capsys.readouterr().out)["config"]["monthlyBudget"] == 77

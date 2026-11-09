@@ -211,7 +211,10 @@ def all_ai_projected_month_cost(providers: dict[str, Any], now: time.struct_time
 def load_config() -> dict[str, Any]:
     """The saved config, falling back to its ``.bak`` mirror when the main file is unreadable
     (quarantined as ``.corrupt``), so a corrupt file never reads as "no settings" and gets
-    overwritten by the next single-key save."""
+    overwritten by the next single-key save. A missing file is always deliberate (writes are
+    atomic replaces), so it reads as defaults, never as the backup."""
+    if not CONFIG_PATH.exists():
+        return {}
     try:
         data = load_json_with_backup(CONFIG_PATH, lambda d: isinstance(d, dict), {})
     except Exception:
@@ -1407,6 +1410,8 @@ def main() -> int:
 
     if args.last_snapshot:
         cached = load_snapshot()
+        if cached:
+            _refresh_config(cached)
         print(_dump_json(cached, False))
         return 0
 
