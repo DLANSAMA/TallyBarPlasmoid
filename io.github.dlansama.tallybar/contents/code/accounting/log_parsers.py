@@ -46,7 +46,7 @@ _CACHE_SCHEMA_VERSION = 1          # bump to invalidate ALL parse caches at once
 _CLAUDE_PARSE_VERSION = 6
 _CODEX_PARSE_VERSION = 3
 _GROK_PARSE_VERSION = 3
-_GEMINI_PARSE_VERSION = 2
+_GEMINI_PARSE_VERSION = 3
 # The shape of a Claude file's folded state (_claude_state) in the Claude store; bump it
 # on any change to that shape. → tests/test_claude_log_store.py::test_state_shape_is_pinned
 _CLAUDE_STATE_VERSION = 1
@@ -717,8 +717,9 @@ def _parse_codex_file(path: Path) -> list[dict[str, Any]] | None:
     which is what lets usage_cost_usd pick its prompt-length tier. A cumulative-only delta
     spans several requests only when Codex skipped events in between; the log then holds
     nothing to split it by, so it is priced as one request."""
+    # errors="replace": one stray non-UTF-8 byte in a log must cost its line, not the file.
     try:
-        handle = path.open("r", encoding="utf-8")
+        handle = path.open("r", encoding="utf-8", errors="replace")
     except OSError:
         return None
     out: list[dict[str, Any]] = []
@@ -819,7 +820,7 @@ def _grok_pricing_model(model: str | None) -> str:
 
 def _parse_grok_file(path: Path) -> list[dict[str, Any]] | None:
     try:
-        handle = path.open("r", encoding="utf-8")
+        handle = path.open("r", encoding="utf-8", errors="replace")
     except OSError:
         return None
     out: list[dict[str, Any]] = []
@@ -1397,7 +1398,7 @@ def _gemini_session_files(base: Path):
 
 def _parse_gemini_file(path: Path) -> list[dict[str, Any]] | None:
     try:
-        handle = path.open("r", encoding="utf-8")
+        handle = path.open("r", encoding="utf-8", errors="replace")
     except OSError:
         return None
     with handle:

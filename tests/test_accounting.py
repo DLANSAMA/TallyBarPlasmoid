@@ -2167,7 +2167,7 @@ _PARSE_PINS = {
     "claude": (6, "07501fee7c53456a"),
     "codex": (3, "c78d70d4941f28c1"),
     "grok": (3, "610763b0f302ac40"),
-    "gemini": (2, "08a92be3066fcd9c"),
+    "gemini": (3, "08a92be3066fcd9c"),
 }
 
 
