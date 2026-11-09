@@ -309,7 +309,7 @@ def test_tabs_mark_every_bad_status_but_honour_mute(tmp_path):
 
 
 def test_status_message_and_action_show_beside_cost_data(tmp_path):
-    """A provider with no limits, a bad status and local cost data used to show nothing."""
+    """A provider with no limits, a bad status and local cost data still shows its status."""
     snap = _snapshot(claude={"status": "missing-cookies", "limits": []},
                      codex={"status": "not-running", "limits": []})
     claude = _probe(tmp_path, snap, ["item.emptyStateMode()", "item.emptyStateShowsSignIn()",
