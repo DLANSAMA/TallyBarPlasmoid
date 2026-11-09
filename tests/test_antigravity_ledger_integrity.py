@@ -314,6 +314,28 @@ def test_marker_check_retries_after_a_deadline_cut(monkeypatch, tmp_path):
     assert "cas@0.0" not in res["entries"] and res["atMarkersChecked"] is True
 
 
+def test_unreadable_db_does_not_block_the_marker_check(monkeypatch, tmp_path):
+    conv = tmp_path / "antigravity-ide" / "conversations"
+    conv.mkdir(parents=True)
+    (conv / "bad.db").write_bytes(b"not a sqlite database at all" * 100)
+    _make_db(conv / "cas.db", steps=[(0, _usage(24, u=500))],
+             gen=[(0, _gen_blob(24, _noon("2026-06-08"), u=500))])
+    _wire(monkeypatch, tmp_path, conv)
+    e = {"d": "2026-06-08", "u": 500, "c": 30, "o": 80, "me": 1132}
+    _write_ledger(tmp_path, entries={"bad@0.0": dict(e), "cas:0": dict(e), "cas@0.0": dict(e)})
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert sorted(res["entries"]) == ["bad@0.0", "cas:0"]      # the readable stem is checked
+    assert res["atMarkersPending"] == {"bad": 1} and not res.get("atMarkersChecked")
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert res["atMarkersPending"] == {"bad": 2}
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert res["atMarkersChecked"] is True and "atMarkersPending" not in res
+    assert "bad@0.0" in res["entries"]                         # never proven a duplicate: kept
+    before = (tmp_path / "ledger.json").stat().st_mtime_ns
+    costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert (tmp_path / "ledger.json").stat().st_mtime_ns == before
+
+
 # ---------------------------------------------------------------------------
 # CLI ownership flip and steps re-ingest
 # ---------------------------------------------------------------------------

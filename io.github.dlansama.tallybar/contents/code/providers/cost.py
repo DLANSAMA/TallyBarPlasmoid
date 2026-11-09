@@ -81,6 +81,10 @@ ANTIGRAVITY_RETENTION_DAYS = 35
 _DATED_FROM_MODIFIED = "dlm"
 # Ledger flag: stored '@' entries have been checked for marker-24 duplicates.
 _AT_MARKERS_CHECKED = "atMarkersChecked"
+# Ledger map {stem: failed reads} of stems still to be checked; a stem is given up (its '@'
+# entries kept unverified) after _AT_MARKER_ATTEMPTS failed reads.
+_AT_MARKERS_PENDING = "atMarkersPending"
+_AT_MARKER_ATTEMPTS = 3
 # Ledger map {stem: highest steps idx past the retention horizon}; the steps scan never
 # ingests a row at or below it.
 _STEPS_PRUNED = "stepsPruned"
@@ -201,14 +205,16 @@ def _db_signature(db_path: Path) -> str | None:
         return f"{sig}:0:0"
 
 
-def _drop_marker24_at_entries(entries: dict[str, Any], deadline: float | None) -> tuple[bool, bool]:
+def _drop_marker24_at_entries(entries: dict[str, Any], deadline: float | None,
+                              only: "set[str] | None" = None) -> tuple[bool, set[str], set[str]]:
     """Delete stored ``<stem>@<idx>.<gi>`` entries whose generation is a marker-24 record.
 
     Those duplicate the stem's ``steps`` usage. Proof comes from the DB itself: the entry's
     row is re-read and only a dated generation (the path that took marker 24 too) whose
     record is not marker 26 is dropped. An undated-path entry, a row or DB that is gone, or
-    a legacy ``@<idx>`` key is kept. Returns ``(removed_any, complete)``; ``complete`` is
-    False when a sqlite error or the deadline left some stem unchecked.
+    a legacy ``@<idx>`` key is kept. ``only`` limits the check to those stems. Returns
+    ``(removed_any, failed, unreached)``: stems whose DB could not be read, and stems the
+    deadline left unchecked.
     """
     by_stem: dict[str, dict[int, list[tuple[str, int]]]] = {}
     for key in entries:
@@ -216,12 +222,15 @@ def _drop_marker24_at_entries(entries: dict[str, Any], deadline: float | None) -
             continue
         stem, rest = key.rsplit("@", 1)
         m = re.fullmatch(r"(\d+)\.(\d+)", rest)
-        if m:
+        if m and (only is None or stem in only):
             by_stem.setdefault(stem, {}).setdefault(int(m[1]), []).append((key, int(m[2])))
     removed = False
+    failed: set[str] = set()
+    unreached: set[str] = set()
     for stem, rows in by_stem.items():
         if deadline_passed(deadline):
-            return removed, False
+            unreached.add(stem)
+            continue
         db_path = next((d / f"{stem}.db" for d in ANTIGRAVITY_CONVERSATION_DIRS
                         if (d / f"{stem}.db").is_file()), None)
         if db_path is None:
@@ -235,7 +244,8 @@ def _drop_marker24_at_entries(entries: dict[str, Any], deadline: float | None) -
                     db_path, f"SELECT idx, data FROM gen_metadata WHERE idx IN ({','.join('?' * len(chunk))})",
                     chunk)
         except sqlite3.Error:
-            return removed, False
+            failed.add(stem)
+            continue
         for idx, blob in fetched:
             if not isinstance(blob, (bytes, bytearray)):
                 continue
@@ -244,7 +254,7 @@ def _drop_marker24_at_entries(entries: dict[str, Any], deadline: float | None) -
                 if gi < len(dated) and dated[gi]["mk"] != 26:
                     del entries[key]
                     removed = True
-    return removed, True
+    return removed, failed, unreached
 
 
 def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: float | None = None) -> dict[str, Any]:
@@ -322,15 +332,32 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                 changed = True
 
         # The gen pass's dated path once took marker-24 records too, duplicating the steps
-        # usage of the same stem. Checked once per ledger; a cut or failed check retries.
+        # usage of the same stem. Checked once per ledger; a stem the deadline left unchecked
+        # stays pending, and one whose DB can't be read is retried a few times and then kept
+        # unverified, so one bad file neither blocks the others nor re-runs every refresh.
         # → tests/test_antigravity_ledger_integrity.py::test_stored_marker24_duplicates_are_dropped
+        # → tests/test_antigravity_ledger_integrity.py::test_unreadable_db_does_not_block_the_marker_check
         if not ledger.get(_AT_MARKERS_CHECKED):
-            removed, complete = _drop_marker24_at_entries(entries, deadline)
+            pending_raw = ledger.get(_AT_MARKERS_PENDING)
+            pending = ({k: v for k, v in pending_raw.items() if isinstance(v, int)}
+                       if isinstance(pending_raw, dict) else None)
+            removed, failed, unreached = _drop_marker24_at_entries(
+                entries, deadline, None if pending is None else set(pending))
             changed = changed or removed
-            if complete:
+            new_pending = {s: (pending or {}).get(s, 0) for s in unreached}
+            for s in failed:
+                tries = (pending or {}).get(s, 0) + 1
+                if tries < _AT_MARKER_ATTEMPTS:
+                    new_pending[s] = tries
+            if new_pending:
+                if new_pending != pending:
+                    ledger[_AT_MARKERS_PENDING] = new_pending
+                    changed = True
+            else:
                 ledger[_AT_MARKERS_CHECKED] = True
+                ledger.pop(_AT_MARKERS_PENDING, None)
                 # A ledger with no '@' entries stores the flag with its next real write.
-                changed = changed or any("@" in k for k in entries)
+                changed = changed or pending is not None or any("@" in k for k in entries)
 
         # 1) Live RPC — authoritative for conversations loaded in the language server's memory.
         # Incremental harvest: load persisted lastModifiedTime watermarks so unchanged cascades
