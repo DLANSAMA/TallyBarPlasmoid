@@ -194,3 +194,17 @@ def test_a_zero_priced_lowest_tier_does_not_hide_a_higher_valid_one():
     assert tier == {"long_context_threshold": 200_000.0, "long_input": 2.0, "long_output": 8.0}
     info.pop("input_cost_per_token_above_200k_tokens")
     assert pricing_data._long_context_tier(info, {"input": 1.0, "output": 5.0}, "gemini") == {}
+
+
+@pytest.mark.parametrize("model,inp,out", [
+    ("claude-opus-4-20250514", 15.0, 75.0), ("claude-opus-4-0", 15.0, 75.0),
+    ("claude-opus-4-1-20250805", 15.0, 75.0), ("claude-opus-4-5-20251101", 5.0, 25.0),
+    ("claude-opus-4-8", 5.0, 25.0), ("claude-opus-4-9", 5.0, 25.0),
+    ("claude-opus-4.6", 5.0, 25.0), ("claude-opus-4", 5.0, 25.0),
+])
+def test_offline_opus_4_family_rates(model, inp, out):
+    from pricing_data import _FALLBACK_PRICING, _scan_catalog
+    _, prices, _ = _scan_catalog(list(_FALLBACK_PRICING), model)
+    assert (prices["input"], prices["output"]) == (inp, out)
+    if inp == 5.0:
+        assert (prices["cache_write"], prices["cache_write_1h"], prices["cache_read"]) == (6.25, 10.0, 0.5)

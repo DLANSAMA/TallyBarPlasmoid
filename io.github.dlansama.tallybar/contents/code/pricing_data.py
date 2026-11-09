@@ -131,10 +131,12 @@ _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
     ("claude-3-5-sonnet",    {"input":  3.00, "output": 15.00, "cache_write":  3.75, "cache_write_1h":  6.00, "cache_read": 0.30}),
     ("claude-3-5-haiku",     {"input":  0.80, "output":  4.00, "cache_write":  1.00, "cache_write_1h":  1.60, "cache_read": 0.08}),
     ("claude-3-opus",        {"input": 15.00, "output": 75.00, "cache_write": 18.75, "cache_write_1h": 30.00, "cache_read": 1.50}),
-    # The original Opus 4 (claude-opus-4-0, claude-opus-4-20250514) bills at the Opus 4.1 rate
-    # (platform.claude.com/docs/en/about-claude/pricing), not the $5 / $25 of 4.5 and later.
+    # The original Opus 4 (claude-opus-4-0, claude-opus-4-20250514) bills at the Opus 4.1
+    # rate (platform.claude.com/docs/en/about-claude/pricing); the generic row is the $5 / $25
+    # that every 4.5 and later name, dotted or not, resolves to.
     ("claude-opus-4-0",      {"input": 15.00, "output": 75.00, "cache_write": 18.75, "cache_write_1h": 30.00, "cache_read": 1.50}),
-    ("claude-opus-4",        {"input": 15.00, "output": 75.00, "cache_write": 18.75, "cache_write_1h": 30.00, "cache_read": 1.50}),
+    ("claude-opus-4-20250514",{"input": 15.00, "output": 75.00, "cache_write": 18.75, "cache_write_1h": 30.00, "cache_read": 1.50}),
+    ("claude-opus-4",        {"input":  5.00, "output": 25.00, "cache_write":  6.25, "cache_write_1h": 10.00, "cache_read": 0.50}),
     ("claude-sonnet-4",      {"input":  3.00, "output": 15.00, "cache_write":  3.75, "cache_write_1h":  6.00, "cache_read": 0.30}),
     ("claude-haiku-4",       {"input":  1.00, "output":  5.00, "cache_write":  1.25, "cache_write_1h":  2.00, "cache_read": 0.10}),
     # OpenAI / Codex
