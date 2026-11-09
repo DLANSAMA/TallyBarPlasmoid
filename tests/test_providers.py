@@ -2432,3 +2432,19 @@ def test_grok_bot_prepaid_text_feeds_the_extra_usage_line():
     p = {"limits": [{"label": "Weekly", "percent": 10}], "extraUsageText": "Prepaid usage: $1.00 this month"}
     enrich_ui_formatting({"grokbot": p})
     assert p["formattedExtraUsageDetail"] == "Prepaid usage: $1.00 this month"
+
+
+@pytest.mark.asyncio
+async def test_claude_get_returns_a_failure_tuple_never_none():
+    from providers import claude as claude_mod
+
+    async def boom(*a, **k):
+        raise urllib.error.URLError("down")
+
+    async def slow(*a, **k):
+        raise TimeoutError
+
+    with patch.object(claude_mod, "http_json_async", boom):
+        assert await claude_mod._claude_get("u", None, 1.0) == (claude_mod._FAILED, None)
+    with patch.object(claude_mod, "http_json_async", slow):
+        assert await claude_mod._claude_get("u", None, 1.0) == (claude_mod._FAILED_TIMEOUT, None)

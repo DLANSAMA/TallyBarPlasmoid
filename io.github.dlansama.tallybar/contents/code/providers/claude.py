@@ -278,15 +278,14 @@ def _is_timeout(exc: BaseException) -> bool:
     return isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, (socket.timeout, TimeoutError))
 
 
-async def _claude_get(url: str, jar: Any, timeout: float) -> tuple[int, Any] | None:
-    """GET + JSON-decode, returning (status, data) or None on any failure — so a single
-    endpoint's error is treated as 'absent' 
-    instead of aborting the concurrent per-org batch."""
+async def _claude_get(url: str, jar: Any, timeout: float) -> tuple[int, Any]:
+    """GET + JSON-decode, returning (status, data); a transport failure returns
+    (_FAILED or _FAILED_TIMEOUT, None) instead of raising, so one endpoint's error does not
+    abort the concurrent per-org batch."""
     try:
         return await http_json_async(url, jar, timeout)
     except Exception as exc:
         return (_FAILED_TIMEOUT if _is_timeout(exc) else _FAILED, None)
-
 
 
 def _transient_usage_status(code: int) -> bool:
@@ -379,11 +378,10 @@ async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
             summary, rest = results[0], list(results[1:])
         else:
             rest = list(await asyncio.gather(*extra_calls)) if extra_calls else []
-        cr = rest[0] if not skip_credit_calls else None
-        ov = rest[1] if not skip_credit_calls else None
 
         if not skip_credit_calls:
-            if credit_balance is None and cr is not None and cr[0] == 200:
+            cr, ov = rest[0], rest[1]
+            if credit_balance is None and cr[0] == 200:
                 credit_balance = parse_claude_credit_balance(cr[1])
                 if credit_balance is not None:
                     credit_balance["fetchedAt"] = now_iso()
@@ -396,7 +394,7 @@ async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
 
             # Upstream Swift fetches a dedicated endpoint for the Extra-usage spend cap.
             # See ClaudeWebAPIFetcher.fetch / parseOverageSpendLimit.
-            if overage_limit is None and ov is not None and ov[0] == 200 and isinstance(ov[1], dict):
+            if overage_limit is None and ov[0] == 200 and isinstance(ov[1], dict):
                 if ov[1].get("is_enabled") is True or ov[1].get("isEnabled") is True:
                     parsed = parse_claude_usage({"extra_usage": ov[1]})
                     if parsed:
@@ -412,12 +410,12 @@ async def run_claude_api(cookies: list[BrowserCookie], timeout: float,
                 summary_unavailable_since = now_iso()
         if not org_limits:
             usage = await _claude_get(f"{base}/usage", jar, timeout)
-            if usage is not None and usage[0] == 200:
+            if usage[0] == 200:
                 org_limits = parse_claude_usage(usage[1], session_window)
-            elif usage is not None and _transient_usage_status(usage[0]):
+            elif _transient_usage_status(usage[0]):
                 usage_failure = usage
             if not org_limits and usage_failure is None and summary is not None \
-                    and _transient_usage_status(summary[0]) and (usage is None or usage[0] in _USAGE_SUMMARY_GONE):
+                    and _transient_usage_status(summary[0]) and usage[0] in _USAGE_SUMMARY_GONE:
                 usage_failure = summary
         if org_limits:
             limits = org_limits
