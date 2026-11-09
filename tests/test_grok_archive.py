@@ -118,3 +118,61 @@ def test_a_fixture_driven_summarise_never_touches_the_shared_archive(tmp_path, m
 
     accounting.local_grok_token_summary(logs_dir=log.parent)
     assert not real.exists(), "fixture data was banked into the shared archive"
+
+
+# --- A day held by both the log and the archive ------------------------------------
+
+def _live_home(tmp_path, monkeypatch, lines):
+    """A fake home whose ~/.grok/logs/unified.jsonl holds ``lines``, with the archive in
+    tmp_path, so the summary runs its production path (archive merge included)."""
+    import datetime as dt
+    logs = Path.home() / ".grok" / "logs"
+    logs.mkdir(parents=True)
+    (logs / "unified.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    monkeypatch.setattr(accounting, "GROK_ARCHIVE_PATH", tmp_path / "grok_archive.json")
+    return dt
+
+
+def _turn(ts, loop, prompt):
+    import json as _json
+    return _json.dumps({"ts": ts.isoformat(), "sid": "s1", "msg": "shell.turn.inference_done",
+                        "ctx": {"loop_index": loop, "prompt_tokens": prompt,
+                                "cached_prompt_tokens": 0, "completion_tokens": 0}})
+
+
+def test_a_partly_rotated_day_takes_the_larger_archived_figure(tmp_path, monkeypatch):
+    import datetime as dt
+    now = dt.datetime.now(dt.timezone.utc).astimezone().replace(hour=15, minute=0, second=0, microsecond=0)
+    today = now.date().isoformat()
+    _live_home(tmp_path, monkeypatch, [_turn(now - dt.timedelta(hours=1), 0, 1000)])
+    accounting.merge_grok_archive({today: _day(5_000_000, 50.0, {"Grok Build": {"cost": 50.0, "tokens": 5_000_000}})},
+                                  today)
+    summary = accounting.local_grok_token_summary(now=now)
+    assert summary["tokens7d"] == 5_000_000
+    assert summary["tokens30d"] == 5_000_000
+    assert summary["costToday"] == 50.0
+    assert [r["tokens"] for r in summary["modelBreakdown"]] == [5_000_000]
+    assert summary["weeklyTokenUsage"][-1]["tokens"] == 5_000_000
+
+
+def test_a_larger_live_day_still_wins_over_the_archive(tmp_path, monkeypatch):
+    import datetime as dt
+    now = dt.datetime.now(dt.timezone.utc).astimezone().replace(hour=15, minute=0, second=0, microsecond=0)
+    today = now.date().isoformat()
+    _live_home(tmp_path, monkeypatch, [_turn(now - dt.timedelta(hours=1), 0, 200_000)])
+    accounting.merge_grok_archive({today: _day(1000, 1.0)}, today)
+    assert accounting.local_grok_token_summary(now=now)["tokens30d"] == 200_000
+
+
+def test_the_billing_week_line_adds_archived_days(tmp_path, monkeypatch):
+    import datetime as dt
+    now = dt.datetime.now(dt.timezone.utc).astimezone().replace(hour=15, minute=0, second=0, microsecond=0)
+    today = now.date()
+    week_start = (now - dt.timedelta(days=5)).replace(hour=0)
+    week_end = week_start + dt.timedelta(days=7)
+    two_ago = (today - dt.timedelta(days=2)).isoformat()
+    _live_home(tmp_path, monkeypatch, [_turn(now - dt.timedelta(hours=1), 0, 1000)])
+    accounting.merge_grok_archive({two_ago: _day(4_000_000, 40.0)}, two_ago)
+    summary = accounting.local_grok_token_summary(now=now, week_start=week_start, week_end=week_end)
+    assert summary["billingWeekTokens"] == 4_001_000
+    assert summary["billingWeekTokens"] == summary["tokens7d"]

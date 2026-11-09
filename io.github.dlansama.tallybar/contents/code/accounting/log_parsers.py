@@ -1168,6 +1168,7 @@ def local_grok_token_summary(
     thirty_days_ago = (current - dt.timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
     current_month_start = current.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     history_start = min(thirty_days_ago, current_month_start)
+    first_day = thirty_days_ago.date()
     today_tokens = 0
     month_tokens = 0
     today_cost = 0.0
@@ -1191,6 +1192,8 @@ def local_grok_token_summary(
         sessions_root = Path.home() / ".grok" / "sessions"
     session_models = _load_grok_session_models(sessions_root)
 
+    rows: list[tuple[dt.datetime, str, Any, str]] = []
+    live_week: dict[str, list[Any]] = {}
     for record in _cached_log_records(root, "unified.jsonl*", cache_path,
                                        _parse_grok_file, _GROK_PARSE_VERSION,
                                        deadline=deadline):
@@ -1212,13 +1215,7 @@ def local_grok_token_summary(
             continue
         tokens, cost = split.tokens, split.cost
         day_key = timestamp.date().isoformat()
-        if timestamp >= thirty_days_ago:
-            month_tokens += tokens
-            month_cost += cost
-            type_split_add(split_month, split)
-            slot = model_costs.setdefault(str(display_model), {"cost": 0.0, "tokens": 0})
-            slot["cost"] += cost
-            slot["tokens"] += tokens
+        rows.append((timestamp, day_key, split, display_model))
         lrec = live_days.setdefault(day_key, {"tokens": 0, "cost": 0.0, "in": 0, "out": 0,
                                               "cached": 0, "types": empty_type_split(),
                                               "models": {}})
@@ -1231,6 +1228,43 @@ def local_grok_token_summary(
         lslot = lrec["models"].setdefault(str(display_model), {"cost": 0.0, "tokens": 0})
         lslot["cost"] += cost
         lslot["tokens"] += tokens
+        if week_start is not None and timestamp >= week_start and (week_end is None or timestamp < week_end):
+            week_tokens_billing += tokens
+            week_cost_billing += cost
+            wk = live_week.setdefault(day_key, [0, 0.0])
+            wk[0] += tokens
+            wk[1] += cost
+
+    # unified.jsonl rotates, so a day can sit in both the log and the archive with the
+    # log holding only its tail. Per day the larger figure wins, tokens and cost together
+    # from ONE source; merge_grok_archive keeps the live record when it is the larger.
+    # Archived days hold cost already priced per request, at the rates in force when they
+    # were archived, while their lines were in unified.jsonl: only the per-day total
+    # survives a rotation, and a total can't pick a tier.
+    archived: dict[str, dict[str, Any]] = {}
+    fixture_driven = logs_dir is not None or cache_dir is not _UNSET
+    if not fixture_driven:
+        try:
+            for day, rec in merge_grok_archive(live_days, today.isoformat()).items():
+                if rec is not live_days.get(day):
+                    archived[day] = rec
+        except Exception:
+            archived = {}
+    archive_wins = {day for day in archived if day in live_days}
+
+    for timestamp, day_key, split, display_model in rows:
+        tokens, cost = split.tokens, split.cost
+        if timestamp.date() == today:
+            bucket_add(hourly[timestamp.hour], tokens, cost, display_model)
+        if day_key in archive_wins:
+            continue
+        if timestamp.date() >= first_day:
+            month_tokens += tokens
+            month_cost += cost
+            type_split_add(split_month, split)
+            slot = model_costs.setdefault(str(display_model), {"cost": 0.0, "tokens": 0})
+            slot["cost"] += cost
+            slot["tokens"] += tokens
         if day_key in daily:
             bucket_add(daily[day_key], tokens, cost, display_model)
             type_split_add(split_week, split)
@@ -1240,52 +1274,53 @@ def local_grok_token_summary(
             today_tokens += tokens
             today_cost += cost
             type_split_add(split_today, split)
-            bucket_add(hourly[timestamp.hour], tokens, cost, display_model)
-        if week_start is not None and timestamp >= week_start and (week_end is None or timestamp < week_end):
-            week_tokens_billing += tokens
-            week_cost_billing += cost
 
-    # Archived days hold cost already priced per request, at the rates in force when
-    # they were archived, while their lines were in unified.jsonl. A day that has
-    # rotated out keeps that figure: only its per-day total survives, and a total can't
-    # pick a tier.
-    fixture_driven = logs_dir is not None or cache_dir is not _UNSET
-    if not fixture_driven:
-        try:
-            for day, rec in merge_grok_archive(live_days, today.isoformat()).items():
-                if day in live_days:
+    try:
+        for day, rec in archived.items():
+            try:
+                dday = dt.date.fromisoformat(day)
+            except ValueError:
+                continue
+            d_tokens = int(rec.get("tokens") or 0)
+            d_cost = float(rec.get("cost") or 0.0)
+            if d_tokens <= 0 and d_cost <= 0.0:
+                continue
+            models = as_dict(rec.get("models"))
+            day_split = _grok_archive_split(rec, d_tokens, d_cost)
+            if dday >= first_day:
+                month_tokens += d_tokens
+                month_cost += d_cost
+                type_split_merge(split_month, day_split)
+                for mname, mrec in models.items():
+                    slot = model_costs.setdefault(str(mname), {"cost": 0.0, "tokens": 0})
+                    slot["cost"] += float(mrec.get("cost") or 0.0)
+                    slot["tokens"] += int(mrec.get("tokens") or 0)
+            if day in daily:
+                type_split_merge(split_week, day_split)
+            if dday == today:
+                today_tokens += d_tokens
+                today_cost += d_cost
+                type_split_merge(split_today, day_split)
+            for bucket_map in (daily, monthly_buckets):
+                if day not in bucket_map:
                     continue
-                try:
-                    dday = dt.date.fromisoformat(day)
-                except ValueError:
+                if bucket_map is monthly_buckets and not bucket_map[day].get("inMonth"):
                     continue
-                d_tokens = int(rec.get("tokens") or 0)
-                d_cost = float(rec.get("cost") or 0.0)
-                if d_tokens <= 0 and d_cost <= 0.0:
-                    continue
-                models = as_dict(rec.get("models"))
-                day_split = _grok_archive_split(rec, d_tokens, d_cost)
-                if dday >= thirty_days_ago.date():
-                    month_tokens += d_tokens
-                    month_cost += d_cost
-                    type_split_merge(split_month, day_split)
-                    for mname, mrec in models.items():
-                        slot = model_costs.setdefault(str(mname), {"cost": 0.0, "tokens": 0})
-                        slot["cost"] += float(mrec.get("cost") or 0.0)
-                        slot["tokens"] += int(mrec.get("tokens") or 0)
-                if day in daily:
-                    type_split_merge(split_week, day_split)
-                for bucket_map in (daily, monthly_buckets):
-                    if day not in bucket_map:
-                        continue
-                    if bucket_map is monthly_buckets and not bucket_map[day].get("inMonth"):
-                        continue
-                    for mname, mrec in (models or {"Grok Build": {"cost": d_cost,
-                                                                  "tokens": d_tokens}}).items():
-                        bucket_add(bucket_map[day], int(mrec.get("tokens") or 0),
-                                   float(mrec.get("cost") or 0.0), str(mname))
-        except Exception:
-            pass
+                for mname, mrec in (models or {"Grok Build": {"cost": d_cost,
+                                                              "tokens": d_tokens}}).items():
+                    bucket_add(bucket_map[day], int(mrec.get("tokens") or 0),
+                               float(mrec.get("cost") or 0.0), str(mname))
+            if week_start is not None:
+                # A whole local day inside the billing week is replaced by the archived
+                # figure; a day the week starts or ends in can't be split from a total.
+                day_start = dt.datetime.combine(dday, dt.time.min).astimezone()
+                day_end = dt.datetime.combine(dday + dt.timedelta(days=1), dt.time.min).astimezone()
+                if day_start >= week_start and (week_end is None or day_end <= week_end):
+                    live_tokens, live_cost = live_week.get(day, (0, 0.0))
+                    week_tokens_billing += d_tokens - live_tokens
+                    week_cost_billing += d_cost - live_cost
+    except Exception:
+        pass
 
     summary = token_summary(today_tokens, month_tokens, "local-grok-logs", today_cost, month_cost, tier,
                             now=current,
