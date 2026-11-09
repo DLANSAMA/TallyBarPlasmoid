@@ -168,3 +168,20 @@ def test_error_map_is_neither_a_provider_nor_an_archived_month(monkeypatch, tmp_
     providers: dict = {}
     costmod.apply_cost_summaries(providers, summaries)
     assert "_errors" not in providers
+
+
+# ---------------------------------------------------------------------------
+# The 30-day window
+# ---------------------------------------------------------------------------
+
+def test_last_30_days_is_thirty_calendar_dates(monkeypatch, tmp_path):
+    _wire(monkeypatch, tmp_path)
+    now = dt.datetime(2026, 6, 9, 0, 30).astimezone()
+    first = (now.date() - dt.timedelta(days=29)).isoformat()
+    before = (now.date() - dt.timedelta(days=30)).isoformat()
+    _write_ledger(tmp_path, entries={
+        "in#0": {"d": first, "h": 1, "u": 1000, "c": 0, "o": 0, "me": 1132},
+        "out#0": {"d": before, "h": 23, "u": 7, "c": 0, "o": 0, "me": 1132},
+    })
+    summary = costmod.antigravity_ledger_cost_summary(now=now)
+    assert summary["tokens30d"] == 1000

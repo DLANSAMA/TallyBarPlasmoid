@@ -827,7 +827,10 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
         return None
     current = now.astimezone() if now is not None else dt.datetime.now(dt.timezone.utc).astimezone()
     today_iso = current.date().isoformat()
-    m30_iso = (current - dt.timedelta(days=30)).date().isoformat()
+    # "Last 30 days" = 30 local calendar dates including today, counted on dates (not a
+    # timedelta from now, which spans 31 dates and shifts an hour across DST).
+    # → tests/test_antigravity_ledger_integrity.py::test_last_30_days_is_thirty_calendar_dates
+    m30_iso = (current.date() - dt.timedelta(days=29)).isoformat()
     # Per-entry pricing: entries carry a model enum ("me") and/or a "model" display name;
     # the Gemini 3.1 Pro default applies only when nothing resolves.
     default_prices = model_pricing("gemini-3.1-pro")
