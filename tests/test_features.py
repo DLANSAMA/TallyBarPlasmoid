@@ -627,10 +627,13 @@ def test_public_config_defaults_muted_empty():
     assert backend.public_config({})["mutedProviders"] == []
 
 
-def test_snapshot_carries_generatedat_timestamp():
+def test_snapshot_carries_generatedat_timestamp(monkeypatch):
     """The snapshot carries an ISO timestamp used for the staleness stamp."""
     import argparse
     import asyncio
+    from providers import antigravity
+    # No live language server: its harvest would read the developer's real conversations.
+    monkeypatch.setattr(antigravity, "find_antigravity_processes", lambda: [])
     args = argparse.Namespace(timeout=6.0, background=True, no_network=True)
     snap = asyncio.run(backend.build_snapshot(args))
     assert isinstance(snap.get("timestamp"), str) and "T" in snap["timestamp"]
