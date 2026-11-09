@@ -978,15 +978,20 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
     m30_iso = (current.date() - dt.timedelta(days=29)).isoformat()
     # Per-entry pricing: entries carry a model enum ("me") and/or a "model" display name;
     # the Gemini 3.1 Pro default applies only when nothing resolves.
-    default_prices = model_pricing("gemini-3.1-pro")
-    _price_cache: dict[str, dict[str, Any]] = {}
+    # An entry bills the rate of its own day (``d``); an entry with no date bills today's.
+    _default_cache: dict[str | None, dict[str, Any]] = {}
+    _price_cache: dict[tuple[str, str | None], dict[str, Any]] = {}
 
     def _prices_for(e: dict[str, Any]) -> dict[str, Any]:
+        day = e.get("d") or None
+        default_prices = _default_cache.get(day)
+        if default_prices is None:
+            default_prices = _default_cache[day] = model_pricing("gemini-3.1-pro", day)
         m = _resolve_model_key(e, learned_names)
         if not m:
             return default_prices
         key = _normalize_model_name(m)
-        if key not in _price_cache:
+        if (key, day) not in _price_cache:
             # Try the family's own version spelling first: Gemini keeps the dot
             # ("gemini-3.5-flash") while Claude uses hyphens ("claude-opus-5-5"). The catalog
             # also matches substrings, so the other spelling would land on an older row
@@ -998,15 +1003,15 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
                 spellings.reverse()
             chosen = default_prices
             for cand in spellings:
-                p = model_pricing(cand)
+                p = model_pricing(cand, day)
                 if p.get("input"):
                     chosen = p
                     break
                 if cand in _EXTRA_MODEL_PRICES:  # catalog miss -> our estimate (e.g. gpt-oss)
                     chosen = _EXTRA_MODEL_PRICES[cand]
                     break
-            _price_cache[key] = chosen
-        return _price_cache[key]
+            _price_cache[(key, day)] = chosen
+        return _price_cache[(key, day)]
 
     def cost_of(e: dict[str, int], per_call: bool = True) -> tuple[float, tuple[float, float, float]]:
         p = _prices_for(e)

@@ -1073,14 +1073,14 @@ def local_claude_token_summary(
     # minutes, so all seconds of a minute share them.
     local_slots: dict[int, tuple[str, int, bool]] = {}
     for usage, model, t, _out in (*best.values(), *keyless):
-        split = usage_split(usage, model)
-        tokens, cost = split.tokens, split.cost
         slot = local_slots.get(t // 60)
         if slot is None:
             local = dt.datetime.fromtimestamp(t // 60 * 60)
             slot = local_slots[t // 60] = (local.date().isoformat(), local.hour,
                                            local.date() == today)
         day_key, hour, is_today = slot
+        split = usage_split(usage, model, day_key)
+        tokens, cost = split.tokens, split.cost
         if t >= month_window_start:
             month_tokens += tokens
             month_cost += cost
@@ -1155,11 +1155,11 @@ def local_codex_token_summary(
         if timestamp is None or timestamp < history_start:
             continue
         model = record["m"] or DEFAULT_MODEL_FOR_PROVIDER["codex"]
-        split = usage_split(record["u"], model)
+        day_key = timestamp.date().isoformat()
+        split = usage_split(record["u"], model, day_key)
         if split.tokens <= 0:
             continue
         tokens, cost = split.tokens, split.cost
-        day_key = timestamp.date().isoformat()
         if timestamp >= thirty_days_ago:
             month_tokens += tokens
             month_cost += cost
@@ -1283,11 +1283,11 @@ def local_grok_token_summary(
             sid = request_key.split(":", 1)[0]
             raw_model = session_models.get(sid)
         display_model = _display_grok_model(raw_model)
-        split = usage_split(record["u"], _grok_cli_pricing_model(raw_model or display_model))
+        day_key = timestamp.date().isoformat()
+        split = usage_split(record["u"], _grok_cli_pricing_model(raw_model or display_model), day_key)
         if split.tokens <= 0:
             continue
         tokens, cost = split.tokens, split.cost
-        day_key = timestamp.date().isoformat()
         rows.append((timestamp, day_key, split, display_model))
         lrec = live_days.setdefault(day_key, {"tokens": 0, "cost": 0.0, "in": 0, "out": 0,
                                               "cached": 0, "types": empty_type_split(),
@@ -1359,7 +1359,7 @@ def local_grok_token_summary(
             if d_tokens <= 0 and d_cost <= 0.0:
                 continue
             models = as_dict(rec.get("models"))
-            day_split = _grok_archive_split(rec, d_tokens, d_cost)
+            day_split = _grok_archive_split(rec, d_tokens, d_cost, day)
             if dday >= first_day:
                 month_tokens += d_tokens
                 month_cost += d_cost
@@ -1410,7 +1410,8 @@ def local_grok_token_summary(
     return summary
 
 
-def _grok_archive_split(rec: dict[str, Any], tokens: int, cost: float) -> dict[str, dict[str, Any]]:
+def _grok_archive_split(rec: dict[str, Any], tokens: int, cost: float,
+                        day: str | None = None) -> dict[str, dict[str, Any]]:
     """An archived Grok day's type split (empty_type_split shape), adding up to the
     day's archived ``tokens`` and ``cost``.
 
@@ -1427,7 +1428,7 @@ def _grok_archive_split(rec: dict[str, Any], tokens: int, cost: float) -> dict[s
         return acc
     typed = {"input": int(rec.get("in") or 0), "output": int(rec.get("out") or 0),
              "cacheRead": int(rec.get("cached") or 0)}
-    prices = _pricing.model_pricing(DEFAULT_MODEL_FOR_PROVIDER["grok"])
+    prices = _pricing.model_pricing(DEFAULT_MODEL_FOR_PROVIDER["grok"], day)
     rates = {"input": prices.get("input", 0.0), "output": prices.get("output", 0.0),
              "cacheRead": prices.get("cache_read", prices.get("input", 0.0))}
     weights = {key: typed[key] * rates[key] for key in typed}
@@ -1608,12 +1609,11 @@ def local_gemini_token_summary(
         if not isinstance(tokens_data, dict):
             continue
         model = record.get("m") or DEFAULT_MODEL_FOR_PROVIDER["gemini"]
-        split = usage_split(tokens_data, model)
+        day_key = timestamp.date().isoformat()
+        split = usage_split(tokens_data, model, day_key)
         if split.tokens <= 0:
             continue
         tokens, cost = split.tokens, split.cost
-
-        day_key = timestamp.date().isoformat()
         if timestamp >= thirty_days_ago:
             month_tokens += tokens
             month_cost += cost
