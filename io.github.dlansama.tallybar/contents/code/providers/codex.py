@@ -281,6 +281,9 @@ def _codex_rpc_looks_unauthenticated(text: str) -> bool:
     return any(hint in lowered for hint in _CODEX_RPC_UNAUTH_HINTS)
 
 
+CODEX_APP_SERVER_ARGS = ["-s", "read-only", "-a", "never", "app-server"]
+
+
 async def run_codex_rpc(timeout: float) -> dict[str, Any]:
     codex = shutil.which("codex")
     result: dict[str, Any] = {
@@ -295,7 +298,9 @@ async def run_codex_rpc(timeout: float) -> dict[str, Any]:
 
     child: JsonRpcChild | None = None
     try:
-        child = await JsonRpcChild.start(codex, ["-s", "read-only", "-a", "untrusted", "app-server"])
+        # Newer codex builds accept only on-request/never for -a and exit on anything else;
+        # reading rate limits never asks for an approval. → tests/test_providers.py::test_codex_rpc_launch_flags_are_accepted_by_the_installed_codex
+        child = await JsonRpcChild.start(codex, CODEX_APP_SERVER_ARGS)
         deadline = asyncio.get_running_loop().time() + timeout
 
         def remaining() -> float:

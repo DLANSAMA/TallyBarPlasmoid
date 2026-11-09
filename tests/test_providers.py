@@ -2516,3 +2516,18 @@ def test_fold_grok_bot_shows_a_failure_with_a_remedy_only_when_it_is_the_sole_so
     # A CLI that reports "api-empty" (installed, no usage yet) is not "not-running": left alone.
     quiet = {"label": "Grok", "status": "api-empty", "message": "No Grok Build usage data yet", "limits": []}
     assert fold_grok_bot(quiet, locked) == quiet
+
+
+def test_codex_rpc_launch_flags_are_accepted_by_the_installed_codex():
+    """A codex release that drops an approval policy exits at start-up, and the tab then reads
+    "JSON-RPC child stdout closed". Launching it with no input needs no sign-in or network."""
+    import shutil
+    import subprocess
+    codex = shutil.which("codex")
+    if not codex:
+        pytest.skip("codex CLI not installed")
+    # Closed stdin: a valid launch reads EOF and exits 0; a rejected flag exits 2 straight away
+    # (--help would skip that check).
+    done = subprocess.run([codex, *providers.codex.CODEX_APP_SERVER_ARGS], stdin=subprocess.DEVNULL,
+                          capture_output=True, text=True, timeout=30)
+    assert done.returncode == 0, done.stderr[:300]
