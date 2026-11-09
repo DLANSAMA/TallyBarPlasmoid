@@ -408,8 +408,14 @@ def enrich_ui_formatting(providers: dict[str, Any]) -> None:
             pct = max(0.0, min(100.0, float(limit.get("percent") or 0)))
             if limit.get("idle"):
                 limit["formattedUsedText"] = "Not started"
-            elif pct < 10 and pct != round(pct):
-                limit["formattedUsedText"] = f"{pct:.1f}% used"
+            elif 0 < pct < 10 and (tenths := int(pct * 10 + 0.5)) < 100:
+                # Format from the ROUNDED value: 0.04 must not read "0.0%", 9.96 not "10.0%".
+                if tenths == 0:
+                    limit["formattedUsedText"] = "<0.1% used"
+                elif tenths % 10 == 0:
+                    limit["formattedUsedText"] = f"{tenths // 10}% used"
+                else:
+                    limit["formattedUsedText"] = f"{tenths / 10:.1f}% used"
             else:
                 whole = min(99, int(pct + 0.5)) if pct < 100 else 100
                 limit["formattedUsedText"] = f"{whole}% used"

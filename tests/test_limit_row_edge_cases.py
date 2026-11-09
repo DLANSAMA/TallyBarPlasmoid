@@ -81,7 +81,9 @@ def _used_text(pct):
 
 @pytest.mark.parametrize("pct,text", [(99.6, "99% used"), (99.99, "99% used"), (100, "100% used"),
                                       (12.5, "13% used"), (14.5, "15% used"), (37.4, "37% used"),
-                                      (0.5, "0.5% used")])
+                                      (0.5, "0.5% used"), (9.96, "10% used"), (9.94, "9.9% used"),
+                                      (5.04, "5% used"), (0.04, "<0.1% used"), (0.05, "0.1% used"),
+                                      (0, "0% used"), (10, "10% used")])
 def test_percent_text_rounds_half_up_and_never_shows_100_early(pct, text):
     assert _used_text(pct) == text
 
