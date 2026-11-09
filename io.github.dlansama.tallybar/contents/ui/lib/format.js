@@ -14,6 +14,19 @@ function trimDecimals(str) {
     return str.replace(/0+$/, "").replace(/\.$/, "");
 }
 
+// amount / div to `decimals` places with ties rounded up, in integer arithmetic: toFixed
+// misreads a decimal tie that has no exact binary form (1005000 / 1e6 is 1.00499...).
+function fixedHalfUp(amount, div, decimals) {
+    const scale = Math.pow(10, decimals);
+    const whole0 = Math.floor(amount / div);
+    const rest = amount - whole0 * div;
+    const scaled = whole0 * scale + Math.floor((rest * scale * 2 + div) / (2 * div));
+    const whole = Math.floor(scaled / scale);
+    let frac = String(scaled - whole * scale);
+    while (frac.length < decimals) frac = "0" + frac;
+    return whole + "." + frac;
+}
+
 function compactCount(value) {
     let amount = Math.max(0, Math.round(Number(value || 0)));
     if (!isFinite(amount)) return "0";
@@ -49,7 +62,7 @@ function compactCount(value) {
             }
 
             if (n >= 10) {
-                let formatted = trimDecimals(n.toFixed(1));
+                let formatted = trimDecimals(fixedHalfUp(amount, u.div, 1));
                 if (Number(formatted) >= 100 && !top) {
                     amount = Math.round(amount / u.div) * u.div;
                     return compactCount(amount);
@@ -57,7 +70,7 @@ function compactCount(value) {
                 return formatted + u.suffix;
             }
 
-            let formatted = trimDecimals(n.toFixed(2));
+            let formatted = trimDecimals(fixedHalfUp(amount, u.div, 2));
             if (Number(formatted) >= 10 && !top) {
                 amount = Math.round(amount / u.div) * u.div;
                 return compactCount(amount);

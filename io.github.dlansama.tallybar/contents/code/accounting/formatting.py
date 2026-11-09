@@ -23,6 +23,14 @@ def parse_timestamp(value: Any) -> dt.datetime | None:
 _COUNT_TIERS = ((1_000, "K"), (1_000_000, "M"), (1_000_000_000, "B"), (1_000_000_000_000, "T"))
 
 
+def _fixed_half_up(amount: int, div: int, decimals: int) -> str:
+    """`amount / div` to `decimals` places, ties rounded up, by integer arithmetic: float
+    formatting rounds an exact binary tie half-even and misreads a decimal tie like 1.005."""
+    scale = 10 ** decimals
+    whole, frac = divmod((amount * scale * 2 + div) // (2 * div), scale)
+    return f"{whole}.{frac:0{decimals}d}"
+
+
 def _format_in_tier(amount: int, div: int, suffix: str) -> tuple[str, int | None]:
     """Render `amount` in one unit tier; the second item is the rounded amount to
     re-render one tier up when the text would otherwise reach the next boundary."""
@@ -35,9 +43,9 @@ def _format_in_tier(amount: int, div: int, suffix: str) -> tuple[str, int | None
         rounded = int(n + 0.5)
         return f"{rounded}{suffix}", carried if rounded >= 1000 else None
     if n >= 10:
-        formatted = f"{n:.1f}".rstrip("0").rstrip(".")
+        formatted = _fixed_half_up(amount, div, 1).rstrip("0").rstrip(".")
         return f"{formatted}{suffix}", carried if float(formatted) >= 100 else None
-    formatted = f"{n:.2f}".rstrip("0").rstrip(".")
+    formatted = _fixed_half_up(amount, div, 2).rstrip("0").rstrip(".")
     return f"{formatted}{suffix}", carried if float(formatted) >= 10 else None
 
 

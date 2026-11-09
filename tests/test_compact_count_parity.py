@@ -33,6 +33,12 @@ GOLDEN = [
     (999499, "999K"), (999500, "1M"), (999999, "1M"), (1000000, "1M"),
     (1200000, "1.2M"), (1500000, "1.5M"), (9999999, "10M"), (13000000, "13M"),
     (15400000, "15.4M"), (999999999, "1B"), (1000000000, "1B"), (1500000000, "1.5B"),
+    # Exact ties round UP in both languages (Python's float formatting is half-even, and
+    # JS toFixed misreads ties with no binary form such as 1.005).
+    (1500, "2K"), (2500, "3K"),
+    (1125000, "1.13M"), (1005000, "1.01M"), (12250000, "12.3M"), (12350000, "12.4M"),
+    (1125000000, "1.13B"), (1005000000, "1.01B"), (12250000000, "12.3B"),
+    (1125000000000, "1.13T"), (1005000000000, "1.01T"), (12250000000000, "12.3T"),
 ]
 
 
@@ -63,3 +69,21 @@ def test_qml_format_js_matches_python_across_golden():
     for (value, expected), qml in zip(GOLDEN, qml_results):
         assert qml == expected, f"format.js({value})={qml!r} != golden {expected!r}"
         assert accounting.compact_token_count(value) == qml  # python == qml for every value
+
+
+def test_python_and_qml_agree_on_a_sweep_of_ties_and_neighbours():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available; QML-side parity not checked")
+    inputs = []
+    for div in (10**6, 10**9, 10**12):
+        for k in range(1, 400):
+            base = k * div // 100 + (div // 200 if div >= 200 else 0)
+            inputs += [base - 1, base, base + 1]
+            inputs += [k * div // 20, k * div // 10 + div // 20]
+    script = ("const f=require(process.argv[1]);"
+              "console.log(JSON.stringify(JSON.parse(process.argv[2]).map(x=>f.compactCount(x))));")
+    proc = subprocess.run([node, "-e", script, str(FORMAT_JS), json.dumps(inputs)],
+                          capture_output=True, text=True, timeout=30, check=True)
+    for value, qml in zip(inputs, json.loads(proc.stdout)):
+        assert accounting.compact_token_count(value) == qml, value

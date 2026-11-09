@@ -21,6 +21,9 @@ def test_compact_token_count():
     assert accounting.compact_token_count(1200000) == "1.2M"
     assert accounting.compact_token_count(15400000) == "15.4M"
     assert accounting.compact_token_count(1500000000) == "1.5B"
+    for tier, suffix in ((10**6, "M"), (10**9, "B"), (10**12, "T")):
+        assert accounting.compact_token_count(tier * 1125 // 1000) == f"1.13{suffix}"
+        assert accounting.compact_token_count(tier * 12250 // 1000) == f"12.3{suffix}"
 
 
 def test_compact_token_count_fixed_point_at_1e12_does_not_recurse():
