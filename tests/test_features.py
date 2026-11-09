@@ -696,3 +696,12 @@ def test_main_passes_cost_timeout_to_notifications(tmp_path, monkeypatch, capsys
     monkeypatch.setattr(_sys, "argv", ["backend.py", "--once"])
     assert backend.main() == 0
     assert seen["cost_available"] is False
+
+
+def test_default_provider_is_a_validated_provider_key():
+    assert backend.public_config({})["defaultProvider"] == ""
+    assert backend.update_config_values({"defaultProvider": "grok"})["defaultProvider"] == "grok"
+    assert backend.public_config(backend.load_config())["defaultProvider"] == "grok"
+    assert backend.update_config_values({"defaultProvider": "nonsense"})["defaultProvider"] == "grok"  # ignored
+    assert backend.update_config_values({"defaultProvider": ""})["defaultProvider"] == ""             # clears
+    assert backend.public_config({"defaultProvider": "bogus"})["defaultProvider"] == ""

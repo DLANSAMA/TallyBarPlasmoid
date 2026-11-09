@@ -7,6 +7,8 @@ Notable changes to TallyBar. Format follows
 ## [Unreleased]
 
 ### Added
+- A new **Opens on** row in Settings picks the tab the widget starts on, so the panel icon
+  no longer falls back to Claude after every restart. Tap the chosen provider again to clear it.
 - The Claude tab can read its limits with Claude Code's own sign-in when the browser
   route has nothing: no claude.ai cookie, a locked KWallet, a rejected session, or
   claude.ai rate-limiting. The browser route is still tried first, and the Claude Code
