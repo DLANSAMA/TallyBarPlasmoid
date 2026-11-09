@@ -350,3 +350,20 @@ def test_compact_panel_counts_the_reset_down_and_flags_a_stale_reading(tmp_path)
     assert reset == "3h" and stale is True and summary == "99%" and pace == "99%"
     fresh = _probe(tmp_path, _snapshot(), ["item.readingStale"], provider="codex", component="CompactRepresentation")
     assert fresh == [False]
+
+
+def test_compact_empty_state_prints_a_failed_refresh_once_and_keeps_the_status_hint(tmp_path):
+    snap = _snapshot(codex={"status": "not-running", "limits": []})
+    err = "Backend did not respond in time"
+    msg, strip, mode = _probe(tmp_path, snap, ["item.emptyStateMessage()", "item.degradedText()",
+                                               "item.emptyStateMode()"], provider="codex", lastError=err)
+    assert mode == "compact"
+    assert "Codex isn't running" in msg and err not in msg
+    assert err in strip
+    # full mode: the body prints the error itself and the strip stays quiet
+    full = _snapshot(codex={"status": "not-running", "limits": []})
+    for key in ("costSummary",):
+        full["providers"]["codex"].pop(key, None)
+    msg, strip, mode = _probe(tmp_path, full, ["item.emptyStateMessage()", "item.degradedText()",
+                                               "item.emptyStateMode()"], provider="codex", lastError=err)
+    assert mode == "full" and msg == err and strip == ""

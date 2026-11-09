@@ -535,7 +535,9 @@ Item {
     // The empty-state message, enriched with a remediation hint per status. Falls
     // back to the provider message / generic "No usage data".
     function emptyStateMessage() {
-        if (root.lastError.length > 0)
+        // In the compact strip the degraded strip prints lastError, so the strip keeps the
+        // provider's own status hint instead of repeating it.
+        if (root.lastError.length > 0 && root.emptyStateMode() !== "compact")
             return root.lastError;
         const p = root.providerData();
         const status = String(p.status || "");
