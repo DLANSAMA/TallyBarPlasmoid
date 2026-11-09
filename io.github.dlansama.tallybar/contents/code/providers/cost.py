@@ -842,11 +842,17 @@ def antigravity_ledger_cost_summary(now: dt.datetime | None = None, deadline: fl
             return default_prices
         key = _normalize_model_name(m)
         if key not in _price_cache:
-            # Try the key as-is, then with version dots -> hyphens. Families differ: Gemini keeps
-            # the dot ("gemini-3.5-flash") while Claude uses hyphens ("claude-opus-4-6"), so a single
-            # spelling can't match both. First candidate with a real input rate wins; else default.
+            # Try the family's own version spelling first: Gemini keeps the dot
+            # ("gemini-3.5-flash") while Claude uses hyphens ("claude-opus-5-5"). The catalog
+            # also matches substrings, so the other spelling would land on an older row
+            # ("claude-opus-5.5" contains "claude-opus-5") before the exact one is tried.
+            # First candidate with a real input rate wins; else default.
+            # → tests/test_antigravity_ledger_integrity.py::test_claude_5_5_prices_from_its_own_row
+            spellings = [key, key.replace(".", "-")]
+            if "claude" in key:
+                spellings.reverse()
             chosen = default_prices
-            for cand in (key, key.replace(".", "-")):
+            for cand in spellings:
                 p = model_pricing(cand)
                 if p.get("input"):
                     chosen = p

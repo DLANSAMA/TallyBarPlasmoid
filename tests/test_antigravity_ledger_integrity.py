@@ -185,3 +185,23 @@ def test_last_30_days_is_thirty_calendar_dates(monkeypatch, tmp_path):
     })
     summary = costmod.antigravity_ledger_cost_summary(now=now)
     assert summary["tokens30d"] == 1000
+
+
+# ---------------------------------------------------------------------------
+# Pricing
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("enum,row,older", [(1402, "claude-opus-5-5", "claude-opus-5"),
+                                            (1405, "claude-sonnet-5-5", "claude-sonnet-5")])
+def test_claude_5_5_prices_from_its_own_row(monkeypatch, tmp_path, enum, row, older):
+    _wire(monkeypatch, tmp_path)
+    today = _FIXED_NOW.astimezone().date().isoformat()
+    u, c, o = 1000, 10_000, 1000
+    _write_ledger(tmp_path, entries={"x#0": {"d": today, "h": 10, "u": u, "c": c, "o": o, "me": enum}})
+
+    def cost(p):
+        return round((u * p["input"] + c * p["cache_read"] + o * p["output"]) / 1e6, 6)
+
+    exact, stale = accounting.model_pricing(row), accounting.model_pricing(older)
+    assert cost(exact) != cost(stale)
+    assert costmod.antigravity_ledger_cost_summary(now=_FIXED_NOW)["costToday"] == cost(exact)
