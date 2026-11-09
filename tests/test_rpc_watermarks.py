@@ -355,7 +355,7 @@ def test_entry_bearing_mark_survives_ls_down(monkeypatch, tmp_path):
     today = dt.date.today().isoformat()
     (tmp_path / "ledger.json").write_text(json.dumps({
         "trackingStarted": today,
-        "entries": {f"{cid}#0": {"d": today, "u": 5, "c": 0, "o": 2, "model": "Gemini 3.5 Flash (High)"}},
+        "entries": {f"{cid}#0": {"d": today, "h": 9, "u": 5, "c": 0, "o": 2, "model": "Gemini 3.5 Flash (High)"}},
         "rpcWatermarks": {cid: _LMT_A},
     }), encoding="utf-8")
 
@@ -379,7 +379,7 @@ def test_no_write_churn_when_marks_identical(monkeypatch, tmp_path):
     today = dt.date.today().isoformat()
     ledger_content = {
         "trackingStarted": today,
-        "entries": {f"{cid}#0": {"d": today, "u": 10, "c": 0, "o": 5, "model": "Gemini 3.5 Flash (High)"}},
+        "entries": {f"{cid}#0": {"d": today, "h": 9, "u": 10, "c": 0, "o": 5, "model": "Gemini 3.5 Flash (High)"}},
         "rpcWatermarks": {cid: _LMT_A},
     }
     ledger_path.write_text(json.dumps(ledger_content), encoding="utf-8")

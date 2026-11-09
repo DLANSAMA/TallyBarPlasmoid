@@ -171,6 +171,96 @@ def test_error_map_is_neither_a_provider_nor_an_archived_month(monkeypatch, tmp_
 
 
 # ---------------------------------------------------------------------------
+# RPC generations with no time of their own
+# ---------------------------------------------------------------------------
+
+_LMT = "2026-06-02T14:00:00.123456789Z"
+
+
+def _stub_language_server(monkeypatch, summaries, generations, calls):
+    """A live language server listing ``summaries`` ({cid: lastModifiedTime}); every
+    cascade's metadata is ``generations`` without createdAt, and the step lookup fails."""
+    monkeypatch.setattr(agmod, "find_antigravity_processes", lambda: [(1, "tok", "http")])
+    monkeypatch.setattr(agmod, "antigravity_ports", lambda pid: ([1234], ""))
+
+    def post(url, token, body, timeout):
+        method = url.rsplit("/", 1)[1]
+        calls.append(method)
+        if method == "GetAllCascadeTrajectories":
+            return 200, {"trajectorySummaries": {c: {"lastModifiedTime": t} for c, t in summaries.items()}}
+        if method == "GetAvailableModels":
+            return 200, {"response": {"models": {}}}
+        if method == "GetCascadeTrajectoryGeneratorMetadata":
+            return 200, {"generatorMetadata": generations}
+        raise OSError("reply too large")
+
+    monkeypatch.setattr(agmod, "_post_local_rpc", post)
+
+
+def _undated_gen(step: int, tokens: int = 1000) -> dict:
+    return {"stepIndices": [step], "chatModel": {"usage": {
+        "model": "MODEL_PLACEHOLDER_M132", "apiProvider": "API_PROVIDER_GOOGLE_GEMINI",
+        "inputTokens": str(tokens), "outputTokens": "10", "cacheReadTokens": "0"}}}
+
+
+def test_undated_generation_takes_its_cascade_day(monkeypatch, tmp_path):
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
+    calls: list = []
+    _stub_language_server(monkeypatch, {"old": _LMT}, [_undated_gen(0), _undated_gen(4)], calls)
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    want = agmod._rpc_local_date(_LMT)
+    assert {k: (e["d"], e.get("h")) for k, e in res["entries"].items()} == \
+        {"old#0": (want, None), "old#4": (want, None)}
+
+
+def test_cascade_dated_from_its_watermark_is_not_requeried(monkeypatch, tmp_path):
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
+    calls: list = []
+    _stub_language_server(monkeypatch, {"old": _LMT}, [_undated_gen(0)], calls)
+    costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert "GetCascadeTrajectoryGeneratorMetadata" in calls
+    before = (tmp_path / "ledger.json").stat().st_mtime_ns
+    calls.clear()
+    costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert "GetCascadeTrajectoryGeneratorMetadata" not in calls
+    assert "GetCascadeTrajectorySteps" not in calls
+    assert (tmp_path / "ledger.json").stat().st_mtime_ns == before
+
+
+def test_harvest_day_entries_move_to_their_watermark_day(monkeypatch, tmp_path):
+    _wire(monkeypatch, tmp_path)   # language server down
+    mark_day = agmod._rpc_local_date(_LMT)
+    _write_ledger(tmp_path, rpcWatermarks={"old": _LMT, "live": _LMT}, entries={
+        "old#0": {"d": "2026-06-09", "u": 5, "c": 0, "o": 1, "me": 1132},     # harvest day
+        "old#1": {"d": "2026-06-01", "u": 5, "c": 0, "o": 1, "me": 1132},     # already earlier
+        "live#0": {"d": "2026-06-09", "h": 8, "u": 5, "c": 0, "o": 1, "me": 1132},  # real time
+    })
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert {k: e["d"] for k, e in res["entries"].items()} == \
+        {"old#0": mark_day, "old#1": "2026-06-01", "live#0": "2026-06-09"}
+    before = (tmp_path / "ledger.json").stat().st_mtime_ns
+    costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert (tmp_path / "ledger.json").stat().st_mtime_ns == before
+
+
+def test_repaired_cascade_is_queried_once_then_left_alone(monkeypatch, tmp_path):
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
+    _write_ledger(tmp_path, rpcWatermarks={"old": _LMT}, entries={
+        "old#0": {"d": "2026-06-09", "u": 1000, "c": 0, "o": 10, "me": 1132}})
+    calls: list = []
+    _stub_language_server(monkeypatch, {"old": _LMT}, [_undated_gen(0)], calls)
+    costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert calls.count("GetCascadeTrajectoryGeneratorMetadata") == 1
+    calls.clear()
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert "GetCascadeTrajectoryGeneratorMetadata" not in calls
+    assert res["entries"]["old#0"]["d"] == agmod._rpc_local_date(_LMT)
+
+
+# ---------------------------------------------------------------------------
 # The 30-day window
 # ---------------------------------------------------------------------------
 

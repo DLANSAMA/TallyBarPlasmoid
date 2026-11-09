@@ -75,6 +75,9 @@ COST_ARCHIVE_PATH = Path.home() / ".tallybar" / "cost_archive.json"
 ANTIGRAVITY_DISK_DATING_VERSION = 3
 # How long a ledger entry is kept; older ones are pruned, and DBs past it are not ingested.
 ANTIGRAVITY_RETENTION_DAYS = 35
+# Ledger-entry flag: a '#' entry the RPC had no time for, dated from its cascade's
+# lastModifiedTime. It leaves the re-query set until the cascade changes.
+_DATED_FROM_MODIFIED = "dlm"
 # compute_local_cost_summaries' map entry naming each provider whose summary raised:
 # {provider: "<ExceptionClass>: <message>"}. Present only when one did; not a provider.
 COST_SUMMARY_ERRORS_KEY = "_errors"
@@ -206,7 +209,7 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
        (history / LS not running); skipped for any conversation the RPC already covers.
 
     Each entry is keyed per generation (dedup-safe), so re-scanning never double-counts. RPC entries
-    are dated by ``createdAt``; steps-pass entries get today for a stem already holding ``:`` entries,
+    are dated by ``createdAt`` (or their first step's), else their cascade's lastModifiedTime; steps-pass entries get today for a stem already holding ``:`` entries,
     else the DB mtime; the ``gen_metadata`` pass (``<stem>@<idx>.<gi>``) uses embedded protobuf timestamps.
 
     An exclusive file lock (fcntl.flock) protects the read-modify-write cycle against concurrent
@@ -214,8 +217,13 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
     """
     import fcntl
 
+    from .antigravity import _rpc_local_date, collect_antigravity_rpc_usage
+
     current = now.astimezone() if now is not None else dt.datetime.now(dt.timezone.utc).astimezone()
     today_iso = current.date().isoformat()
+    # Entries dated before this are pruned; nothing older is ingested (it would be pruned
+    # in the same run and re-ingested on the next).
+    cutoff = (current.date() - dt.timedelta(days=ANTIGRAVITY_RETENTION_DAYS)).isoformat()
 
     ANTIGRAVITY_LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -265,13 +273,25 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
         marks = ledger.get("rpcWatermarks")
         if not isinstance(marks, dict):
             marks = {}
-        # An entry without "h" was captured with no timestamp and dated to the harvest day;
-        # re-query its cascade so it takes its generation's real date and hour.
+        # A generation can't postdate its cascade's lastModifiedTime: an undated '#' entry
+        # whose date is later than its cascade's watermark was stamped with a harvest day,
+        # so it moves back to the watermark's local date.
+        # → tests/test_antigravity_ledger_integrity.py::test_harvest_day_entries_move_to_their_watermark_day
+        for k, e in entries.items():
+            if "#" not in k or e.get("h") is not None:
+                continue
+            mark_date = _rpc_local_date(str(marks.get(k.rsplit("#", 1)[0]) or ""))
+            if mark_date and e.get("d", "") > mark_date:
+                e["d"] = mark_date
+                changed = True
+        # An entry without "h" (and not already dated from its cascade's lastModifiedTime
+        # after a query that had no time for it) re-queries its cascade so it can take its
+        # generation's real date and hour.
         # → tests/test_rpc_watermarks.py::test_undated_entries_take_the_real_date
-        hourless_stems = {k.rsplit("#", 1)[0] for k, e in entries.items() if "#" in k and e.get("h") is None}
+        hourless_stems = {k.rsplit("#", 1)[0] for k, e in entries.items()
+                          if "#" in k and e.get("h") is None and not e.get(_DATED_FROM_MODIFIED)}
         known = {k: v for k, v in marks.items() if k not in hourless_stems}
         try:
-            from .antigravity import collect_antigravity_rpc_usage
             harvest = collect_antigravity_rpc_usage(4.0, known=known, deadline=deadline)
             rpc_usage, live_marks, learned_placeholders = harvest.usage, harvest.marks, harvest.learned_names
         except Exception:
@@ -279,6 +299,12 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
         rpc_covered: set[str] = set()
         for cascade_id, records in rpc_usage.items():
             rpc_covered.add(cascade_id)
+            # A generation with no time of its own (no createdAt, and the step lookup failed)
+            # is dated from the cascade's lastModifiedTime: its latest possible day, where the
+            # harvest day would pile months of backlog onto "Today".
+            # → tests/test_antigravity_ledger_integrity.py::test_undated_generation_takes_its_cascade_day
+            mark_date = _rpc_local_date(str(live_marks.get(cascade_id) or ""))
+            mark_date = min(mark_date, today_iso) if mark_date else ""
             # The RPC supersedes the disk scan for this conversation: drop its DB-sourced keys so
             # nothing double-counts. RPC counts per generation, disk per step, so never gate
             # this on a record-count comparison.
@@ -296,11 +322,21 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                 key = f"{cascade_id}#{rec['stepKey']}"
                 rec_hour = rec.get("hour")
                 if key in entries:
-                    # No hour means the stored date was the harvest day, not the generation's.
-                    if rec_hour is not None and entries[key].get("h") is None:
-                        entries[key]["h"] = rec_hour
+                    stored = entries[key]
+                    # No hour means the stored date was a stand-in, not the generation's.
+                    if rec_hour is not None and stored.get("h") is None:
+                        stored["h"] = rec_hour
                         if rec["date"]:
-                            entries[key]["d"] = rec["date"]
+                            stored["d"] = rec["date"]
+                        stored.pop(_DATED_FROM_MODIFIED, None)
+                        changed = True
+                    elif (rec_hour is None and stored.get("h") is None
+                          and not stored.get(_DATED_FROM_MODIFIED) and mark_date):
+                        # Queried and still no time: settle on the cascade's day, and stop
+                        # re-querying the cascade until it changes.
+                        if stored.get("d", "") > mark_date:
+                            stored["d"] = mark_date
+                        stored[_DATED_FROM_MODIFIED] = 1
                         changed = True
                     # Re-resolve the model when the mapping has improved: a placeholder unknown
                     # at capture time fell back to a family default. Heal it in place (keeps
@@ -319,8 +355,11 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                         entries[key]["me"] = enum
                         changed = True
                     continue
+                date = rec["date"] or mark_date or today_iso
+                if date < cutoff:
+                    continue
                 entry = {
-                    "d": rec["date"] or today_iso,
+                    "d": date,
                     "u": rec["u"],          # uncached input
                     "c": rec["c"],          # cached input (read)
                     "o": rec["o"],          # total output (thinking + response)
@@ -337,6 +376,8 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                     entry["me"] = enum
                 if rec_hour is not None:
                     entry["h"] = rec_hour
+                elif not rec["date"] and mark_date:
+                    entry[_DATED_FROM_MODIFIED] = 1
                 entries[key] = entry
                 changed = True
 
@@ -351,10 +392,6 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
         # would inflate "Today"); once it has some, new records are genuinely new.
         colon_stems = {k.rsplit(":", 1)[0] for k in entries if ":" in k}
         at_stems = {k.rsplit("@", 1)[0] for k in entries if "@" in k}
-        # Needed DURING the scan too: a backlog already past the horizon would be ingested
-        # and pruned in the same run, then re-ingested on every refresh. Such DBs are skipped
-        # outright; a stale DB that gets new writes moves inside the horizon.
-        cutoff = (current.date() - dt.timedelta(days=ANTIGRAVITY_RETENTION_DAYS)).isoformat()
         # Per-DB scan memo (additive ledger key, rides the .bak mirror): skip BOTH passes
         # for a DB whose content signature (_db_signature: main + -wal mtime_ns/size)
         # matches its last COMPLETE scan (rows that never create entries can't be skipped
