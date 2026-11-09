@@ -652,6 +652,77 @@ PlasmaCore.PopupPlasmaWindow {
                     }
                 }
             }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.topMargin: 2
+                Layout.preferredHeight: 1
+                color: root.separatorColor(0.12)
+            }
+
+            // --- Claude Code sign-in fallback (off by default) -------------------
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 24
+                spacing: 10
+
+                Text {
+                    Layout.fillWidth: true
+                    color: root.primaryTextColor(0.92)
+                    elide: Text.ElideRight
+                    font.family: root.uiFont
+                    font.pixelSize: 13
+                    text: i18n("Claude Code sign-in fallback")
+                }
+
+                Rectangle {
+                    id: signInToggle
+
+                    property bool on: root.claudeSignInFallbackValue()
+
+                    Layout.preferredWidth: 40
+                    Layout.preferredHeight: 22
+                    radius: 11
+                    color: signInToggle.on ? root.accentTintColor(0.55) : Qt.rgba(1, 1, 1, 0.12)
+
+                    Behavior on color {
+                        ColorAnimation { duration: 140 }
+                    }
+
+                    Rectangle {
+                        width: 18
+                        height: 18
+                        radius: 9
+                        y: 2
+                        x: signInToggle.on ? parent.width - width - 2 : 2
+                        color: "#f5f6f8"
+
+                        Behavior on x {
+                            NumberAnimation { duration: 140; easing.type: Easing.OutCubic }
+                        }
+                    }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.configChangeRequested({
+                            "claudeSignInFallback": !signInToggle.on
+                        })
+                        Accessible.role: Accessible.CheckBox
+                        Accessible.name: i18n("Claude Code sign-in fallback")
+                        Accessible.checked: signInToggle.on
+                    }
+                }
+            }
+
+            Text {
+                Layout.fillWidth: true
+                color: root.mutedTextColor(0.55)
+                font.family: root.uiFont
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                text: i18n("When the browser route has no Claude reading, ask Anthropic's usage endpoint with the access token Claude Code keeps on this computer. Anthropic's terms limit plan sign-in to its own apps, so this is off unless you turn it on.")
+            }
         }
         }
     }

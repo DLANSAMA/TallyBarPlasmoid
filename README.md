@@ -122,10 +122,12 @@ Each provider connects itself:
   (Chrome, Chromium, Brave, Edge or Firefox). If you are signed in to claude.ai
   or gemini.google.com in one of those, there is nothing to configure; if you
   are not, the widget shows a **Sign in** button that opens the right page.
-- **Claude** also reads Claude Code's own sign-in (`~/.claude/.credentials.json`)
+- **Claude** can also read Claude Code's own sign-in (`~/.claude/.credentials.json`)
   when the browser route has nothing: no cookie, a locked KWallet, or a rejected
-  session. So with Claude Code signed in, the Claude tab works without a browser
-  session. The browser route stays first.
+  session. It is off until you turn on **Claude Code sign-in fallback** in Settings,
+  because Anthropic's terms limit plan sign-in to its own apps. Once on, the Claude
+  tab works without a browser session while Claude Code is signed in. The browser
+  route stays first.
 - **Grok Bot** adds its plan name and on-demand spend to the Grok tab through the
   sign-in the Grok Bot desktop app keeps: open the app and sign in once. That
   sign-in is encrypted with the Chromium Safe Storage key, so reading it needs
@@ -261,7 +263,7 @@ pushing a `v*` tag builds the `.plasmoid`, stamps the version into
   same ones their own apps call, with your own session. They are not public APIs and
   can change without notice. When one does, that provider degrades to a status
   message and the others keep working.
-- **The Claude Code sign-in route lasts as long as Claude Code's access token.**
+- **The Claude Code sign-in route (once turned on) lasts as long as Claude Code's access token.**
   TallyBar sends the access token Claude Code keeps and never renews it; it lapses
   about eight hours after Claude Code last did. Past that the Claude tab asks you to
   open Claude Code (which renews it), or uses the browser route or the statusLine

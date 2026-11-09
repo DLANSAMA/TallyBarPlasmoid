@@ -832,6 +832,9 @@ Item {
     function notificationsEnabledValue() {
         return root.configValue("notificationsEnabled", true) !== false;
     }
+    function claudeSignInFallbackValue() {
+        return root.configValue("claudeSignInFallback", false) === true;
+    }
     function thresholdsValue() {
         const t = root.configValue("notificationThresholds", [90, 100]);
         return Array.isArray(t) ? t : [90, 100];

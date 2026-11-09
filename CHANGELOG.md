@@ -8,7 +8,9 @@ Notable changes to TallyBar. Format follows
 
 ### Added
 - The Claude tab can read its limits with Claude Code's own sign-in when the browser
-  route has nothing: no claude.ai cookie, a locked KWallet, a rejected session, or
+  route has nothing. It is off until you switch on **Claude Code sign-in fallback** in
+  Settings, because Anthropic's terms limit plan sign-in to its own apps. When on, it
+  is used when there is no claude.ai cookie, a locked KWallet, a rejected session, or
   claude.ai rate-limiting. The browser route is still tried first, and the Claude Code
   statusLine capture remains the last resort. TallyBar only uses the access token
   Claude Code keeps in `~/.claude/.credentials.json`: it never renews it, never reads
