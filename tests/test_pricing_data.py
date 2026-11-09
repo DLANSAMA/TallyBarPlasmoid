@@ -70,11 +70,17 @@ def test_embedded_exact_match_claude_sonnet_5_not_sonnet_4():
 # Note the cache reads: Opus 5.5 reads at 0.05x input and Fable/Mythos 5.1 at 0.025x, so a
 # table that derived reads as 0.1x input would fail here.
 # Haiku 5.5 is priced by prompt length, so its row carries the over-100K tier too.
+# A usage day inside every intro window (Argon's ends 2026-12-01, 3.6-3.8 Flash's 2027-01-01):
+# the assertions on intro prices pass it, so they hold on any day the suite runs.
+_INTRO_DAY = "2026-11-09"
+
 _CLAUDE_5_PRICES = {
     "claude-opus-5-5":   {"input": 4.00, "output": 20.00, "cache_write": 5.00, "cache_write_1h": 8.00, "cache_read": 0.20},
     "claude-opus-5":     {"input": 5.00, "output": 25.00, "cache_write": 6.25, "cache_write_1h": 10.00, "cache_read": 0.50},
     "claude-sonnet-5-5": {"input": 2.00, "output": 10.00, "cache_write": 2.50, "cache_write_1h": 4.00, "cache_read": 0.10},
     "claude-sonnet-5":   {"input": 2.00, "output": 10.00, "cache_write": 2.50, "cache_write_1h": 4.00, "cache_read": 0.20},
+    "claude-fable-5-2":  {"input": 8.00, "output": 40.00, "cache_write": 10.00, "cache_write_1h": 16.00, "cache_read": 0.20},
+    "claude-mythos-5-2": {"input": 8.00, "output": 40.00, "cache_write": 10.00, "cache_write_1h": 16.00, "cache_read": 0.20},
     "claude-fable-5-1":  {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 0.25},
     "claude-fable-5":    {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 1.00},
     "claude-mythos-5-1": {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 0.25},
@@ -94,7 +100,7 @@ def test_offline_fallback_prices_every_current_claude_model_exactly(monkeypatch,
     monkeypatch.setattr(pricing_data, "PRICING_CACHE_PATH", tmp_path / "missing" / "pricing_cache.json")
     for model, expected in _CLAUDE_5_PRICES.items():
         assert pricing_data.get_pricing(model) == expected, model
-    assert pricing_data._active_pricing == pricing_data._apply_list_rates(list(pricing_data._FALLBACK_PRICING))
+    assert pricing_data._active_pricing == list(pricing_data._FALLBACK_PRICING)
     for key, prices in pricing_data._FALLBACK_PRICING:
         if key.startswith("claude-"):
             assert pricing_data.get_pricing(key), key
@@ -107,18 +113,14 @@ def test_offline_fallback_prices_gemini_at_the_published_rates(monkeypatch, tmp_
     read, a 200K tier)."""
     monkeypatch.setattr(pricing_data, "PRICING_CACHE_PATH", tmp_path / "missing" / "pricing_cache.json")
     flash = {"input": 0.75, "output": 3.75, "cache_read": 0.075}
-    # Argon's intro rate ends 2026-12-01; the list rate applies from then on.
-    argon = ({"input": 2.00, "output": 10.00, "cache_read": 0.10}
-             if time.strftime("%Y-%m-%d") < "2026-12-01"
-             else {"input": 4.00, "output": 20.00, "cache_read": 0.20})
     expected = {
-        "gemini-4-argon": argon,
+        "gemini-4-argon": {"input": 2.00, "output": 10.00, "cache_read": 0.10},
         "gemini-3.6-flash": flash,
         "gemini-3.8-flash": flash,
         "gemini-3.5-flash-lite": {"input": 0.30, "output": 2.50, "cache_read": 0.03},
     }
     for model, prices in expected.items():
-        assert pricing_data.get_pricing(model) == pytest.approx(prices), model
+        assert pricing_data.get_pricing(model, _INTRO_DAY) == pytest.approx(prices), model
 
 
 def test_embedded_exact_match_grok_46_not_grok_4():
@@ -155,7 +157,7 @@ def test_embedded_fallback_when_no_cache_at_all():
     with patch.object(pricing_data, "_load_cache", return_value=None), \
          patch.object(pricing_data, "_load_cache_stale", return_value=None):
         pricing_data.get_pricing("anything")
-        assert pricing_data._active_pricing == pricing_data._apply_list_rates(list(pricing_data._FALLBACK_PRICING))
+        assert pricing_data._active_pricing == list(pricing_data._FALLBACK_PRICING)
         assert len(pricing_data._FALLBACK_PRICING) > 0          # embedded defaults exist
 
 
@@ -509,7 +511,7 @@ def test_offline_fallback_prices_current_gemini_flash_models_exactly(monkeypatch
     3.5 Flash-Lite's rate."""
     monkeypatch.setattr(pricing_data, "PRICING_CACHE_PATH", tmp_path / "missing" / "pricing_cache.json")
     for model, expected in _GEMINI_FLASH_PRICES.items():
-        assert pricing_data.get_pricing(model) == expected, model
+        assert pricing_data.get_pricing(model, _INTRO_DAY) == expected, model
 
 
 # --- Prompt-length tiers for every provider, and the versioned disk cache --------------
@@ -688,7 +690,7 @@ _CATALOG_FIXTURE = {
         "output_cost_per_token_above_200k_tokens": 3e-05},
 }
 
-_CATALOG_PIN = (2, "a6119f95c10e49bc")
+_CATALOG_PIN = (3, "a6119f95c10e49bc")
 
 
 def test_pricing_cache_version_tracks_converter_output():

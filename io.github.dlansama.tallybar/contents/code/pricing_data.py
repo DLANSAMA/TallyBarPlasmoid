@@ -24,7 +24,7 @@ try:
 except ImportError as e:
     SSL_AVAILABLE = False
     print(f"Warning: SSL/networking unavailable ({e}). Cost-tracking features may degrade gracefully.", file=sys.stderr)
-from typing import Any
+from typing import Any, NamedTuple
 
 
 
@@ -42,20 +42,25 @@ PRICING_CACHE_TTL = 86400.0
 # fallback) and build_snapshot refetches.
 # → tests/test_pricing_data.py::test_pricing_cache_version_tracks_converter_output,
 #   ::test_pre_tier_price_cache_is_never_served
-PRICING_CACHE_VERSION = 2
+PRICING_CACHE_VERSION = 3
 
-# Only ingest chat models from these direct-API providers (skip Bedrock/Vertex
+# Only ingest chat and responses-API models from these direct-API providers (skip Bedrock/Vertex
 # duplicates which carry the same prices but with provider-prefixed keys). NOTE:
 # these direct-API providers can ALSO ship provider-prefixed raw model_ids of their
 # own (e.g. "gemini/gemini-3.5-flash", "xai/grok-4" — only Anthropic/OpenAI keys are
 # reliably bare); _litellm_to_tallybar registers both the raw key and the
 # un-prefixed bare name so a query for either form resolves to the live price.
 _RELEVANT_PROVIDERS = frozenset(("anthropic", "openai", "gemini", "xai"))
+# LiteLLM lists the OpenAI codex, codex-mini and pro models (and some xAI ones) as mode
+# "responses", not "chat"; they bill local-log usage like any chat model.
+# → tests/test_pricing_data.py::test_litellm_ingests_responses_mode_models
+_BILLED_MODES = frozenset(("chat", "responses"))
 
 
 # Introductory Gemini rates and the list rate each moves to (ai.google.dev/gemini-api/docs/pricing):
-# model -> (first day of the list rate, list rates). From that day the offline row bills the list
-# rate, and so does a fetched catalog entry still carrying the intro input rate (LiteLLM can lag).
+# model -> (first day of the list rate, list rates). get_pricing(model, usage_date) bills a usage
+# on or after that day at the list rate and an earlier one at the intro rate, for the offline row
+# and for a fetched catalog entry still carrying the intro input rate (LiteLLM can lag).
 # → tests/test_pricing_data.py::test_intro_rate_moves_to_list_rate_on_its_date
 LIST_RATE_FROM: dict[str, tuple[str, dict[str, float]]] = {
     "gemini-4-argon":   ("2026-12-01", {"input": 4.00, "output": 20.00, "cache_read": 0.20}),
@@ -65,18 +70,22 @@ LIST_RATE_FROM: dict[str, tuple[str, dict[str, float]]] = {
 }
 
 
+def _list_rates_for(key: str, prices: dict[str, float], day: str) -> dict[str, float]:
+    """``prices`` of model ``key`` on ISO date ``day``: the list rate once its intro rate has
+    ended, but only while the row still carries the intro input rate. A catalog row that
+    already moved off it is left alone."""
+    scheduled = LIST_RATE_FROM.get(key)
+    if scheduled and day >= scheduled[0] and prices.get("input") == _INTRO_INPUT.get(key):
+        return scheduled[1]
+    return prices
+
+
 def _apply_list_rates(entries: list[tuple[str, dict[str, float]]],
                       today: str | None = None) -> list[tuple[str, dict[str, float]]]:
     """entries with every intro rate whose end has passed replaced by its list rate."""
-    day = today or time.strftime("%Y-%m-%d")
-    intro = dict(_FALLBACK_PRICING)
-    out = []
-    for key, prices in entries:
-        scheduled = LIST_RATE_FROM.get(key)
-        if scheduled and day >= scheduled[0] and prices.get("input") == intro.get(key, {}).get("input"):
-            prices = dict(scheduled[1])
-        out.append((key, prices))
-    return out
+    day = today or _today()
+    return [(key, dict(_list_rates_for(key, prices, day)) if key in LIST_RATE_FROM else prices)
+            for key, prices in entries]
 
 
 # Embedded fallback — a snapshot of per-MTok pricing that ships with the code. The fetched
@@ -94,6 +103,10 @@ _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
     # first run / offline bills long prompts like the live catalog.
     # → tests/test_pricing_data.py::test_offline_fallback_carries_every_provider_prompt_tier
     # Sonnet 4.5's 200K tier is catalog-only (Anthropic's page no longer lists it).
+    # Fable / Mythos 5.2: platform.claude.com/docs/en/about-claude/pricing (also the LiteLLM
+    # claude-fable-5-2 row): $8 / $10 / $16 / $0.20 / $40.
+    ("claude-fable-5-2",     {"input":  8.00, "output": 40.00, "cache_write": 10.00, "cache_write_1h": 16.00, "cache_read": 0.20}),
+    ("claude-mythos-5-2",    {"input":  8.00, "output": 40.00, "cache_write": 10.00, "cache_write_1h": 16.00, "cache_read": 0.20}),
     ("claude-fable-5-1",     {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 0.25}),
     ("claude-fable-5",       {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 1.00}),
     ("claude-mythos-5-1",    {"input": 10.00, "output": 50.00, "cache_write": 12.50, "cache_write_1h": 20.00, "cache_read": 0.25}),
@@ -118,7 +131,10 @@ _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
     ("claude-3-5-sonnet",    {"input":  3.00, "output": 15.00, "cache_write":  3.75, "cache_write_1h":  6.00, "cache_read": 0.30}),
     ("claude-3-5-haiku",     {"input":  0.80, "output":  4.00, "cache_write":  1.00, "cache_write_1h":  1.60, "cache_read": 0.08}),
     ("claude-3-opus",        {"input": 15.00, "output": 75.00, "cache_write": 18.75, "cache_write_1h": 30.00, "cache_read": 1.50}),
-    ("claude-opus-4",        {"input":  5.00, "output": 25.00, "cache_write":  6.25, "cache_write_1h": 10.00, "cache_read": 0.50}),
+    # The original Opus 4 (claude-opus-4-0, claude-opus-4-20250514) bills at the Opus 4.1 rate
+    # (platform.claude.com/docs/en/about-claude/pricing), not the $5 / $25 of 4.5 and later.
+    ("claude-opus-4-0",      {"input": 15.00, "output": 75.00, "cache_write": 18.75, "cache_write_1h": 30.00, "cache_read": 1.50}),
+    ("claude-opus-4",        {"input": 15.00, "output": 75.00, "cache_write": 18.75, "cache_write_1h": 30.00, "cache_read": 1.50}),
     ("claude-sonnet-4",      {"input":  3.00, "output": 15.00, "cache_write":  3.75, "cache_write_1h":  6.00, "cache_read": 0.30}),
     ("claude-haiku-4",       {"input":  1.00, "output":  5.00, "cache_write":  1.25, "cache_write_1h":  2.00, "cache_read": 0.10}),
     # OpenAI / Codex
@@ -151,13 +167,41 @@ _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
     ("gpt-5.6-luna",         {"input":  0.20, "output":  1.20, "cache_read":  0.02,
                               "long_context_threshold": 272_000, "long_input":  0.40,
                               "long_output":  1.80, "long_cache_read": 0.04}),
+    ("gpt-5.6",              {"input":  4.00, "output": 20.00, "cache_read":  0.40,
+                              "long_context_threshold": 272_000, "long_input":  8.00,
+                              "long_output": 30.00, "long_cache_read": 0.80}),
+    ("gpt-5.6-cyber",        {"input": 12.50, "output": 75.00, "cache_read":  1.25,
+                              "long_context_threshold": 272_000, "long_input": 25.00,
+                              "long_output": 112.50, "long_cache_read": 2.50}),
+    ("gpt-5.5-cyber",        {"input": 12.50, "output": 75.00, "cache_read":  1.25}),
+    ("gpt-5.5-pro",          {"input": 30.00, "output": 180.00,
+                              "long_context_threshold": 272_000, "long_input": 60.00,
+                              "long_output": 270.00}),
+    ("gpt-5.4-pro",          {"input": 30.00, "output": 180.00,
+                              "long_context_threshold": 272_000, "long_input": 60.00,
+                              "long_output": 270.00}),
     ("gpt-5.5",              {"input":  5.00, "output": 30.00, "cache_read":  0.50,
                               "long_context_threshold": 272_000, "long_input": 10.00,
                               "long_output": 45.00, "long_cache_read": 1.00}),
     ("gpt-5.4-mini",         {"input":  0.75, "output":  4.50, "cache_read":  0.075}),
+    ("gpt-5.4-nano",         {"input":  0.20, "output":  1.25, "cache_read":  0.02}),
     ("gpt-5.4",              {"input":  2.50, "output": 15.00, "cache_read":  0.25,
                               "long_context_threshold": 272_000, "long_input":  5.00,
                               "long_output": 22.50, "long_cache_read": 0.50}),
+    # GPT-5.1 to 5.3, their codex variants and the pro models: the LiteLLM catalog's
+    # "responses"-mode rows (platform.openai.com/docs/pricing agrees). gpt-5.3 has no
+    # catalog row of its own; it bills like gpt-5.3-codex and gpt-5.3-chat-latest.
+    ("gpt-5.3-codex",        {"input":  1.75, "output": 14.00, "cache_read":  0.175}),
+    ("gpt-5.3",              {"input":  1.75, "output": 14.00, "cache_read":  0.175}),
+    ("gpt-5.2-pro",          {"input": 21.00, "output": 168.00}),
+    ("gpt-5.2-codex",        {"input":  1.75, "output": 14.00, "cache_read":  0.175}),
+    ("gpt-5.2",              {"input":  1.75, "output": 14.00, "cache_read":  0.175}),
+    ("gpt-5.1-codex-mini",   {"input":  0.25, "output":  2.00, "cache_read":  0.025}),
+    ("gpt-5.1-codex-max",    {"input":  1.25, "output": 10.00, "cache_read":  0.125}),
+    ("gpt-5.1-codex",        {"input":  1.25, "output": 10.00, "cache_read":  0.125}),
+    ("gpt-5.1",              {"input":  1.25, "output": 10.00, "cache_read":  0.125}),
+    ("gpt-5-pro",            {"input": 15.00, "output": 120.00}),
+    ("gpt-5-codex",          {"input":  1.25, "output": 10.00, "cache_read":  0.125}),
     ("gpt-5-mini",           {"input":  0.25, "output":  2.00, "cache_read":  0.025}),
     ("gpt-5-nano",           {"input":  0.05, "output":  0.40, "cache_read":  0.005}),
     ("gpt-5",                {"input":  1.25, "output": 10.00, "cache_read":  0.125}),
@@ -184,6 +228,8 @@ _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
     ("gemini-3.1-pro",      {"input":  2.00, "output": 12.00, "cache_read":  0.20,
                               "long_context_threshold": 200_000, "long_input": 4.00,
                               "long_output": 18.00, "long_cache_read": 0.40}),
+    # Gemini 3 Flash preview: the LiteLLM catalog (ai.google.dev/gemini-api/docs/pricing agrees).
+    ("gemini-3-flash-preview", {"input": 0.50, "output": 3.00, "cache_read": 0.05}),
     ("gemini-3.8-flash",     {"input":  0.75, "output":  3.75, "cache_read":  0.075}),
     ("gemini-3.7-flash",     {"input":  0.75, "output":  3.75, "cache_read":  0.075}),
     ("gemini-3.6-flash",     {"input":  0.75, "output":  3.75, "cache_read":  0.075}),
@@ -252,6 +298,10 @@ _FALLBACK_PRICING: tuple[tuple[str, dict[str, float]], ...] = (
     ("grok-4",                    {"input":  3.00, "output": 15.00, "cache_read":  0.75}),
     ("grok-3",                    {"input":  3.00, "output": 15.00, "cache_read":  0.75}),
 )
+# The intro input rate of every scheduled model: _list_rates_for leaves a row alone once it
+# carries any other input rate.
+_INTRO_INPUT: dict[str, float] = {key: prices["input"] for key, prices in _FALLBACK_PRICING
+                                  if key in LIST_RATE_FROM}
 
 
 
@@ -260,8 +310,13 @@ _active_pricing: list[tuple[str, dict[str, float]]] | None = None
 _last_fetch_time: float = 0.0
 # Resolution memo: get_pricing is called once per usage record by the local-log cost
 # summarizers, so an un-memoized lookup is O(records × catalog) substring scans per
-# refresh. Keyed by lowercased model name; only _install_catalog resets it.
+# refresh. Keyed by lowercased model name; only _install_catalog resets it. It holds the
+# catalog row as installed (the intro rate of a scheduled model) and _match_memo the key it
+# resolved to and whether that is the same model; the usage date picks intro or list rate
+# AFTER the lookup, so the two sides of a switch never share a memo entry.
+# → tests/test_pricing_data.py::test_usage_date_picks_the_intro_or_list_rate
 _resolve_memo: dict[str, dict[str, float]] = {}
+_match_memo: dict[str, tuple[str, bool]] = {}
 # Bumped (under _pricing_lock) every time _active_pricing is (re)built. get_pricing scans
 # the catalog OUTSIDE the lock — it runs once per usage record — and only memoizes its
 # answer if the generation it scanned is still current.
@@ -290,9 +345,9 @@ def _long_context_tier(info: dict[str, Any], prices: dict[str, float],
     from 200K. LiteLLM carries the tier as ``*_above_<N>k_tokens`` fields. The anchored
     patterns skip the ``_batches``, ``_flex``, ``_priority`` and ``_ultrafast`` variants
     (service tiers a local log never bills at) and keep the combined 1-hour write field
-    ``cache_creation_input_token_cost_above_1hr_above_<N>k_tokens``. Only the lowest N is
-    read. Returns ``long_context_threshold`` plus ``long_input``, ``long_output``,
-    ``long_cache_read``, ``long_cache_write`` and ``long_cache_write_1h`` for
+    ``cache_creation_input_token_cost_above_1hr_above_<N>k_tokens``. Only the lowest N whose
+    input and output rates are both positive is read. Returns ``long_context_threshold``
+    plus ``long_input``, ``long_output``, ``long_cache_read``, ``long_cache_write`` and ``long_cache_write_1h`` for
     usage_cost_usd, or {} when the entry has no tier with both a positive input and a
     positive output rate (Gemini's free experimental models list all-zero tiers). A cache
     rate LiteLLM leaves out is the base rate scaled by the tier's input ratio.
@@ -302,17 +357,18 @@ def _long_context_tier(info: dict[str, Any], prices: dict[str, float],
     and Google bill prompts OVER N thousand tokens at the tier ("over 100,000", "more
     than 272K", "> 200k"), so their threshold is N * 1000. xAI bills prompts AT OR ABOVE
     200K at the tier ("under 200K" is the base), so an xAI threshold is N * 1000 - 1."""
-    thresholds = sorted(int(m.group(1)) for field in info
-                        if (m := _LONG_INPUT_FIELD.match(field)))
-    if not thresholds:
+    thresholds = sorted({int(m.group(1)) for field in info
+                         if (m := _LONG_INPUT_FIELD.match(field))})
+    for threshold in thresholds:
+        suffix = f"_above_{threshold}k_tokens"
+        long_input = info.get("input_cost_per_token" + suffix)
+        long_output = info.get("output_cost_per_token" + suffix)
+        if (isinstance(long_input, (int, float)) and long_input > 0
+                and isinstance(long_output, (int, float)) and long_output > 0):
+            break
+    else:
         return {}
-    suffix = f"_above_{thresholds[0]}k_tokens"
-    long_input = info.get("input_cost_per_token" + suffix)
-    long_output = info.get("output_cost_per_token" + suffix)
-    if not (isinstance(long_input, (int, float)) and long_input > 0
-            and isinstance(long_output, (int, float)) and long_output > 0):
-        return {}
-    last_base_prompt = thresholds[0] * 1000 - (1 if provider == "xai" else 0)
+    last_base_prompt = threshold * 1000 - (1 if provider == "xai" else 0)
     tier = {
         "long_context_threshold": float(last_base_prompt),
         "long_input": float(long_input) * 1_000_000,
@@ -340,7 +396,7 @@ def _litellm_to_tallybar(raw: dict[str, Any]) -> list[tuple[str, dict[str, float
         provider = info.get("litellm_provider", "")
         if provider not in _RELEVANT_PROVIDERS:
             continue
-        if info.get("mode") != "chat":
+        if info.get("mode") not in _BILLED_MODES:
             continue
         input_cpt = info.get("input_cost_per_token")
         output_cpt = info.get("output_cost_per_token")
@@ -476,7 +532,7 @@ def _with_fallback_supplement(entries: list[tuple[str, dict[str, float]]]) -> li
     picks the longest pattern regardless of position."""
     known = {key for key, _ in entries}
     supplement = [(key, prices) for key, prices in _FALLBACK_PRICING if key not in known]
-    return _apply_list_rates(list(entries) + supplement)
+    return list(entries) + supplement
 
 
 def _install_catalog(
@@ -488,6 +544,7 @@ def _install_catalog(
     _active_pricing = entries
     _last_fetch_time = fetched_at
     _resolve_memo.clear()
+    _match_memo.clear()
     _catalog_generation += 1
 
 
@@ -508,12 +565,71 @@ async def refresh_pricing(timeout: float = 10.0) -> bool:
     return True
 
 
-def get_pricing(model: str | None) -> dict[str, float]:
-    """Look up per-MTok pricing for a model name (case-insensitive: exact key, then
-    longest ``pattern in name``, then longest ``name in pattern``).
+class PriceMatch(NamedTuple):
+    """What a model name resolved to. ``same_model`` is False when the name only reached a
+    shorter sibling or a family default (``prices`` is then that row's, an estimate) or
+    nothing at all (``prices`` is empty)."""
+    prices: dict[str, float]
+    same_model: bool
 
-    ONLY does fast in-memory or stale disk-cache reads, and never calls
-    refresh_pricing synchronously."""
+
+# Trailing parts that name a variant of the SAME model: a pinned date, a context-window tag,
+# an alias suffix. Anything else after a catalog key ("-codex", "-mini", "-2", "-pro")
+# names a different model.
+_VARIANT_SUFFIX = re.compile(
+    r"(\[[^\]]*\]|-latest|-preview|-exp|[-@]\d{8}|-\d{4}-\d{2}-\d{2}|-\d{2}-(?:\d{2}|\d{4}))$")
+
+
+def _model_base(name: str) -> str:
+    """``name`` without its provider prefix and variant suffixes."""
+    name = name.rsplit("/", 1)[-1]
+    while (stripped := _VARIANT_SUFFIX.sub("", name)) != name:
+        name = stripped
+    return name
+
+
+def _today() -> str:
+    return time.strftime("%Y-%m-%d")
+
+
+def _usage_day(usage_date: str | None) -> str:
+    """The ISO ``YYYY-MM-DD`` day a usage falls on; today for None or anything unreadable."""
+    if isinstance(usage_date, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", usage_date[:10]):
+        return usage_date[:10]
+    return _today()
+
+
+def _scan_catalog(catalog: list[tuple[str, dict[str, float]]],
+                  name: str) -> tuple[str, dict[str, float], bool] | None:
+    """``(key, prices, same_model)`` for the best catalog row of lowercased ``name``: the
+    exact key; else, preferring rows of the same model, the longest ``pattern in name``,
+    then the longest ``name in pattern``. None when nothing matches."""
+    base = _model_base(name)
+    best: tuple[tuple[bool, bool, int], str, dict[str, float]] | None = None
+    for pattern, prices in catalog:
+        if pattern == name:
+            return pattern, prices, True
+        in_name = pattern in name
+        if not in_name and name not in pattern:
+            continue
+        rank = (_model_base(pattern) == base, in_name, len(pattern))
+        if best is None or rank > best[0]:
+            best = (rank, pattern, prices)
+    if best is None:
+        return None
+    return best[1], best[2], best[0][0]
+
+
+def resolve_pricing(model: str | None, usage_date: str | None = None) -> PriceMatch:
+    """Per-MTok pricing for ``model`` and whether it is the model's own row.
+
+    ``usage_date`` (ISO ``YYYY-MM-DD``, local; None = today) picks between a scheduled
+    model's intro and list rate (LIST_RATE_FROM)."""
+    prices, same_model = _resolve(model, usage_date)
+    return PriceMatch(prices, same_model)
+
+
+def _resolve(model: str | None, usage_date: str | None) -> tuple[dict[str, float], bool]:
     if _active_pricing is None:
         with _pricing_lock:
             if _active_pricing is None:
@@ -529,41 +645,40 @@ def get_pricing(model: str | None) -> dict[str, float]:
                             fetched_at = 0.0
                         _install_catalog(_with_fallback_supplement(stale), fetched_at)
                     else:
-                        _install_catalog(_apply_list_rates(list(_FALLBACK_PRICING)), 0.0)
+                        _install_catalog(list(_FALLBACK_PRICING), 0.0)
 
     name = (model or "").lower()
     if not name:
-        return {}
-    hit = _resolve_memo.get(name)  # dict.get is atomic under the GIL; no lock on the hot path
-    if hit is not None:
-        return hit
-    with _pricing_lock:
-        catalog = _active_pricing or []
-        generation = _catalog_generation
-    result: dict[str, float] = {}
-    key_in_name = None
-    key_in_name_len = -1
-    name_in_key = None
-    name_in_key_len = -1
-    for pattern, prices in catalog:
-        if pattern == name:
-            result = prices
-            break
-        if pattern in name:
-            if len(pattern) > key_in_name_len:
-                key_in_name, key_in_name_len = prices, len(pattern)
-        elif name in pattern:
-            if len(pattern) > name_in_key_len:
-                name_in_key, name_in_key_len = prices, len(pattern)
-    else:
-        if key_in_name is not None:
-            result = key_in_name
-        elif name_in_key is not None:
-            result = name_in_key
-    with _pricing_lock:
-        if generation == _catalog_generation:
-            _resolve_memo[name] = result
-    return result
+        return {}, False
+    prices = _resolve_memo.get(name)  # dict.get is atomic under the GIL; no lock on the hot path
+    meta = _match_memo.get(name)
+    if prices is None or meta is None:
+        with _pricing_lock:
+            catalog = _active_pricing or []
+            generation = _catalog_generation
+        found = _scan_catalog(catalog, name)
+        key, prices, same_model = found if found else ("", {}, False)
+        meta = (key, same_model)
+        with _pricing_lock:
+            if generation == _catalog_generation:
+                _resolve_memo[name] = prices
+                _match_memo[name] = meta
+    key, same_model = meta
+    if key in LIST_RATE_FROM:
+        prices = _list_rates_for(key, prices, _usage_day(usage_date))
+    return prices, same_model
+
+
+def get_pricing(model: str | None, usage_date: str | None = None) -> dict[str, float]:
+    """Look up per-MTok pricing for a model name (case-insensitive: exact key, then
+    longest ``pattern in name``, then longest ``name in pattern``). ``usage_date`` is the
+    ISO ``YYYY-MM-DD`` local day the usage happened (None = today): a model on an
+    introductory rate bills the intro rate before its LIST_RATE_FROM date and the list
+    rate from it.
+
+    ONLY does fast in-memory or stale disk-cache reads, and never calls
+    refresh_pricing synchronously."""
+    return _resolve(model, usage_date)[0]
 
 
 def invalidate_cache() -> None:

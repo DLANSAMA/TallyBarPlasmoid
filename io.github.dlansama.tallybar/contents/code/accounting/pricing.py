@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, NamedTuple
 
 from pricing_data import get_pricing as _get_pricing
+from pricing_data import resolve_pricing as _resolve_pricing
 from .formatting import compact_token_count
 
 DEFAULT_MODEL_FOR_PROVIDER = {
@@ -13,14 +14,17 @@ DEFAULT_MODEL_FOR_PROVIDER = {
 }
 
 
-def model_pricing(model: str | None) -> dict[str, float]:
+def model_pricing(model: str | None, usage_date: str | None = None) -> dict[str, float]:
     """Look up per-MTok pricing for a model (case-insensitive substring match).
+
+    ``usage_date`` is the ISO ``YYYY-MM-DD`` local day of the usage (None = today); it
+    picks the intro or list rate of a model whose introductory price ends on a date.
 
     Pricing data is fetched from the LiteLLM community-maintained catalog,
     cached locally for 24h, and falls back to embedded defaults when offline.
     See pricing_data.py for the fetch/cache/fallback chain.
     """
-    return _get_pricing(model)
+    return _get_pricing(model, usage_date)
 
 
 def _provider_family_for_model(model: str | None) -> str | None:
@@ -42,17 +46,27 @@ def _provider_family_for_model(model: str | None) -> str | None:
     return None
 
 
-def _family_default_pricing(model: str | None) -> dict[str, float]:
+def _dated_pricing(model: str | None, usage_date: str | None) -> dict[str, float]:
+    """model_pricing, passing the date only when there is one."""
+    if usage_date is None:
+        return model_pricing(model)
+    return model_pricing(model, usage_date)
+
+
+def _family_default_pricing(model: str | None, usage_date: str | None = None) -> dict[str, float]:
     family = _provider_family_for_model(model)
     if family is None:
         return {}
-    return model_pricing(DEFAULT_MODEL_FOR_PROVIDER[family])
+    return _dated_pricing(DEFAULT_MODEL_FOR_PROVIDER[family], usage_date)
 
 
 def has_catalog_price(model: str | None) -> bool:
     """True when ``model`` resolves to a price of its own (live catalog or embedded
-    fallback). False means usage_cost_usd bills it at its family's default rate instead."""
-    return bool(model_pricing(model))
+    fallback): its exact key or a pinned-date / ``[1m]`` / ``-latest`` / ``-preview``
+    variant of it. False means usage_cost_usd bills it at a shorter sibling's rate
+    (``claude-fable-5-2`` off ``claude-fable-5``) or its family's default instead.
+    → tests/test_pricing_data.py::test_a_sibling_match_is_not_a_catalog_price"""
+    return bool(model_pricing(model)) and _resolve_pricing(model).same_model
 
 
 def prompt_tier_prices(prices: dict[str, float], prompt_tokens: float) -> dict[str, float]:
@@ -144,13 +158,14 @@ def _usage_counts(usage: dict[str, Any]) -> dict[str, int]:
 FAST_MODE_MULTIPLIER = 2.0
 
 
-def _cost_terms(n: dict[str, int], model: str | None) -> list[tuple[int, float]]:
+def _cost_terms(n: dict[str, int], model: str | None,
+                usage_date: str | None = None) -> list[tuple[int, float]]:
     """``(USAGE_TYPES index, cost x 1e6)`` per billed lane of one request, in the order
     usage_cost_usd has always summed them (so its total stays bit-identical). Empty when
-    the model has no price."""
-    prices = model_pricing(model)
+    the model has no price. ``usage_date`` is the request's ISO local day (None = today)."""
+    prices = _dated_pricing(model, usage_date)
     if not prices and model:
-        prices = _family_default_pricing(model)
+        prices = _family_default_pricing(model, usage_date)
     if not prices:
         return []
 
@@ -203,8 +218,10 @@ def _type_tokens(n: dict[str, int]) -> tuple[int, int, int, int]:
             n["cache_read_separate"] + n["cached_within_input"], n["cache_create_tokens"])
 
 
-def usage_cost_usd(usage: Any, model: str | None) -> float:
-    """Compute USD cost for one assistant message's usage dict.
+def usage_cost_usd(usage: Any, model: str | None, usage_date: str | None = None) -> float:
+    """Compute USD cost for one assistant message's usage dict. ``usage_date`` is the
+    message's ISO ``YYYY-MM-DD`` local day (None = today): a model on an introductory
+    rate that has since ended bills the rate in force on that day.
 
     Recognises Anthropic-style (input_tokens/cache_creation/cache_read/output_tokens)
     and OpenAI/Gemini-style (input_tokens/cached_input_tokens/output_tokens/reasoning_output_tokens)
@@ -213,10 +230,10 @@ def usage_cost_usd(usage: Any, model: str | None) -> float:
     """
     if not isinstance(usage, dict):
         return 0.0
-    return _terms_cost(_cost_terms(_usage_counts(usage), model)) / 1_000_000.0
+    return _terms_cost(_cost_terms(_usage_counts(usage), model, usage_date)) / 1_000_000.0
 
 
-def usage_split(usage: Any, model: str | None) -> UsageSplit:
+def usage_split(usage: Any, model: str | None, usage_date: str | None = None) -> UsageSplit:
     """One request's total tokens and cost, and both split by USAGE_TYPES — what the
     per-window summaries accumulate. ``cost`` equals usage_cost_usd and ``type_costs``
     add up to it; ``tokens`` equals usage_token_total.
@@ -227,7 +244,7 @@ def usage_split(usage: Any, model: str | None) -> UsageSplit:
     if not isinstance(usage, dict):
         return UsageSplit(0, 0.0, (0, 0, 0, 0), (0.0, 0.0, 0.0, 0.0))
     n = _usage_counts(usage)
-    terms = _cost_terms(n, model)
+    terms = _cost_terms(n, model, usage_date)
     type_costs = [0.0, 0.0, 0.0, 0.0]
     for idx, c in terms:
         type_costs[idx] += c
