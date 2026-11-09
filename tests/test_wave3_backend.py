@@ -30,3 +30,13 @@ def test_carried_cost_summary_from_today_is_kept():
     backend.carry_forward_cost_summaries(providers, cached)
     if now.astimezone().date() == dt.datetime.now().astimezone().date():
         assert providers["claude"]["costSummary"]["stale"] is True
+
+
+def test_cost_export_flags_error_and_carries_staleness():
+    snap = {"timestamp": "t", "providers": {"claude": {"costSummary": {
+        "cost30d": 2.0, "stale": True, "staleAsOf": "2026-01-01T00:00:00Z"}}},
+        "diagnostics": {"cost_summary_error": "claude: boom"}}
+    out = backend.cost_export(snap)
+    assert out["degraded"] is True and out["degradedReason"] == "cost_summary_error"
+    assert out["providers"]["claude"]["stale"] is True
+    assert out["providers"]["claude"]["staleAsOf"] == "2026-01-01T00:00:00Z"

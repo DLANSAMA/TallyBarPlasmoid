@@ -788,7 +788,7 @@ def carry_forward_provider_last_good(provider: dict[str, Any], cached: Any, key:
 _COST_EXPORT_KEYS = (
     "costToday", "cost7d", "cost30d", "tokensToday", "tokens7d", "tokens30d",
     "burnRatePerDay", "projectedMonthlyCost", "modelBreakdown", "modelBreakdown7d", "modelBreakdown1d",
-    "typeBreakdown",
+    "typeBreakdown", "stale", "staleAsOf",
 )
 
 
@@ -818,9 +818,12 @@ def cost_export(snapshot: dict[str, Any]) -> dict[str, Any]:
     # a legitimate no-spend result. Flag it so a script reading --cost can tell a timed-out
     # scan from genuine $0 spend (the --cost branch also exits non-zero when this is set).
     diags = snapshot.get("diagnostics")
-    if isinstance(diags, dict) and diags.get("cost_summary_timeout"):
-        out["degraded"] = True
-        out["degradedReason"] = "cost_summary_timeout"
+    if isinstance(diags, dict):
+        for reason in ("cost_summary_timeout", "cost_summary_error"):
+            if diags.get(reason):
+                out["degraded"] = True
+                out["degradedReason"] = reason
+                break
     return out
 
 
