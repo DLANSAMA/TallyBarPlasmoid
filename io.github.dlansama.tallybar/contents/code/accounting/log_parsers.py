@@ -47,11 +47,21 @@ _CLAUDE_PARSE_VERSION = 6
 _CODEX_PARSE_VERSION = 3
 _GROK_PARSE_VERSION = 3
 _GEMINI_PARSE_VERSION = 2
+# The shape of a Claude file's folded state (_claude_state) in the Claude store; bump it
+# on any change to that shape. → tests/test_claude_log_store.py::test_state_shape_is_pinned
+_CLAUDE_STATE_VERSION = 1
 # A deadline-cut walk stops this long BEFORE the deadline so its checkpoint save lands
 # while the process is still alive (the scan runs on a daemon thread that dies with the
-# one-shot backend). A 45 MB Claude cache saves in ~0.2 s; 1.5 s leaves room for a larger
-# cache and for GIL contention with the provider fetches.
+# one-shot backend). A checkpoint writes one file: a 45 MB cache saves in ~0.2 s, and
+# 1.5 s leaves room for a larger one and for GIL contention with the provider fetches.
 _CHECKPOINT_MARGIN_SECONDS = 1.5
+# The Claude store (_ClaudeLogStore): a session's transcripts hash to one of this many
+# cold shards, and the hot file is folded into them once it passes _CLAUDE_HOT_LIMIT. Each
+# atomic write costs two fsyncs (~25 ms per 1 MB shard on an NVMe disk), so fewer, larger
+# shards keep a full rewrite (first run, a version bump) near 1.5 s, while the limit keeps
+# the per-refresh write to the hot file small.
+_CLAUDE_SHARDS = 64
+_CLAUDE_HOT_LIMIT = 256 * 1024
 
 
 class LogScanIncomplete(TimeoutError):
@@ -130,47 +140,45 @@ def _offset_fingerprint(path: Path, offset: int) -> int | None:
 
 def _tail_parse(path: Path, prev: dict[str, Any], parser, size: int,
                 end: int) -> list[dict[str, Any]] | None:
-    """Extend a cached file's records with only the complete lines appended since the last
-    parse, i.e. the bytes ``[prev["off"], end)``.
+    """The records of only the complete lines appended since a cached parse, i.e. the
+    bytes ``[prev["off"], end)``; the caller folds them onto what it already holds.
 
-    Returns the full record list, or None when anything looks off — the caller then falls
-    back to a full reparse. FAIL-CLOSED by design: every bail-out costs one ordinary full
-    parse, whereas a wrong incremental result would silently corrupt the cost history
-    until the cache version is next bumped.
+    Returns None when anything looks off — the caller then falls back to a full reparse.
+    FAIL-CLOSED by design: every bail-out costs one ordinary full parse, whereas a wrong
+    incremental result would silently corrupt the cost history until the cache version is
+    next bumped.
 
-    Bails out when the previous entry lacks a usable offset/fingerprint/records list, when
-    the file SHRANK (truncated or rotated — the old offset now points into unrelated
-    bytes), when the size is unchanged but the mtime moved (an in-place rewrite), and when
-    the bytes just before the old offset no longer match their fingerprint (rewritten AND
+    Bails out when the previous entry lacks a usable offset/fingerprint/size, when the
+    file SHRANK (truncated or rotated — the old offset now points into unrelated bytes),
+    when the size is unchanged but the mtime moved (an in-place rewrite), and when the
+    bytes just before the old offset no longer match their fingerprint (rewritten AND
     grown). Append-only growth is the only case it accepts.
     """
     prev_off = prev.get("off")
     prev_fp = prev.get("fp")
-    prev_recs = prev.get("records")
     prev_size = prev.get("size")
     if (not isinstance(prev_off, int) or not isinstance(prev_fp, int)
-            or not isinstance(prev_recs, list) or not isinstance(prev_size, int)):
+            or not isinstance(prev_size, int)):
         return None
-    if size <= prev_size:          
+    if size <= prev_size:
         return None
     if prev_off < 0 or prev_off > end:
         return None
     if _offset_fingerprint(path, prev_off) != prev_fp:
         return None
-    if end == prev_off:              
-        return list(prev_recs)
-    tail = parser(path, prev_off, end)
-    if tail is None:
-        return None
-    return prev_recs + tail
+    if end == prev_off:
+        return []
+    return parser(path, prev_off, end)
 
 
 def _cached_log_records(root: Path, pattern: str, cache_path: Path | None,
                         parser, parse_version: int, walker=None,
-                        deadline: float | None = None,
-                        incremental: bool = False) -> list[dict[str, Any]]:
+                        deadline: float | None = None) -> list[dict[str, Any]]:
     """Every record under ``root``, re-parsing only files whose bytes changed since the
-    cached parse.
+    cached parse. Each changed file is parsed whole: these parsers carry per-line state
+    (Codex's current model, Grok's model per session), so resuming mid-file would
+    mis-attribute models. The Claude logs, whose parser is stateless, go through
+    _cached_claude_states instead.
 
     A walk cut by ``deadline`` CHECKPOINTS what it parsed and raises LogScanIncomplete. It
     stops ``_CHECKPOINT_MARGIN_SECONDS`` early so the save lands before the backend exits.
@@ -197,42 +205,16 @@ def _cached_log_records(root: Path, pattern: str, cache_path: Path | None,
             continue
         key = str(path)
         prev = old_files.get(key)
-        offset: int | None = None
-        fingerprint: int | None = None
-        recs: list[dict[str, Any]] | None = None
         if (prev is not None and prev.get("mtime") == st.st_mtime_ns
                 and prev.get("size") == st.st_size):
             recs = prev.get("records") or []
-            off, fp = prev.get("off"), prev.get("fp")
-            if isinstance(off, int) and isinstance(fp, int):
-                offset, fingerprint = off, fp
-        elif not incremental:
-            recs = parser(path)
-            if recs is None:
-                continue
-            changed = True
         else:
-            # Fix the window END before reading so the records are exactly the parse of
-            # bytes [0, off) while the agent keeps appending.
-            # → tests/test_accounting.py::test_append_during_the_parse_is_neither_lost_nor_doubled
-            end = _safe_resume_offset(path)
-            if end is None:
+            parsed = parser(path)
+            if parsed is None:
                 continue
-            if prev is not None:
-                # An active session's JSONL is appended to constantly, so "changed" is the
-                # common case during use.
-                recs = _tail_parse(path, prev, parser, st.st_size, end)
-            if recs is None:
-                recs = parser(path, 0, end)
-                if recs is None:
-                    continue
-            offset, fingerprint = end, _offset_fingerprint(path, end)
+            recs = parsed
             changed = True
-        entry: dict[str, Any] = {"mtime": st.st_mtime_ns, "size": st.st_size, "records": recs}
-        if offset is not None and fingerprint is not None:
-            entry["off"] = offset
-            entry["fp"] = fingerprint
-        new_files[key] = entry
+        new_files[key] = {"mtime": st.st_mtime_ns, "size": st.st_size, "records": recs}
         records.extend(recs)
     if cache_path is not None and complete and (changed or len(new_files) != len(old_files)):
         _save_parse_cache(cache_path, parse_version, new_files)
@@ -243,6 +225,360 @@ def _cached_log_records(root: Path, pattern: str, cache_path: Path | None,
     if not complete:
         raise LogScanIncomplete(f"log scan of {root.name or root} ran out of time; progress saved")
     return records
+
+
+# --- Claude: per-file folded state, hot/cold store ------------------------------------
+#
+# The Claude history is the big one (tens of thousands of transcripts, over half a million
+# usage lines), and its summary needs nearly all of it on every refresh, so the cache
+# stores each file's records already FOLDED the way the summarizer folds them
+# (_claude_state) and keeps that fold in a store whose refresh writes scale with what
+# changed (_ClaudeLogStore). Both stay pure functions of file bytes: the state holds token
+# counts and timestamps, never a price.
+
+_EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
+
+
+def _epoch_seconds(value: Any) -> int | None:
+    """parse_timestamp's instant as whole seconds since the epoch, rounded down. Every
+    window and day boundary the summary compares against is a whole second, so the
+    rounded value lands on the same side of each as the exact instant."""
+    parsed = parse_timestamp(value)
+    if parsed is None:
+        return None
+    delta = parsed - _EPOCH
+    return delta.days * 86400 + delta.seconds
+
+
+def _out_tokens(usage: Any) -> int:
+    if isinstance(usage, dict):
+        v = usage.get("output_tokens")
+        if isinstance(v, (int, float)) and v > 0:
+            return int(v)
+    return 0
+
+
+def _claude_state(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Fold one file's Claude records the way local_claude_token_summary folds them.
+
+    ``g`` maps each request key ``r`` (first-seen order) to ``[t, m, u, lo, hi, f, vd]``:
+    the FIRST record with the most output tokens (its epoch second, model and usage), the
+    earliest and latest epoch second of all the key's records, whether any of them is a
+    final-usage line, and — while none is — the visible output chars by line uuid. ``k``
+    holds the keyless records as ``[t, m, u]`` in order; ``lo``/``hi`` bound every epoch
+    second in the file. Records with no readable timestamp are dropped, as the summary
+    drops them.
+
+    A group only stands in for its records when ALL of them fall inside the summary's
+    window; local_claude_token_summary re-folds a file whose group straddles the window
+    start from its records."""
+    groups: dict[str, list[Any]] = {}
+    keyless: list[list[Any]] = []
+    lo: int | None = None
+    hi: int | None = None
+    for record in records:
+        t = _epoch_seconds(record["t"])
+        if t is None:
+            continue
+        if lo is None or t < lo:
+            lo = t
+        if hi is None or t > hi:
+            hi = t
+        usage = record["u"]
+        model = record["m"]
+        key = record["r"]
+        if not key:
+            keyless.append([t, model, usage])
+            continue
+        group = groups.get(key)
+        if group is None:
+            group = groups[key] = [t, model, usage, t, t, 0, None]
+        else:
+            if _out_tokens(usage) > _out_tokens(group[2]):
+                group[0], group[1], group[2] = t, model, usage
+            if t < group[3]:
+                group[3] = t
+            if t > group[4]:
+                group[4] = t
+        if record.get("f"):
+            group[5], group[6] = 1, None
+        elif not group[5]:
+            visible = record.get("v")
+            if visible:
+                if group[6] is None:
+                    group[6] = {}
+                group[6][record.get("i") or ""] = visible
+    return {"g": groups, "k": keyless, "lo": lo, "hi": hi}
+
+
+def _merge_claude_state(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
+    """The state of a file's records ``A + B`` from the states of ``A`` and ``B``:
+    exactly ``_claude_state(A + B)``, which is what lets a tail parse extend a state.
+    Neither input is modified."""
+    if not b["g"] and not b["k"]:
+        return a
+    groups = dict(a["g"])
+    for key, row in b["g"].items():
+        prev = groups.get(key)
+        if prev is None:
+            groups[key] = row
+            continue
+        win = prev if _out_tokens(prev[2]) >= _out_tokens(row[2]) else row
+        final = 1 if prev[5] or row[5] else 0
+        visible = None
+        if not final:
+            visible = {**prev[6], **row[6]} if prev[6] and row[6] else (prev[6] or row[6])
+        groups[key] = [win[0], win[1], win[2], min(prev[3], row[3]), max(prev[4], row[4]),
+                       final, visible]
+    bounds = [x for x in (a["lo"], a["hi"], b["lo"], b["hi"]) if x is not None]
+    return {"g": groups, "k": a["k"] + b["k"],
+            "lo": min(bounds) if bounds else None, "hi": max(bounds) if bounds else None}
+
+
+_EMPTY_CLAUDE_STATE: dict[str, Any] = {"g": {}, "k": [], "lo": None, "hi": None}
+
+
+def _valid_claude_entry(entry: Any) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    state = entry.get("s")
+    return (isinstance(entry.get("mtime"), int) and isinstance(entry.get("size"), int)
+            and isinstance(entry.get("off"), int)
+            and (entry.get("fp") is None or isinstance(entry.get("fp"), int))
+            and isinstance(state, dict) and isinstance(state.get("g"), dict)
+            and isinstance(state.get("k"), list) and "lo" in state and "hi" in state)
+
+
+class _ClaudeLogStore:
+    """Where the Claude parse cache lives, laid out so a refresh writes about as much as
+    changed instead of the whole history.
+
+    ``claude_logs.sNN.json`` (cold shards): full entries ``{mtime, size, off, fp, s}``,
+    a session's transcripts (the main JSONL and its ``subagents/``) all in one shard.
+    ``claude_logs.hot.json``: the entries that changed since the shards were last
+    written — a whole entry for a new or reparsed file, or, for a file that only grew, a
+    DELTA: the state of the bytes appended since its cold entry, tagged with that entry's
+    ``off`` and ``fp`` (``base``/``bfp``). An active session therefore costs one rewrite
+    of the hot file per refresh, sized by its new lines. Once the hot file passes
+    _CLAUDE_HOT_LIMIT, a complete walk folds it into the shards its entries belong to.
+
+    Every file goes through atomic_write_text. Shards are written before the hot file,
+    and a delta whose base no longer matches its cold entry is dropped on load (that
+    file's tail is simply parsed again), so a crash between any two writes leaves a cache
+    whose every entry still describes its file. Unreadable or other-version files read as
+    empty. A cache in the single-file format (``claude_logs.json``, records not states) is
+    folded in entry by entry as the walk reaches each file, and deleted once a complete
+    walk has taken it all in."""
+
+    def __init__(self, legacy_path: Path | None, root: Path):
+        self.legacy_path = legacy_path
+        self.root = root
+        self.cold: list[dict[str, dict[str, Any]]] = [{} for _ in range(_CLAUDE_SHARDS)]
+        self.found_in: dict[str, int] = {}
+        self.hot_keys: set[str] = set()
+        self.hot_dirty = False
+        self.bad_shards: set[int] = set()
+        self.legacy: dict[str, dict[str, Any]] = {}
+
+    def _path(self, label: str) -> Path:
+        assert self.legacy_path is not None
+        return self.legacy_path.with_name(f"{self.legacy_path.stem}.{label}.json")
+
+    @staticmethod
+    def _read(path: Path) -> tuple[dict[str, Any], bool]:
+        """A store file's entries, and whether the file exists but can't be used."""
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except FileNotFoundError:
+            return {}, False
+        except (OSError, ValueError):
+            return {}, True
+        if (not isinstance(data, dict)
+                or data.get("schema") != _CACHE_SCHEMA_VERSION
+                or data.get("version") != _CLAUDE_PARSE_VERSION
+                or data.get("state") != _CLAUDE_STATE_VERSION
+                or not isinstance(data.get("files"), dict)):
+            return {}, True
+        return data["files"], False
+
+    def _shard_of(self, key: str) -> int:
+        try:
+            parts = Path(key).relative_to(self.root).parts
+        except ValueError:
+            parts = Path(key).parts
+        session = "/".join(parts[:2]).removesuffix(".jsonl")
+        return zlib.crc32(session.encode("utf-8", "surrogateescape")) % _CLAUDE_SHARDS
+
+    def load(self) -> dict[str, dict[str, Any]]:
+        """Every stored entry, resolved: ``{mtime, size, off, fp, s, cold, delta, hot}``,
+        where ``s`` is the file's whole state, ``cold`` the shard entry it builds on (if
+        any), ``delta`` the hot state on top of it, and ``hot`` marks a whole entry that
+        lives in the hot file."""
+        if self.legacy_path is None:
+            return {}
+        for index in range(_CLAUDE_SHARDS):
+            files, bad = self._read(self._path(f"s{index:02d}"))
+            if bad:
+                self.bad_shards.add(index)
+            for key, entry in files.items():
+                if _valid_claude_entry(entry):
+                    self.cold[index][key] = entry
+                    self.found_in[key] = index
+        resolved: dict[str, dict[str, Any]] = {}
+        hot, self.hot_dirty = self._read(self._path("hot"))
+        self.hot_keys = set(hot)
+        for key, entry in hot.items():
+            if not _valid_claude_entry(entry):
+                self.hot_dirty = True
+                continue
+            meta = {k: entry[k] for k in ("mtime", "size", "off", "fp")}
+            if "base" not in entry:
+                resolved[key] = {**meta, "s": entry["s"], "cold": None, "delta": None, "hot": True}
+                continue
+            cold = self.cold[self.found_in[key]].get(key) if key in self.found_in else None
+            if cold is None or cold["off"] != entry.get("base") or cold["fp"] != entry.get("bfp"):
+                self.hot_dirty = True
+                continue
+            resolved[key] = {**meta, "s": _merge_claude_state(cold["s"], entry["s"]),
+                             "cold": cold, "delta": entry["s"], "hot": False}
+        for shard in self.cold:
+            for key, cold in shard.items():
+                if key not in resolved:
+                    resolved[key] = {**{k: cold[k] for k in ("mtime", "size", "off", "fp")},
+                                     "s": cold["s"], "cold": cold, "delta": None, "hot": False}
+        if self.legacy_path.is_file():
+            self.legacy = _load_parse_cache(self.legacy_path, _CLAUDE_PARSE_VERSION)
+        return resolved
+
+    def from_legacy(self, key: str) -> dict[str, Any] | None:
+        """The single-file cache's entry for ``key``, folded into a whole hot entry."""
+        old = self.legacy.get(key)
+        if not isinstance(old, dict):
+            return None
+        records, off, fp = old.get("records"), old.get("off"), old.get("fp")
+        if (not isinstance(records, list) or not isinstance(off, int)
+                or not isinstance(fp, int)):
+            return None
+        return {"mtime": old.get("mtime"), "size": old.get("size"), "off": off, "fp": fp,
+                "s": _claude_state(records), "cold": None, "delta": None, "hot": True}
+
+    def save(self, entries: dict[str, dict[str, Any]], complete: bool, changed: bool) -> None:
+        """Persist ``entries`` (every live file after a complete walk; visited plus carried
+        ones after a cut walk). Writes only the shards whose entries moved, then the hot
+        file if anything in it changed."""
+        if self.legacy_path is None:
+            return
+        dirty: set[int] = set()
+        hot_dirty = self.hot_dirty or changed
+        if complete:
+            # Deleted transcripts leave the store; an unreadable shard is rewritten whole.
+            dirty |= self.bad_shards
+            for key, index in self.found_in.items():
+                if key not in entries:
+                    del self.cold[index][key]
+                    dirty.add(index)
+            hot_dirty = hot_dirty or not self.hot_keys.issubset(entries)
+        hot: dict[str, dict[str, Any]] = {}
+        for key, entry in entries.items():
+            meta = {k: entry[k] for k in ("mtime", "size", "off", "fp")}
+            if entry["hot"]:
+                hot[key] = {**meta, "s": entry["s"]}
+            elif entry["delta"] is not None:
+                hot[key] = {**meta, "s": entry["delta"], "base": entry["cold"]["off"],
+                            "bfp": entry["cold"]["fp"]}
+        body = self._dump(hot) if hot_dirty else None
+        if complete and body is not None and len(body) > _CLAUDE_HOT_LIMIT:
+            for key in hot:
+                entry = entries[key]
+                index = self.found_in.get(key, self._shard_of(key))
+                self.cold[index][key] = {**{k: entry[k] for k in ("mtime", "size", "off", "fp")},
+                                         "s": entry["s"]}
+                dirty.add(index)
+            body = self._dump({})
+        try:
+            for index in sorted(dirty):
+                atomic_write_text(self._path(f"s{index:02d}"), self._dump(self.cold[index]))
+            if body is not None:
+                atomic_write_text(self._path("hot"), body)
+            if complete and self.legacy_path.exists():
+                self.legacy_path.unlink()
+        except OSError:
+            pass
+
+    @staticmethod
+    def _dump(files: dict[str, dict[str, Any]]) -> str:
+        return json.dumps({"schema": _CACHE_SCHEMA_VERSION, "version": _CLAUDE_PARSE_VERSION,
+                           "state": _CLAUDE_STATE_VERSION, "files": files},
+                          separators=(",", ":"))
+
+
+def _cached_claude_states(root: Path, legacy_path: Path | None,
+                          deadline: float | None = None) -> list[tuple[Path, int, dict[str, Any]]]:
+    """``(path, off, state)`` for every Claude transcript under ``root``, in walk order,
+    where ``state`` is _claude_state of the parse of bytes ``[0, off)``. Files whose mtime
+    and size match their stored entry are not read; a file that grew is extended from
+    ``off`` (tail-incremental) and anything else is parsed whole.
+
+    The window END is fixed before reading: ``end = _safe_resume_offset(path)`` first, and
+    the parse is bounded to it, so a line the agent appends meanwhile is left for the next
+    refresh instead of being stored twice.
+
+    A walk cut by ``deadline`` checkpoints and raises LogScanIncomplete, as
+    _cached_log_records does."""
+    store = _ClaudeLogStore(legacy_path, root)
+    stored = store.load()
+    visited: dict[str, dict[str, Any]] = {}
+    out: list[tuple[Path, int, dict[str, Any]]] = []
+    changed = False
+    complete = True
+    stop_at = None if deadline is None else deadline - _CHECKPOINT_MARGIN_SECONDS
+    for path in root.rglob("*.jsonl"):
+        if stop_at is not None and time.time() >= stop_at:
+            complete = False
+            break
+        try:
+            st = path.lstat()
+        except OSError:
+            continue
+        if not stat.S_ISREG(st.st_mode):
+            continue
+        key = str(path)
+        prev = stored.get(key)
+        if prev is None and store.legacy:
+            prev = store.from_legacy(key)
+            if prev is not None:
+                changed = True
+        if (prev is not None and prev["mtime"] == st.st_mtime_ns
+                and prev["size"] == st.st_size):
+            entry = prev
+        else:
+            # The window end is fixed before any read.
+            # → tests/test_accounting.py::test_append_during_the_parse_is_neither_lost_nor_doubled
+            end = _safe_resume_offset(path)
+            if end is None:
+                continue
+            tail = _tail_parse(path, prev, _parse_claude_file, st.st_size, end) if prev else None
+            if tail is not None and prev is not None:
+                tail_state = _claude_state(tail)
+                entry = {**prev, "s": _merge_claude_state(prev["s"], tail_state)}
+                if not prev["hot"]:
+                    entry["delta"] = _merge_claude_state(prev["delta"] or _EMPTY_CLAUDE_STATE,
+                                                         tail_state)
+            else:
+                records = _parse_claude_file(path, 0, end)
+                if records is None:
+                    continue
+                entry = {"s": _claude_state(records), "cold": None, "delta": None, "hot": True}
+            entry.update(mtime=st.st_mtime_ns, size=st.st_size, off=end,
+                         fp=_offset_fingerprint(path, end))
+            changed = True
+        visited[key] = entry
+        out.append((path, entry["off"], entry["s"]))
+    store.save(visited if complete else {**stored, **visited}, complete, changed)
+    if not complete:
+        raise LogScanIncomplete(f"log scan of {root.name or root} ran out of time; progress saved")
+    return out
 
 
 def _resolve_cache_path(explicit_dir, provided_root, name: str) -> Path | None:
@@ -287,7 +623,7 @@ def _parse_claude_file(path: Path, start: int = 0,
     Safe to resume because this parser is stateless across lines — each record is decided
     entirely by its own line. ``_parse_codex_file`` (carries ``current_model``) and
     ``_parse_grok_file`` (carry ``model_by_sid``/``last_global_model``) are NOT, which is
-    why only this one is wired for incremental parsing in ``_cached_log_records``.
+    why only this one is parsed incrementally (``_cached_claude_states``).
 
     Opened in binary so ``start`` is a real byte offset: text-mode ``seek()`` only accepts
     opaque cookies from ``tell()``. ``json.loads`` takes bytes directly, and decoding a
@@ -575,6 +911,22 @@ def _parse_grok_file(path: Path) -> list[dict[str, Any]] | None:
     return out
 
 
+def _claude_state_in_window(path: Path, off: int, state: dict[str, Any],
+                            window_start: int) -> dict[str, Any]:
+    """``state`` as if the file held only its records from ``window_start`` on. The
+    summary keeps or skips a group lying wholly on one side of the start as a unit; one
+    that straddles it (a message whose lines span that instant) needs its in-window
+    records folded again, from a re-read of the file's ``[0, off)``. Rare: a message's
+    lines are seconds apart."""
+    if not any(row[3] < window_start <= row[4] for row in state["g"].values()):
+        return state
+    records = _parse_claude_file(path, 0, off)
+    if records is None:
+        return state
+    return _claude_state([r for r in records
+                          if (t := _epoch_seconds(r["t"])) is not None and t >= window_start])
+
+
 def local_claude_token_summary(
     projects_dir: Path | None = None,
     now: dt.datetime | None = None,
@@ -601,8 +953,12 @@ def local_claude_token_summary(
     daily = empty_weekly_token_buckets(current)
     monthly_buckets = empty_monthly_token_buckets(current)
     hourly = empty_hourly_token_buckets(current)
-    best: dict[str, dict[str, Any]] = {}
-    keyless: list[dict[str, Any]] = []
+    window_start = int(history_start.timestamp())
+    month_window_start = int(thirty_days_ago.timestamp())
+    default_model = DEFAULT_MODEL_FOR_PROVIDER["claude"]
+    # Each request kept as [usage, model, epoch second, output tokens].
+    best: dict[str, list[Any]] = {}
+    keyless: list[list[Any]] = []
     # Subagent output estimate (see _parse_claude_file): requests that have a final-usage
     # line, and the visible output of the others' non-final lines keyed by line uuid, so a
     # line seen twice is counted once — the same idempotence the max-output fold has.
@@ -610,34 +966,25 @@ def local_claude_token_summary(
     visible_chars: dict[str, dict[str, int]] = {}
     estimated_output = 0
 
-    def _out_tokens(u: Any) -> int:
-        if isinstance(u, dict):
-            v = u.get("output_tokens")
-            if isinstance(v, (int, float)) and v > 0:
-                return int(v)
-        return 0
-
-    for record in _cached_log_records(root, "*.jsonl", cache_path,
-                                       _parse_claude_file, _CLAUDE_PARSE_VERSION,
-                                       deadline=deadline, incremental=True):
-        timestamp = parse_timestamp(record["t"])
-        if timestamp is None or timestamp < history_start:
+    for path, off, state in _cached_claude_states(root, cache_path, deadline=deadline):
+        if state["hi"] is None or state["hi"] < window_start:
             continue
-        usage = record["u"]
-        model = record["m"] or DEFAULT_MODEL_FOR_PROVIDER["claude"]
-        entry = {"usage": usage, "model": model, "timestamp": timestamp, "out": _out_tokens(usage)}
-        request_key = record["r"]
-        if not request_key:
-            keyless.append(entry)
-            continue
-        if record.get("f"):
-            final_requests.add(request_key)
-        visible = record.get("v")
-        if visible:
-            visible_chars.setdefault(request_key, {})[record.get("i") or ""] = visible
-        prev = best.get(request_key)
-        if prev is None or entry["out"] > prev["out"]:
-            best[request_key] = entry
+        if state["lo"] < window_start:
+            state = _claude_state_in_window(path, off, state, window_start)
+        for request_key, (t, model, usage, _lo, hi, final, visible) in state["g"].items():
+            if hi < window_start:
+                continue
+            if final:
+                final_requests.add(request_key)
+            if visible:
+                visible_chars.setdefault(request_key, {}).update(visible)
+            out = _out_tokens(usage)
+            prev = best.get(request_key)
+            if prev is None or out > prev[3]:
+                best[request_key] = [usage, model or default_model, t, out]
+        for t, model, usage in state["k"]:
+            if t >= window_start:
+                keyless.append([usage, model or default_model, t, _out_tokens(usage)])
 
     # A subagent request with no final-usage line bills max(logged output, visible
     # characters // 4): a lower bound, since thinking tokens are not visible. Main-session
@@ -647,37 +994,42 @@ def local_claude_token_summary(
             continue
         entry = best[request_key]
         estimate = sum(chars.values()) // 4
-        if estimate <= entry["out"]:
+        if estimate <= entry[3]:
             continue
-        if entry["timestamp"] >= thirty_days_ago:
-            estimated_output += estimate - entry["out"]
-        entry["usage"] = {**entry["usage"], "output_tokens": estimate}
-        entry["out"] = estimate
+        if entry[2] >= month_window_start:
+            estimated_output += estimate - entry[3]
+        entry[0] = {**entry[0], "output_tokens": estimate}
+        entry[3] = estimate
 
-    for entry in (*best.values(), *keyless):
-        usage = entry["usage"]
-        model = entry["model"]
-        timestamp = entry["timestamp"]
+    # Local day and hour per epoch MINUTE: every zone's offset is a whole number of
+    # minutes, so all seconds of a minute share them.
+    local_slots: dict[int, tuple[str, int, bool]] = {}
+    for usage, model, t, _out in (*best.values(), *keyless):
         split = usage_split(usage, model)
         tokens, cost = split.tokens, split.cost
-        day_key = timestamp.date().isoformat()
-        if timestamp >= thirty_days_ago:
+        slot = local_slots.get(t // 60)
+        if slot is None:
+            local = dt.datetime.fromtimestamp(t // 60 * 60)
+            slot = local_slots[t // 60] = (local.date().isoformat(), local.hour,
+                                           local.date() == today)
+        day_key, hour, is_today = slot
+        if t >= month_window_start:
             month_tokens += tokens
             month_cost += cost
             type_split_add(split_month, split)
-            slot = model_costs.setdefault(str(model), {"cost": 0.0, "tokens": 0})
-            slot["cost"] += cost
-            slot["tokens"] += tokens
+            model_slot = model_costs.setdefault(str(model), {"cost": 0.0, "tokens": 0})
+            model_slot["cost"] += cost
+            model_slot["tokens"] += tokens
         if day_key in daily:
             bucket_add(daily[day_key], tokens, cost, model)
             type_split_add(split_week, split)
         if day_key in monthly_buckets and monthly_buckets[day_key].get("inMonth"):
             bucket_add(monthly_buckets[day_key], tokens, cost, model)
-        if timestamp.date() == today:
+        if is_today:
             today_tokens += tokens
             today_cost += cost
             type_split_add(split_today, split)
-            bucket_add(hourly[timestamp.hour], tokens, cost, model)
+            bucket_add(hourly[hour], tokens, cost, model)
 
     summary = token_summary(today_tokens, month_tokens, "local-claude-logs", today_cost, month_cost, tier,
                             now=current,
