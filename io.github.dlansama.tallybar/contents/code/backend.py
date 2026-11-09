@@ -13,7 +13,9 @@ import calendar
 import copy
 import datetime as dt
 import json
+import math
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -24,7 +26,13 @@ from typing import Any
 from accounting import default_provider, enrich_ui_formatting, now_iso
 from cookies import collect_browser_sessions, host_matches_any, select_session_cookies
 from http_helpers import bounded_provider, run_threaded_provider, scrub_credentials
-from io_helpers import atomic_write_text as _atomic_write_text, flock_with_timeout, to_daemon_thread
+from io_helpers import (
+    atomic_write_text as _atomic_write_text,
+    flock_with_timeout,
+    load_json_with_backup,
+    save_json_with_backup,
+    to_daemon_thread,
+)
 from providers import (
     GEMINI_DOMAINS,
     apply_claude_statusline_fallback,
@@ -201,12 +209,14 @@ def all_ai_projected_month_cost(providers: dict[str, Any], now: time.struct_time
 # ---------------------------------------------------------------------------
 
 def load_config() -> dict[str, Any]:
+    """The saved config, falling back to its ``.bak`` mirror when the main file is unreadable
+    (quarantined as ``.corrupt``), so a corrupt file never reads as "no settings" and gets
+    overwritten by the next single-key save."""
     try:
-        with CONFIG_PATH.open("r", encoding="utf-8") as handle:
-            data = json.load(handle)
-        return data if isinstance(data, dict) else {}
+        data = load_json_with_backup(CONFIG_PATH, lambda d: isinstance(d, dict), {})
     except Exception:
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _enabled_providers(config: dict[str, Any]) -> list[str]:
@@ -246,6 +256,10 @@ def public_config(config: dict[str, Any]) -> dict[str, Any]:
 _WEEKLY_ALERT_THRESHOLD = 80
 
 
+# An old-format weekly key ended in the limit's resetAt ISO timestamp, not a label.
+_RESET_TIMESTAMP_KEY = re.compile(r"^\d{4}-\d{2}-\d{2}T")
+
+
 def _is_weekly_limit(limit: dict[str, Any]) -> bool:
     """A weekly-reset usage window. Matches the QML pace detector: an exact 'weekly' label,
     a label starting 'week', or a 7-day (10080-minute) window."""
@@ -253,6 +267,8 @@ def _is_weekly_limit(limit: dict[str, Any]) -> bool:
         return False
     label = str(limit.get("label") or "").strip().lower()
     if label == "weekly" or label.startswith("week"):
+        return True
+    if str(limit.get("window") or "").strip().lower() == "weekly":
         return True
     wm = limit.get("windowMinutes")
     return isinstance(wm, (int, float)) and int(wm) == 10080
@@ -354,6 +370,17 @@ def compute_notifications(providers: dict[str, Any], config: dict[str, Any],
             # (like a transient failure), so unmuting doesn't replay old crossings.
             raw_muted = config.get("mutedProviders")
             muted = {str(m) for m in raw_muted} if isinstance(raw_muted, (list, tuple)) else set()
+            # A provider hidden in settings is as quiet as a muted one. The snapshot's public
+            # config carries the already-settled enabled list (no providerCatalog), so it is
+            # read literally; a raw saved config is settled against its catalog first.
+            saved_providers = config.get("providers")
+            if isinstance(saved_providers, list):
+                shown = (set(_enabled_providers(config)) if "providerCatalog" in config
+                         else {str(p) for p in saved_providers})
+                muted |= {p for p in providers if p not in shown}
+            # Armed keys written before lanes carried their window in the key: a lane that was
+            # armed under the old key stays armed under its new one on the first run.
+            migrated: set[str] = set()
             for pkey, provider in providers.items():
                 if not isinstance(provider, dict):
                     continue
@@ -388,14 +415,24 @@ def compute_notifications(providers: dict[str, Any], config: dict[str, Any],
                     # refresh. The label also keeps a provider's two weekly rows (Claude "Weekly"
                     # + "Fable") in separate armed slots. Re-arm only 5 points below the threshold
                     # so a value hovering at the boundary doesn't flap.
+                    # Antigravity's 5-hour and weekly lanes share a label and differ in window,
+                    # so the window is part of every armed key.
+                    window = str(limit.get("window") or "").strip().lower()
+                    lane = f"{label}|{window}" if window else label
                     if _is_weekly_limit(limit):
-                        wkey = f"weekly80|{pkey}|{label}"
+                        wkey = f"weekly80|{pkey}|{lane}"
                         # One-time migration: drop old-format resetAt-timestamp keys.
                         for stale in [k for k in now_fired
-                                      if k.startswith(f"weekly80|{pkey}|") and "T" in k.rsplit("|", 1)[-1]]:
+                                      if k.startswith(f"weekly80|{pkey}|")
+                                      and _RESET_TIMESTAMP_KEY.match(k.rsplit("|", 1)[-1])]:
                             now_fired.discard(stale)
+                        if window:
+                            legacy_wkey = f"weekly80|{pkey}|{label}"
+                            if legacy_wkey in previously_fired and wkey not in previously_fired:
+                                migrated.add(wkey)
+                            now_fired.discard(legacy_wkey)
                         if pct >= _WEEKLY_ALERT_THRESHOLD:
-                            if wkey not in previously_fired and enabled:
+                            if wkey not in previously_fired and wkey not in migrated and enabled:
                                 notifications.append({
                                     "provider": pkey,
                                     "providerLabel": plabel,
@@ -412,7 +449,12 @@ def compute_notifications(providers: dict[str, Any], config: dict[str, Any],
                     # Arm each threshold this limit currently exceeds; re-arm only below
                     # t - _THRESHOLD_REARM_GAP, holding the armed state in the gap band.
                     for t in thresholds:
-                        key = f"{pkey}|{label}|{t}"
+                        key = f"{pkey}|{lane}|{t}"
+                        if window:
+                            legacy_key = f"{pkey}|{label}|{t}"
+                            if pct >= t and legacy_key in previously_fired and key not in previously_fired:
+                                migrated.add(key)
+                            now_fired.discard(legacy_key)
                         if pct >= t:
                             now_fired.add(key)
                         elif pct < t - _THRESHOLD_REARM_GAP:
@@ -423,8 +465,8 @@ def compute_notifications(providers: dict[str, Any], config: dict[str, Any],
                     if not crossed:
                         continue
                     top = max(crossed)
-                    key = f"{pkey}|{label}|{top}"
-                    if key in previously_fired:
+                    key = f"{pkey}|{lane}|{top}"
+                    if key in previously_fired or key in migrated:
                         continue
                     if not enabled:
                         continue  # state still tracks the crossing
@@ -517,7 +559,7 @@ def compute_notifications(providers: dict[str, Any], config: dict[str, Any],
 
 
 def save_config(config: dict[str, Any]) -> dict[str, Any]:
-    _atomic_write_text(CONFIG_PATH, json.dumps(config, indent=2, sort_keys=True) + "\n")
+    save_json_with_backup(CONFIG_PATH, config, indent=2, sort_keys=True, strict=True)
     return config
 
 
@@ -526,7 +568,7 @@ def save_snapshot(snapshot: dict[str, Any]) -> None:
     values instantly on cold start. Best-effort: never let a write failure
     affect the snapshot that is being printed to stdout."""
     try:
-        _atomic_write_text(SNAPSHOT_PATH, json.dumps(snapshot, separators=(",", ":")))
+        _atomic_write_text(SNAPSHOT_PATH, _dump_json(snapshot, False))
     except Exception:
         pass
 
@@ -560,8 +602,68 @@ def _snapshot_has_live_data(snapshot: Any) -> bool:
                for p in providers.values())
 
 
+def _parse_iso_utc(value: Any) -> dt.datetime | None:
+    try:
+        ts = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=dt.timezone.utc)
+
+
+def _stale_origin(cached: dict[str, Any], entry: dict[str, Any]) -> tuple[str, float] | None:
+    """``(staleAsOf, age_seconds)`` of a cached reading: an ``entry`` that was itself carried
+    keeps its original ``staleAsOf`` (so repeated carries cannot ratchet the age), else the
+    cached snapshot's timestamp. None when neither parses."""
+    prior = entry.get("staleAsOf")
+    if isinstance(prior, str) and prior:
+        origin = _parse_iso_utc(prior)
+        if origin is not None:
+            return prior, (dt.datetime.now(dt.timezone.utc) - origin).total_seconds()
+    cached_ts = cached.get("timestamp")
+    ts = _parse_iso_utc(cached_ts)
+    if ts is None:
+        return None
+    return str(cached_ts), (dt.datetime.now(dt.timezone.utc) - ts).total_seconds()
+
+
+_COST_CARRY_MAX_SECONDS = 6 * 3600
+
+
+def carry_forward_cost_summaries(providers: dict[str, Any], cached: Any,
+                                 names: Any = None) -> None:
+    """Copy the cached snapshot's ``costSummary`` onto ``providers`` (flagged ``stale`` with
+    the original ``staleAsOf``) for a cost scan that timed out or failed, so one slow scan
+    does not blank every provider's cost. Only readings under six hours old and from the same
+    local calendar day are carried; ``names`` limits it to those providers. A provider that
+    exists only through its cost summary (Grok) is recreated from the cached entry."""
+    if not isinstance(cached, dict) or not isinstance(cached.get("providers"), dict):
+        return
+    cached_dt = _parse_iso_utc(cached.get("timestamp"))
+    if cached_dt is None or cached_dt.astimezone().date() != dt.datetime.now().astimezone().date():
+        return
+    for name, entry in cached["providers"].items():
+        if names is not None and name not in names:
+            continue
+        if not isinstance(entry, dict) or not isinstance(entry.get("costSummary"), dict):
+            continue
+        origin = _stale_origin(cached, entry["costSummary"])
+        if origin is None or not 0 <= origin[1] <= _COST_CARRY_MAX_SECONDS:
+            continue
+        target = providers.get(name)
+        if not isinstance(target, dict):
+            target = providers[name] = default_provider(
+                str(entry.get("label") or name.title()), str(entry.get("source") or name))
+        elif isinstance(target.get("costSummary"), dict):
+            continue
+        summary = copy.deepcopy(entry["costSummary"])
+        summary["stale"] = True
+        summary["staleAsOf"] = origin[0]
+        target["costSummary"] = summary
+
+
 def carry_forward_partial_antigravity_lanes(provider: dict[str, Any],
-                                            cached: Any) -> dict[str, Any]:
+                                            cached: Any,
+                                            *, max_stale_seconds: int = 900) -> dict[str, Any]:
     """Freeze last-known Antigravity session lanes across a ``partial`` cloud read.
 
     A ``partial`` Antigravity result is authenticated but carries NO session lanes — the full
@@ -570,17 +672,21 @@ def carry_forward_partial_antigravity_lanes(provider: dict[str, Any],
     so the last-known lanes would simply vanish (blank bars). Graft the previous snapshot's lanes
     and tag them ``stale`` so the widget shows the frozen prior reading instead — never mistaken for
     a fresh confident read (the status stays ``partial``). A later full ``ok`` read replaces them
-    wholesale. No-op for any other status or when the cache has no Antigravity lanes. Mutates and
-    returns ``provider``."""
+    wholesale. The grafted lanes carry ``staleAsOf`` (the original read time, preserved across
+    carries) and are dropped once older than ``max_stale_seconds``. No-op for any other status or
+    when the cache has no Antigravity lanes. Mutates and returns ``provider``."""
     if not isinstance(provider, dict):
         return provider
     if provider.get("status") != "partial" or provider.get("limits"):
         return provider
     prev = ((cached or {}).get("providers") or {}).get("antigravity") or {} if isinstance(cached, dict) else {}
     prev_limits = prev.get("limits")
-    if isinstance(prev_limits, list) and prev_limits:
-        provider["limits"] = prev_limits
-        provider["stale"] = True
+    if isinstance(prev_limits, list) and prev_limits and isinstance(cached, dict):
+        origin = _stale_origin(cached, prev)
+        if origin is not None and 0 <= origin[1] <= max_stale_seconds:
+            provider["limits"] = prev_limits
+            provider["stale"] = True
+            provider["staleAsOf"] = origin[0]
     return provider
 
 
@@ -1125,6 +1231,19 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
                     message=relabel_message,
                 )
 
+    # A cookie collection that timed out or crashed left the jar empty: the cookie-dependent
+    # providers read "no cookies", which is a transient failure here, not a signed-out user.
+    browser_diag = diagnostics.get("browser") or {}
+    if browser_diag.get("status") in ("timeout", "error"):
+        for provider in ("gemini", "claude"):
+            if providers[provider]["status"] == "missing-cookies":
+                providers[provider].update(
+                    status="timeout",
+                    message=("Browser cookie collection timed out; keeping the last reading"
+                             if browser_diag.get("status") == "timeout"
+                             else "Browser cookies could not be read this refresh"),
+                )
+
     # Bounded last-known-good carry-forward for the network providers. A transient blip
     # (Cloudflare challenge / one-off timeout) on Claude/Gemini/Codex/Grok Bot would otherwise
     # overwrite the cache with an error card. Freeze the last good reading for a short grace
@@ -1144,14 +1263,22 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     # so a scan timeout (caught -> diagnostic) leaves the snapshot exactly as the providers
     # produced it, with no half-written cost summary.
     try:
-        summaries = await cost_scan
+        raw_summaries = await cost_scan or {}
+        # Underscore keys are scan metadata (e.g. "_errors"), not providers.
+        summaries = {k: v for k, v in raw_summaries.items() if not str(k).startswith("_")}
         apply_cost_summaries(providers, summaries)
-        unpriced = {name: s["unpricedModels"] for name, s in (summaries or {}).items()
+        unpriced = {name: s["unpricedModels"] for name, s in summaries.items()
                     if isinstance(s, dict) and s.get("unpricedModels")}
         if unpriced:
             diagnostics["unpriced_models"] = unpriced
+        scan_errors = raw_summaries.get("_errors")
+        if isinstance(scan_errors, dict) and scan_errors:
+            diagnostics["cost_summary_error"] = scrub_credentials(
+                "; ".join(f"{k}: {v}" for k, v in scan_errors.items()))[:160]
+            carry_forward_cost_summaries(providers, cached_snapshot, {str(k) for k in scan_errors})
     except (TimeoutError, asyncio.TimeoutError):
         diagnostics["cost_summary_timeout"] = True
+        carry_forward_cost_summaries(providers, cached_snapshot)
     except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
         raise  # cooperative cancellation / process-stop must propagate, never be masked here
     except BaseException as exc:
@@ -1159,6 +1286,7 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         # daemon thread is re-raised by `await cost_scan`, and a bare `except Exception` would
         # let it crash build_snapshot with no JSON. Record it and ship the data unenriched.
         diagnostics["cost_summary_error"] = scrub_credentials(f"{exc.__class__.__name__}: {str(exc)}")[:160]
+        carry_forward_cost_summaries(providers, cached_snapshot)
     mark("cost_scan", cost_scan_start)
     enrich_ui_formatting(providers)
 
@@ -1209,15 +1337,38 @@ def _degraded_snapshot(detail: str, *, notifications: bool = True) -> dict[str, 
     if notifications:
         snap["notifications"] = []
     snap.setdefault("diagnostics", {})["fatal"] = scrub_credentials(detail)[:160]
+    _refresh_config(snap)
     return snap
+
+
+def _refresh_config(snap: dict[str, Any]) -> None:
+    """Re-stamp the live settings over a replayed snapshot, so the UI never re-adopts the
+    ones the cache was saved under."""
+    try:
+        snap["config"] = public_config(load_config())
+    except Exception:
+        snap.pop("config", None)
 
 
 def _exc_detail(exc: BaseException) -> str:
     return f"{exc.__class__.__name__}: {str(exc)}"
 
 
+def _finite(obj: Any) -> Any:
+    """``obj`` with every NaN/Infinity float replaced by None (JSON null)."""
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _finite(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_finite(v) for v in obj]
+    return obj
+
+
 def _dump_json(obj: Any, pretty: bool) -> str:
-    return json.dumps(obj, indent=2 if pretty else None, separators=None if pretty else (",", ":"))
+    """Strict JSON: the widget's JSON.parse rejects the NaN/Infinity tokens Python emits."""
+    return json.dumps(_finite(obj), indent=2 if pretty else None,
+                      separators=None if pretty else (",", ":"), allow_nan=False)
 
 
 def main() -> int:
@@ -1250,7 +1401,7 @@ def main() -> int:
 
     if args.last_snapshot:
         cached = load_snapshot()
-        print(json.dumps(cached, separators=(",", ":")))
+        print(_dump_json(cached, False))
         return 0
 
     if args.cost:
@@ -1289,6 +1440,7 @@ def main() -> int:
     if args.background and _screen_locked():
         cached = _cached_or_minimal_snapshot()
         cached["notifications"] = []
+        _refresh_config(cached)
         cached.setdefault("diagnostics", {})["refresh_skipped"] = "screen-locked"
         print(_dump_json(cached, args.pretty))
         return 0

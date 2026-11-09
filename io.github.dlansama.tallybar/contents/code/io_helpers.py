@@ -160,16 +160,22 @@ def atomic_write_text(path: Path | str, text: str, mode: int = 0o600) -> None:
         raise
 
 
-def save_json_with_backup(path: Path | str, data: Any) -> None:
+def save_json_with_backup(path: Path | str, data: Any, *, indent: int | None = None,
+                          sort_keys: bool = False, strict: bool = False) -> None:
     """Atomic 0600 write of ``data`` as JSON to ``path``, mirrored to ``<path>.bak`` so a later
     corruption of the main file is recoverable (see ``load_json_with_backup``). Best-effort:
     a failed main write skips the mirror (the last good pair stays intact); a failed mirror
-    is ignored."""
+    is ignored. ``strict`` re-raises a failed main write for callers that must not report a
+    save that did not happen."""
     path = Path(path)
-    payload = json.dumps(data)
+    payload = json.dumps(data, indent=indent, sort_keys=sort_keys)
+    if indent is not None:
+        payload += "\n"
     try:
         atomic_write_text(path, payload)
     except OSError:
+        if strict:
+            raise
         return
     try:
         atomic_write_text(path.with_name(path.name + ".bak"), payload)
@@ -190,7 +196,7 @@ def load_json_with_backup(path: Path | str, valid: Any, empty: Any) -> Any:
             data = json.loads(candidate.read_text(encoding="utf-8"))
             if valid(data):
                 return data
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
             pass
         if idx == 0:
             try:

@@ -39,8 +39,8 @@ def scrub_credentials(text: str) -> str:
     surfaced message."""
     if not isinstance(text, str):
         return text
-    text = re.sub(r"Bearer\s+[a-zA-Z0-9_\-\.]+", "Bearer [REDACTED]", text)
-    text = re.sub(r"sk-[a-zA-Z0-9_\-]+", "sk-[REDACTED]", text)
+    text = re.sub(r"(?i)\bBearer\s+[a-zA-Z0-9_\-\.~+/=]+", "Bearer [REDACTED]", text)
+    text = re.sub(r"(?<![a-zA-Z0-9_\-])sk-[a-zA-Z0-9_\-]{8,}", "sk-[REDACTED]", text)
     text = re.sub(r"ya29\.[a-zA-Z0-9_\-]+", "ya29.[REDACTED]", text)
     text = re.sub(r"GOCSPX-[a-zA-Z0-9_\-]+", "GOCSPX-[REDACTED]", text)
     text = re.sub(r"1//[a-zA-Z0-9_\-]{20,}", "1//[REDACTED]", text)

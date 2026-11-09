@@ -1117,7 +1117,7 @@ def test_compute_notifications_lock_contention_raises_timeout(tmp_path, monkeypa
 # ---------------------------------------------------------------------------
 
 def _cached_with_lanes(lanes):
-    return {"providers": {"antigravity": {"status": "ok", "limits": lanes}}}
+    return {"timestamp": _iso(60.0), "providers": {"antigravity": {"status": "ok", "limits": lanes}}}
 
 
 def test_partial_carry_forward_grafts_last_known_lanes():
