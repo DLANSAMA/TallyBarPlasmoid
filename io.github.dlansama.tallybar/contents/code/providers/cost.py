@@ -75,6 +75,9 @@ COST_ARCHIVE_PATH = Path.home() / ".tallybar" / "cost_archive.json"
 ANTIGRAVITY_DISK_DATING_VERSION = 3
 # How long a ledger entry is kept; older ones are pruned, and DBs past it are not ingested.
 ANTIGRAVITY_RETENTION_DAYS = 35
+# compute_local_cost_summaries' map entry naming each provider whose summary raised:
+# {provider: "<ExceptionClass>: <message>"}. Present only when one did; not a provider.
+COST_SUMMARY_ERRORS_KEY = "_errors"
 
 
 # ---------------------------------------------------------------------------
@@ -110,10 +113,14 @@ from proto_wire import (  # noqa: F401
 )
 
 
-def _local_iso(secs: int) -> str:
-    """Local-time ``YYYY-MM-DD`` for a unix timestamp (seconds). Used to date disk-scanned
+def _local_iso(secs: int) -> str | None:
+    """Local-time ``YYYY-MM-DD`` for a unix timestamp (seconds), ``None`` when the value is
+    no representable time (a corrupt or millisecond stamp). Used to date disk-scanned
     generations by their embedded protobuf timestamp."""
-    return dt.datetime.fromtimestamp(secs).date().isoformat()
+    try:
+        return dt.datetime.fromtimestamp(secs).date().isoformat()
+    except (ValueError, OverflowError, OSError):
+        return None
 
 
 def _load_antigravity_ledger() -> dict[str, Any]:
@@ -535,14 +542,14 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                                     changed = True
                             continue
                         for gi, gen in enumerate(gens):
-                            gen_date = _local_iso(gen["secs"])
-                            if gen_date < cutoff:
+                            stamped = _local_iso(gen["secs"])
+                            if stamped is None or stamped < cutoff:
                                 continue
                             key = f"{stem}@{idx}.{gi}"
                             if key in entries:
                                 continue
                             entries[key] = {
-                                "d": gen_date,
+                                "d": stamped,
                                 "u": gen["u"],
                                 "c": gen["c"],
                                 "o": gen["o"],
@@ -1043,7 +1050,10 @@ def update_cost_archive(summaries: dict[str, Any] | None,
     current = now.astimezone() if now is not None else dt.datetime.now(dt.timezone.utc).astimezone()
     month_key = current.strftime("%Y-%m")
     cur: dict[str, Any] = {}
+    failed = (summaries or {}).get(COST_SUMMARY_ERRORS_KEY) or {}
     for prov, summary in (summaries or {}).items():
+        if prov == COST_SUMMARY_ERRORS_KEY:
+            continue
         tot = _summary_month_totals(summary)
         if tot is not None:
             cur[prov] = tot
@@ -1064,6 +1074,11 @@ def update_cost_archive(summaries: dict[str, Any] | None,
         months = archive.setdefault("months", {})
         existing = months.get(month_key)
         target: dict[str, Any] = dict(cur)
+        # A provider whose summary raised this run keeps its recorded month, not a gap.
+        if isinstance(existing, dict):
+            for prov in failed:
+                if prov in existing and prov not in target:
+                    target[prov] = existing[prov]
         # Partial-month flag: set on the very first month the archive records, and preserved
         # thereafter for that month (a mid-month install never becomes "complete").
         if not months or (isinstance(existing, dict) and existing.get("partial")):
@@ -1101,18 +1116,34 @@ def compute_local_cost_summaries(deadline: float | None = None) -> dict[str, dic
             grok_week_start, grok_week_end = bp
     except Exception:
         pass
-    summaries: dict[str, dict[str, Any] | None] = {
-        "codex": local_codex_token_summary(deadline=deadline),
-        "claude": local_claude_token_summary(deadline=deadline),
-        "gemini": local_gemini_token_summary(deadline=deadline),
+    runners: list[tuple[str, Any]] = [
+        ("codex", lambda: local_codex_token_summary(deadline=deadline)),
+        ("claude", lambda: local_claude_token_summary(deadline=deadline)),
+        ("gemini", lambda: local_gemini_token_summary(deadline=deadline)),
         # None when there's no local data, so the tab stays hidden.
-        "grok": local_grok_token_summary(
+        ("grok", lambda: local_grok_token_summary(
             deadline=deadline,
             week_start=grok_week_start,
             week_end=grok_week_end,
-        ),
-        "antigravity": antigravity_ledger_cost_summary(deadline=deadline),
-    }
+        )),
+        ("antigravity", lambda: antigravity_ledger_cost_summary(deadline=deadline)),
+    ]
+    summaries: dict[str, Any] = {}
+    errors: dict[str, str] = {}
+    for provider, run in runners:
+        # One provider's unreadable data must not take every cost section down with it.
+        # A deadline cut (TimeoutError, LogScanIncomplete) still aborts the whole scan:
+        # partial totals must never be shown or archived.
+        # → tests/test_antigravity_ledger_integrity.py::test_one_failing_provider_keeps_the_others
+        try:
+            summaries[provider] = run()
+        except TimeoutError:
+            raise
+        except Exception as err:
+            summaries[provider] = None
+            errors[provider] = f"{type(err).__name__}: {err}"
+    if errors:
+        summaries[COST_SUMMARY_ERRORS_KEY] = errors
     # Best-effort: enrichment must never break the snapshot.
     try:
         update_cost_archive(summaries, deadline=deadline)
