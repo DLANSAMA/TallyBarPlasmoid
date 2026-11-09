@@ -6,6 +6,76 @@ Notable changes to TallyBar. Format follows
 
 ## [Unreleased]
 
+### Added
+- Claude cost counts Claude desktop's Cowork and agent sessions, and transcripts kept
+  under `$CLAUDE_CONFIG_DIR` or `~/.config/claude`. A transcript found in two places is
+  counted once.
+- Gemini cost reads the Gemini CLI's current `.jsonl` session files as well as the older
+  `.json` ones, counting each message once.
+- A reading that isn't fresh says how old it is, e.g. "Updated 3d ago (cached)", for
+  carried-forward Claude, Gemini, Codex and Grok readings and for the Claude Code
+  fallback.
+- The cost section names any model billed at a neighbouring model's rate ("Estimated
+  rate: …"), for every provider.
+- Reset countdowns keep counting between refreshes instead of holding the text from the
+  last fetch.
+- A provider that is signed out or failing but still has local cost data shows its
+  message and its sign-in or unlock button beside the cost section, and its tab is
+  marked.
+- A failed refresh says so in a one-line strip when the tab still has older values to
+  show.
+
+### Changed
+- The cost scan is several times faster and writes far less. The Claude transcript
+  cache used to be rewritten in full (about 150 MB with a long history) whenever a
+  session was open; a refresh now writes about a kilobyte. The existing cache is
+  converted on the first refresh, not rebuilt.
+- "Last 30 days" covers 30 calendar days including today. It covered 31.
+- Usage is priced at the rate in force on the day it happened. When an introductory
+  price ends, earlier usage keeps the introductory rate instead of being re-priced.
+- A cost scan that runs out of time keeps the last cost totals on screen, marked as
+  older, instead of dropping every cost section. They are kept for the same day only.
+- Offline prices added or corrected: Claude Fable 5.2 and Mythos 5.2, the original
+  Claude Opus 4, the GPT-5.1 to 5.6 variants (Codex, Pro, Nano, Cyber) and Gemini 3
+  Flash. A model with no exact price is no longer silently billed as a similar-named one
+  without being named.
+- A percentage below 100 never reads "100% used", small values read "<0.1% used"
+  instead of zero, and the popup, tooltip and panel round the same way. Compact counts
+  round the same way everywhere and reach trillions ("1.2T").
+- "Runs out in…" waits until 5% of the window has passed before projecting.
+- `backend.py --cost` marks its output degraded when the cost scan failed, and carries
+  `stale` / `staleAsOf` on totals kept from an earlier scan.
+- Deleting `config.json` resets settings. A damaged one is recovered from its backup
+  and kept aside as `.corrupt`.
+
+### Fixed
+- Antigravity counted old conversations as today's usage when their activity carried no
+  timestamp. They now take their real day, and the existing history is corrected on the
+  first refresh.
+- Antigravity counted some desktop conversations twice.
+- Antigravity billed Claude Opus 5.5 and Sonnet 5.5 at the Opus 5 and Sonnet 5 rates.
+- One unreadable Antigravity timestamp no longer stops the cost section for every
+  provider, and one provider's failing cost summary no longer drops the others.
+- An Antigravity CLI conversation spanning several days keeps its days when the session
+  ends, and usage older than the history window is not counted again as today's.
+- Antigravity limit alerts no longer repeat on every refresh, and its weekly limits can
+  raise the 80% weekly alert.
+- Grok: a day that had partly rotated out of the CLI's log showed only what was left in
+  the log. The larger archived figure now counts toward today, 7 and 30 days, the bars,
+  the breakdown and the "This week" line.
+- Claude: when claude.ai's usage endpoints fail or rate-limit, the tab keeps its last
+  reading and backs off instead of going empty. The Claude Code fallback keeps the
+  back-off and the credit balance too.
+- A browser cookie store that could not be read in time is reported as a timeout, not
+  as "sign-in needed", and no longer replaces the last good reading or raises an alert.
+- Providers hidden in Settings no longer raise notifications.
+- A stray non-UTF-8 byte in a Codex, Grok or Gemini log, or in one of TallyBar's own
+  state files, no longer drops the cost sections.
+- The widget no longer re-adopts old settings when it repaints a cached snapshot.
+- First launch reads "Fetching usage data…" instead of "No usage data", and the panel
+  badge and tab marks agree on which statuses count as a problem.
+- Very large counts (999.5 billion and up) no longer hang the popup.
+
 ## [0.2.1] — 2026-11-05
 
 ### Changed
