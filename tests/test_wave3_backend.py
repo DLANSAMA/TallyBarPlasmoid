@@ -40,3 +40,19 @@ def test_cost_export_flags_error_and_carries_staleness():
     assert out["degraded"] is True and out["degradedReason"] == "cost_summary_error"
     assert out["providers"]["claude"]["stale"] is True
     assert out["providers"]["claude"]["staleAsOf"] == "2026-01-01T00:00:00Z"
+
+
+def test_legacy_key_in_hold_band_stays_armed(tmp_path, monkeypatch):
+    state = tmp_path / "notify_state.json"
+    monkeypatch.setattr(backend, "NOTIFY_STATE_PATH", state)
+    state.write_text(json.dumps({"fired": ["antigravity|Gemini|90"]}))
+    cfg = {"notificationsEnabled": True, "notificationThresholds": [90]}
+
+    def provs(pct):
+        return {"antigravity": {"label": "Antigravity", "limits": [
+            {"label": "Gemini", "window": "5h", "percent": pct}]}}
+
+    backend.compute_notifications(provs(85), cfg)  # hold band: 80 <= 85 < 90
+    fired = set(json.loads(state.read_text())["fired"])
+    assert fired == {"antigravity|Gemini|5h|90"}
+    assert backend.compute_notifications(provs(92), cfg) == []

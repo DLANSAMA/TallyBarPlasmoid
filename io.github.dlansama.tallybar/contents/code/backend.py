@@ -452,8 +452,10 @@ def compute_notifications(providers: dict[str, Any], config: dict[str, Any],
                         key = f"{pkey}|{lane}|{t}"
                         if window:
                             legacy_key = f"{pkey}|{label}|{t}"
-                            if pct >= t and legacy_key in previously_fired and key not in previously_fired:
+                            if (pct >= t - _THRESHOLD_REARM_GAP and legacy_key in previously_fired
+                                    and key not in previously_fired):
                                 migrated.add(key)
+                                now_fired.add(key)
                             now_fired.discard(legacy_key)
                         if pct >= t:
                             now_fired.add(key)
