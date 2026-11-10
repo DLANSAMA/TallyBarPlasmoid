@@ -182,6 +182,18 @@ def _proc_start_time(pid: int, proc_root: str = "/proc") -> str | None:
     return fields[19] if fields and len(fields) > 19 else None
 
 
+def _proc_start_epoch(pid: int, proc_root: str = "/proc") -> float | None:
+    """Unix time the process started: its stat start time (clock ticks after boot) plus the
+    boot time in ``/proc/stat``. ``None`` when either can't be read."""
+    ticks = _proc_start_time(pid, proc_root)
+    try:
+        with open(f"{proc_root}/stat", "rb") as fh:
+            btime = next(int(line.split()[1]) for line in fh if line.startswith(b"btime "))
+        return btime + int(ticks or "") / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, StopIteration, IndexError):
+        return None
+
+
 def _agy_descendant_env(agy_pid: int, proc_root: str = "/proc") -> tuple[str, str] | None:
     """``(ANTIGRAVITY_CSRF_TOKEN, ANTIGRAVITY_LS_ADDRESS)`` from the environment of any
     current-user process descended from ``agy_pid`` (tool commands often run a level or two
@@ -555,15 +567,19 @@ class RpcHarvest:
     CURRENTLY on offer, not just ones with usage this run.
     ``listed``: every cascade id a language server listed, queried or not — the cascades
     that are alive right now.
-    ``listing_complete``: False when some running server could not be listed (no port,
-    every probe failed, the deadline cut the loop), so a cascade missing from ``listed``
-    may still be alive.
+    ``listing_complete``: False when the deadline cut the loop, or a running server could not
+    be listed and its start time is unknown, so a cascade missing from ``listed`` may still
+    be alive.
+    ``unlisted_since``: the earliest start time (unix seconds) of the running servers that
+    could not be listed (no port, every probe failed), else None. Such a server may serve a
+    cascade whose conversation DB was written since then, and no other.
     """
     usage: dict[str, list[dict[str, Any]]] = dataclasses.field(default_factory=dict)
     marks: dict[str, str] = dataclasses.field(default_factory=dict)
     learned_names: dict[str, str] = dataclasses.field(default_factory=dict)
     listed: set[str] = dataclasses.field(default_factory=set)
     listing_complete: bool = True
+    unlisted_since: float | None = None
 
 
 def collect_antigravity_rpc_usage(
@@ -604,13 +620,26 @@ def collect_antigravity_rpc_usage(
     learned: dict[str, str] = {}
     listed: set[str] = set()
     listing_complete = True
+    unlisted_since: float | None = None
+
+    def unlistable(pid: int) -> None:
+        # A server that answers no listing (an agy whose CSRF token was never captured
+        # answers 401 for as long as it lives) can only be serving a conversation written
+        # since it started; without its start time nothing can be ruled out.
+        nonlocal listing_complete, unlisted_since
+        started = _proc_start_epoch(pid)
+        if started is None:
+            listing_complete = False
+        else:
+            unlisted_since = started if unlisted_since is None else min(unlisted_since, started)
+
     for pid, token, scheme in find_antigravity_processes():
         if deadline_passed(deadline, inclusive=True):
             listing_complete = False
             break
         ports, _ = antigravity_ports(pid)
         if not ports:
-            listing_complete = False
+            unlistable(pid)
             continue
         schemes = (scheme, "http" if scheme == "https" else "https")
         base = None
@@ -634,7 +663,10 @@ def collect_antigravity_rpc_usage(
             if base:
                 break
         if not base or not isinstance(summaries, dict):
-            listing_complete = False
+            if deadline_passed(deadline, inclusive=True):
+                listing_complete = False
+            else:
+                unlistable(pid)
             continue
         listed.update(summaries)
         # Exact picker display names, live from THIS language server: one cheap call per
@@ -717,7 +749,7 @@ def collect_antigravity_rpc_usage(
             # Watermark only on success (including zero-usage conversations: marks them so they
             # stop being re-queried each refresh until they actually change).
             marks[cascade_id] = lmt
-    return RpcHarvest(out, marks, learned, listed, listing_complete)
+    return RpcHarvest(out, marks, learned, listed, listing_complete, unlisted_since)
 
 
 def normalized_antigravity_lanes(limits: list[dict[str, Any]], include_missing: bool = False) -> list[dict[str, Any]]:

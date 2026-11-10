@@ -24,6 +24,7 @@ from providers import cost as costmod  # noqa: E402
 from providers import grok as grokmod  # noqa: E402
 
 _FIXED_NOW = dt.datetime(2026, 6, 9, 12, 0, 0, tzinfo=dt.timezone.utc)
+_REAL_COLLECT = agmod.collect_antigravity_rpc_usage
 
 
 def _varint(n: int) -> bytes:
@@ -473,6 +474,47 @@ def test_cli_stem_does_not_flip_on_a_failed_listing(monkeypatch, tmp_path, harve
     assert sorted(res["entries"]) == ["sess#0", "sess#1", "sess#2"]
 
 
+def _unlistable_agy(monkeypatch, started: float):
+    """One agy whose CSRF token was never captured: every listing call answers 401."""
+    import urllib.error
+    monkeypatch.setattr(agmod, "find_antigravity_processes", lambda: [(4242, "", "http")])
+    monkeypatch.setattr(agmod, "antigravity_ports", lambda pid: ([1234], ""))
+    monkeypatch.setattr(agmod, "_proc_start_epoch", lambda pid: started)
+
+    def unauthorized(url, *_a):
+        raise urllib.error.HTTPError(url, 401, "missing CSRF token", {}, None)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(agmod, "_post_local_rpc", unauthorized)
+
+
+def test_finished_cli_session_flips_past_an_unlistable_agy(monkeypatch, tmp_path):
+    days = _cli_session(monkeypatch, tmp_path, None)
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", _REAL_COLLECT)
+    # The token-less agy started after the session's DB was last written: it isn't serving it.
+    _unlistable_agy(monkeypatch, started=_noon("2026-06-09"))
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert {k: e["d"] for k, e in res["entries"].items()} == \
+        {f"sess:{i}": d for i, d in enumerate(days)}
+
+
+def test_session_written_since_an_unlistable_agy_started_stays_rpc_owned(monkeypatch, tmp_path):
+    _cli_session(monkeypatch, tmp_path, None)
+    monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", _REAL_COLLECT)
+    _unlistable_agy(monkeypatch, started=_noon("2026-06-07"))    # DB last written 06-08
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert sorted(res["entries"]) == ["sess#0", "sess#1", "sess#2"]
+
+
+def test_process_start_epoch_is_boot_time_plus_start_ticks(tmp_path):
+    (tmp_path / "77").mkdir()
+    ticks = os.sysconf("SC_CLK_TCK")
+    fields = ["S"] + ["0"] * 18 + [str(30 * ticks)]          # field 22 = start time in ticks
+    (tmp_path / "77" / "stat").write_text("77 (a g) " + " ".join(fields) + " 0 0\n")
+    (tmp_path / "stat").write_text("cpu 1 2 3\nbtime 1780000000\n")
+    assert agmod._proc_start_epoch(77, proc_root=str(tmp_path)) == 1780000030
+    assert agmod._proc_start_epoch(78, proc_root=str(tmp_path)) is None
+
+
 def test_harvest_reports_an_unlisted_server(monkeypatch):
     monkeypatch.setattr(agmod, "find_antigravity_processes", lambda: [(1, "tok", "http")])
     monkeypatch.setattr(agmod, "antigravity_ports", lambda pid: ([1234], ""))
@@ -481,7 +523,12 @@ def test_harvest_reports_an_unlisted_server(monkeypatch):
         raise ConnectionRefusedError
 
     monkeypatch.setattr(agmod, "_post_local_rpc", refused)
-    assert agmod.collect_antigravity_rpc_usage(1.0).listing_complete is False
+    monkeypatch.setattr(agmod, "_proc_start_epoch", lambda pid: 1234.5)
+    harvest = agmod.collect_antigravity_rpc_usage(1.0)
+    assert (harvest.listing_complete, harvest.unlisted_since) == (True, 1234.5)
+    monkeypatch.setattr(agmod, "_proc_start_epoch", lambda pid: None)   # start time unknown
+    harvest = agmod.collect_antigravity_rpc_usage(1.0)
+    assert (harvest.listing_complete, harvest.unlisted_since) == (False, None)
     calls: list = []
     _stub_language_server(monkeypatch, {"a": _LMT, "b": _LMT}, [], calls)
     harvest = agmod.collect_antigravity_rpc_usage(1.0, known={"a": _LMT})

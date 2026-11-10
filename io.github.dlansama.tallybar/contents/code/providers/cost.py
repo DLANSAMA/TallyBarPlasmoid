@@ -207,6 +207,19 @@ def _db_signature(db_path: Path) -> str | None:
         return f"{sig}:0:0"
 
 
+def _db_last_write(db_path: Path) -> float:
+    """Latest mtime of a trajectory DB and its ``-wal`` (WAL appends leave the main file
+    alone); ``inf`` when the DB can't be stat'ed."""
+    try:
+        last = db_path.stat().st_mtime
+    except OSError:
+        return float("inf")
+    try:
+        return max(last, db_path.with_name(db_path.name + "-wal").stat().st_mtime)
+    except OSError:
+        return last
+
+
 def _as_attempts(value: Any) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
@@ -620,11 +633,15 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                 force_scan = False
                 if stem in rpc_stems:
                     # A server that could not be listed this run may be serving this very
-                    # cascade: only a complete listing proves the session is gone.
+                    # cascade if its DB was written since that server started; with no start
+                    # time (or a deadline-cut listing) nothing proves the session is gone.
                     # → tests/test_antigravity_ledger_integrity.py::test_cli_stem_does_not_flip_on_a_failed_listing
+                    # → tests/test_antigravity_ledger_integrity.py::test_finished_cli_session_flips_past_an_unlistable_agy
                     if (conv_dir.parent.name != "antigravity-cli"
                             or stem in live_marks or stem in rpc_covered
-                            or stem in harvest.listed or not harvest.listing_complete):
+                            or stem in harvest.listed or not harvest.listing_complete
+                            or (harvest.unlisted_since is not None
+                                and _db_last_write(db_path) >= harvest.unlisted_since)):
                         continue  # RPC is authoritative for this conversation
                     # ...but a CLI cascade NOT listed by any live language server can
                     # never be re-harvested: agy's RPC server is in-process and died
