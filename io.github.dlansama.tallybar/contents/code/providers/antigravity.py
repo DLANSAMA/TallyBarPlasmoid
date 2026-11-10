@@ -566,26 +566,6 @@ class RpcHarvest:
     listing_complete: bool = True
 
 
-def _cascade_step_times(base: str, token: str, cascade_id: str, timeout: float,
-                        deadline: "float | None") -> list[str]:
-    """``metadata.createdAt`` of every step of a cascade, by step index; ``[]`` on any failure."""
-    try:
-        status, data = _post_local_rpc(
-            f"{base}{_LS_RPC_BASE}/GetCascadeTrajectorySteps", token,
-            {**_LS_RPC_METADATA, "cascadeId": cascade_id},
-            clamp_to_deadline(min(timeout, 3.0), deadline),
-        )
-    except Exception:
-        return []
-    if status != 200 or not isinstance(data, dict):
-        return []
-    times: list[str] = []
-    for step in data.get("steps") or []:
-        meta = step.get("metadata") if isinstance(step, dict) else None
-        times.append(str((meta or {}).get("createdAt") or "") if isinstance(meta, dict) else "")
-    return times
-
-
 def collect_antigravity_rpc_usage(
     timeout: float,
     known: "dict[str, str] | None" = None,
@@ -697,7 +677,6 @@ def collect_antigravity_rpc_usage(
             if status != 200 or not isinstance(data, dict):
                 continue  # no mark — will be retried next refresh
             records: list[dict[str, Any]] = []
-            step_times: list[str] | None = None
             for gen_index, gen in enumerate(data.get("generatorMetadata") or []):
                 if not isinstance(gen, dict):
                     continue
@@ -713,16 +692,9 @@ def collect_antigravity_rpc_usage(
                     step_key = str(int(step_indices[0])) if step_indices else f"g{gen_index}"
                     # createdAt lives at chatModel.chatStartMetadata.createdAt (not on `gen`).
                     # It's a UTC instant; localise.
+                    # Antigravity 2.23+ sends none; the ledger then dates the generation from
+                    # its first step's row in the conversation DB (the key's step index).
                     created_raw = str((chat.get("chatStartMetadata") or {}).get("createdAt") or "")
-                    if not created_raw and step_indices:
-                        # Antigravity 2.23 dropped chatStartMetadata.createdAt; the generation's
-                        # first step still carries metadata.createdAt.
-                        # → tests/test_rpc_watermarks.py::test_generation_dated_from_its_first_step
-                        if step_times is None:
-                            step_times = _cascade_step_times(base, token, cascade_id, timeout, deadline)
-                        first = int(step_indices[0])
-                        if 0 <= first < len(step_times):
-                            created_raw = step_times[first]
                     created = _rpc_local_date(created_raw)
                     placeholder = usage.get("model") or ""
                     records.append({

@@ -245,19 +245,117 @@ def test_harvest_day_entries_move_to_their_watermark_day(monkeypatch, tmp_path):
     assert (tmp_path / "ledger.json").stat().st_mtime_ns == before
 
 
-def test_repaired_cascade_is_queried_once_then_left_alone(monkeypatch, tmp_path):
-    monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
+def test_hourless_entry_heals_from_its_db_without_an_rpc_call(monkeypatch, tmp_path):
+    conv = tmp_path / "antigravity" / "conversations"
+    conv.mkdir(parents=True)
+    when = dt.datetime(2026, 6, 3, 15, 20)
+    _make_db(conv / "old.db", steps=[(0, _step_blob(int(when.timestamp()), u=1000))])
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", (conv,))
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
     _write_ledger(tmp_path, rpcWatermarks={"old": _LMT}, entries={
         "old#0": {"d": "2026-06-09", "u": 1000, "c": 0, "o": 10, "me": 1132}})
     calls: list = []
     _stub_language_server(monkeypatch, {"old": _LMT}, [_undated_gen(0)], calls)
-    costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
-    assert calls.count("GetCascadeTrajectoryGeneratorMetadata") == 1
-    calls.clear()
     res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
-    assert "GetCascadeTrajectoryGeneratorMetadata" not in calls
-    assert res["entries"]["old#0"]["d"] == agmod._rpc_local_date(_LMT)
+    assert calls == ["GetAllCascadeTrajectories", "GetAvailableModels"]   # watermark unchanged
+    e = res["entries"]["old#0"]
+    assert (e["d"], e["h"], "dlm" in e) == ("2026-06-03", 15, False)
+
+
+# ---------------------------------------------------------------------------
+# Generations dated from their conversation DB; resumed conversations
+# ---------------------------------------------------------------------------
+
+def _iso(when: dt.datetime) -> str:
+    return when.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000000000Z")
+
+
+def test_timeless_generation_takes_its_step_time_from_the_db(monkeypatch, tmp_path):
+    conv = tmp_path / "antigravity" / "conversations"
+    conv.mkdir(parents=True)
+    when = dt.datetime(2026, 6, 8, 9, 45)
+    _make_db(conv / "cas.db", steps=[(0, _ld(1, _field(1, int(when.timestamp())))),
+                                     (3, _step_blob(int(when.timestamp()), u=1000))])
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", (conv,))
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
+    calls: list = []
+    _stub_language_server(monkeypatch, {"cas": _iso(_FIXED_NOW)}, [_undated_gen(3)], calls)
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert "GetCascadeTrajectorySteps" not in calls
+    e = res["entries"]["cas#3"]
+    assert (e["d"], e["h"], e["u"], "dlm" in e) == ("2026-06-08", 9, 1000, False)
+
+
+def test_resumed_conversation_keeps_old_generations_off_today(monkeypatch, tmp_path):
+    conv = tmp_path / "antigravity" / "conversations"
+    conv.mkdir(parents=True)
+    old = int((_FIXED_NOW - dt.timedelta(days=40)).timestamp())
+    db = conv / "cas.db"
+    _make_db(db, steps=[(i, _step_blob(old + i, u=1_000_000)) for i in range(0, 20, 2)])
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", (conv,))
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
+    calls: list = []
+    gens = [_undated_gen(i, tokens=1_000_000) for i in range(0, 20, 2)]
+    # Seen while old: every generation is past the horizon, nothing is stored.
+    _stub_language_server(monkeypatch, {"cas": _iso(_FIXED_NOW - dt.timedelta(days=40))}, gens, calls)
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert res["entries"] == {} and res["stepsPruned"] == {"cas": 18}
+    # Resumed: one new message today; only it lands on today, with its real hour.
+    now_secs = int(_FIXED_NOW.timestamp()) - 600
+    con = sqlite3.connect(str(db))
+    con.execute("INSERT INTO steps (idx, metadata) VALUES (20, ?)", (_step_blob(now_secs, u=7),))
+    con.commit()
+    con.close()
+    _stub_language_server(monkeypatch, {"cas": _iso(_FIXED_NOW)}, gens + [_undated_gen(20, tokens=7)], calls)
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    local = dt.datetime.fromtimestamp(now_secs)
+    assert {k: (e["d"], e.get("h")) for k, e in res["entries"].items()} == \
+        {"cas#20": (local.date().isoformat(), local.hour)}
+    before = (tmp_path / "ledger.json").stat().st_mtime_ns
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert (tmp_path / "ledger.json").stat().st_mtime_ns == before
+
+
+def test_unanswered_disk_lookup_is_retried_a_bounded_number_of_times(monkeypatch, tmp_path):
+    conv = tmp_path / "antigravity" / "conversations"
+    conv.mkdir(parents=True)
+    db = conv / "cas.db"
+    _make_db(db, steps=[(0, _step_blob(_noon("2026-06-08"), u=5))])   # row 1 not written yet
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", (conv,))
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
+    calls: list = []
+    _stub_language_server(monkeypatch, {"cas": _iso(_FIXED_NOW)}, [_undated_gen(1)], calls)
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert res["entries"]["cas#1"]["dlm"] == 1 and "h" not in res["entries"]["cas#1"]
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert res["entries"]["cas#1"]["dlm"] == 2
+    con = sqlite3.connect(str(db))
+    con.execute("INSERT INTO steps (idx, metadata) VALUES (1, ?)",
+                (_step_blob(_noon("2026-06-09") - 3600, u=1000),))
+    con.commit()
+    con.close()
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    e = res["entries"]["cas#1"]
+    assert (e["d"], e["h"], "dlm" in e) == ("2026-06-09", 11, False)
+
+
+def test_a_lookup_that_never_answers_stops_after_its_attempts(monkeypatch, tmp_path):
+    conv = tmp_path / "antigravity" / "conversations"
+    conv.mkdir(parents=True)
+    _make_db(conv / "cas.db", steps=[])
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", (conv,))
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
+    calls: list = []
+    _stub_language_server(monkeypatch, {"cas": _iso(_FIXED_NOW)}, [_undated_gen(1)], calls)
+    for want in (1, 2, 3):
+        res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+        assert res["entries"]["cas#1"]["dlm"] == want
+    before = (tmp_path / "ledger.json").stat().st_mtime_ns
+    reads = []
+    real_read = costmod._step_times_from_disk
+    monkeypatch.setattr(costmod, "_step_times_from_disk", lambda *a: reads.append(a) or real_read(*a))
+    costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert reads == [] and (tmp_path / "ledger.json").stat().st_mtime_ns == before
 
 
 # ---------------------------------------------------------------------------

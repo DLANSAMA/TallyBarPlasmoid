@@ -483,31 +483,29 @@ def test_step_index_keys_ignore_list_position_and_never_collide_with_g_keys():
     assert _step_keys([_gen(1), _gen_no_step(), _gen_no_step()]) == ["1", "g1", "g2"]
 
 
-def test_generation_dated_from_its_first_step():
-    # Antigravity 2.23 sends no chatStartMetadata.createdAt; the date and hour come from the
-    # generation's first step instead of falling back to the harvest day.
+def test_timeless_generations_cost_no_step_lookup():
+    # Antigravity 2.23+ sends no chatStartMetadata.createdAt. The harvest leaves such a
+    # generation undated (the ledger dates it from its conversation DB) and never asks the
+    # server for the cascade's steps, whose reply can run past any read cap.
     cid = "ffff-steps"
-    when = dt.datetime(2026, 6, 5, 14, 30, tzinfo=dt.timezone.utc)
-    stamp = when.strftime("%Y-%m-%dT%H:%M:%S.123456789Z")
-    steps = {cid: [{"metadata": {}}, {"metadata": {"createdAt": "x"}},
-                   {"metadata": {"createdAt": stamp}}]}
-    fake_post = _make_rpc_stubs(summaries={cid: _LMT_A},
-                                metadata_payloads={cid: [_gen(2), _gen(9), _gen_no_step()]},
-                                steps=steps)
+    urls: list = []
+    stub = _make_rpc_stubs(summaries={cid: _LMT_A}, metadata_payloads={cid: [_gen(2), _gen_no_step()]})
+
+    def fake_post(url, *args):
+        urls.append(url)
+        return stub(url, *args)
+
     with patch.object(agmod, "find_antigravity_processes", return_value=_fake_processes()), \
          patch.object(agmod, "antigravity_ports", side_effect=_fake_ports), \
          patch.object(agmod, "_post_local_rpc", side_effect=fake_post):
         usage, _ = _harvest(3.0)
-    local = when.astimezone()
-    dated, out_of_range, stepless = usage[cid]
-    assert (dated["date"], dated["hour"]) == (local.date().isoformat(), local.hour)
-    assert (out_of_range["date"], out_of_range["hour"]) == ("", None)
-    assert (stepless["date"], stepless["hour"]) == ("", None)
+    assert [(r["stepKey"], r["date"], r["hour"]) for r in usage[cid]] == [("2", "", None), ("g1", "", None)]
+    assert urls and not any("GetCascadeTrajectorySteps" in u for u in urls)
 
 
 def test_undated_entries_take_the_real_date(monkeypatch, tmp_path):
-    # An entry stored without an hour was dated to the harvest day: its cascade is re-queried
-    # past an unchanged watermark, and the real date and hour replace the guess.
+    # An entry stored without an hour takes the real date and hour when a query of its
+    # (changed) cascade carries one. Hourless entries never bypass the watermark skip.
     monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", ())
     monkeypatch.setattr(costmod, "ANTIGRAVITY_CLI_USAGE_PATH", tmp_path / "cli.json")
@@ -532,7 +530,7 @@ def test_undated_entries_take_the_real_date(monkeypatch, tmp_path):
 
     monkeypatch.setattr(agmod, "collect_antigravity_rpc_usage", _fake_rpc)
     costmod.update_antigravity_token_ledger()
-    assert received == {dated: _LMT_A}
+    assert received == {undated: _LMT_A, dated: _LMT_A}
     entries = json.loads((tmp_path / "ledger.json").read_text())["entries"]
     assert (entries[f"{undated}#0"]["d"], entries[f"{undated}#0"]["h"]) == (yesterday, 22)
     assert (entries[f"{dated}#0"]["d"], entries[f"{dated}#0"]["h"]) == (today.isoformat(), 3)

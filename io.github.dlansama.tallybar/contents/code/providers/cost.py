@@ -76,9 +76,11 @@ COST_ARCHIVE_PATH = Path.home() / ".tallybar" / "cost_archive.json"
 ANTIGRAVITY_DISK_DATING_VERSION = 3
 # How long a ledger entry is kept; older ones are pruned, and DBs past it are not ingested.
 ANTIGRAVITY_RETENTION_DAYS = 35
-# Ledger-entry flag: a '#' entry the RPC had no time for, dated from its cascade's
-# lastModifiedTime. It leaves the re-query set until the cascade changes.
+# Ledger-entry field on a '#' entry neither the RPC nor its conversation DB had a time for,
+# dated from its cascade's lastModifiedTime: how many DB lookups it has had. At
+# _DISK_TIME_ATTEMPTS it is final and never looked up again.
 _DATED_FROM_MODIFIED = "dlm"
+_DISK_TIME_ATTEMPTS = 3
 # Ledger flag: stored '@' entries have been checked for marker-24 duplicates.
 _AT_MARKERS_CHECKED = "atMarkersChecked"
 # Ledger map {stem: failed reads} of stems still to be checked; a stem is given up (its '@'
@@ -203,6 +205,55 @@ def _db_signature(db_path: Path) -> str | None:
         return f"{sig}:{w.st_mtime_ns}:{w.st_size}"
     except OSError:
         return f"{sig}:0:0"
+
+
+def _as_attempts(value: Any) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _local_date_hour(secs: int) -> tuple[str, int] | None:
+    """Local ``(YYYY-MM-DD, hour)`` of a unix timestamp, ``None`` if it is no representable time."""
+    try:
+        when = dt.datetime.fromtimestamp(secs)
+    except (ValueError, OverflowError, OSError):
+        return None
+    return when.date().isoformat(), when.hour
+
+
+def _conversation_db_index() -> dict[str, Path]:
+    """``{conversation id: trajectory DB}`` across every scan root (first root wins)."""
+    index: dict[str, Path] = {}
+    for conv_dir in ANTIGRAVITY_CONVERSATION_DIRS:
+        try:
+            paths = list(conv_dir.glob("*.db"))
+        except OSError:
+            continue
+        for p in paths:
+            index.setdefault(p.stem, p)
+    return index
+
+
+def _step_times_from_disk(db_path: Path | None, idxs: list[int],
+                          deadline: float | None) -> tuple[dict[int, int | None], bool]:
+    """``{idx: createdAt seconds or None}`` for the ``steps`` rows of ``idxs`` the DB holds,
+    and whether every row was read (False after a sqlite error or the deadline). Rows are
+    fetched in chunks and the connection closed before any parsing (``_read_rows``)."""
+    out: dict[int, int | None] = {}
+    if db_path is None:
+        return out, True
+    for j in range(0, len(idxs), 400):
+        if deadline_passed(deadline):
+            return out, False
+        chunk = idxs[j:j + 400]
+        try:
+            rows = _read_rows(
+                db_path, f"SELECT idx, metadata FROM steps WHERE idx IN ({','.join('?' * len(chunk))})",
+                chunk)
+        except sqlite3.Error:
+            return out, False
+        for idx, blob in rows:
+            out[idx] = _pb_step_secs(bytes(blob)) if isinstance(blob, (bytes, bytearray)) else None
+    return out, True
 
 
 def _drop_marker24_at_entries(entries: dict[str, Any], deadline: float | None,
@@ -365,7 +416,81 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
         marks = ledger.get("rpcWatermarks")
         if not isinstance(marks, dict):
             marks = {}
-        # A generation can't postdate its cascade's lastModifiedTime: an undated '#' entry
+        # Per-stem highest step idx known to be past the retention horizon (pruned, or
+        # skipped for age): '#' keys and steps rows share the conversation's step indices.
+        # Additive ledger key, change-gated like dbScanned.
+        old_pruned_raw = ledger.get(_STEPS_PRUNED)
+        old_pruned: dict[str, int] = {
+            k: v for k, v in (old_pruned_raw.items() if isinstance(old_pruned_raw, dict) else ())
+            if isinstance(v, int)}
+        new_pruned: dict[str, int] = dict(old_pruned)
+        try:
+            harvest = collect_antigravity_rpc_usage(4.0, known=marks, deadline=deadline)
+        except Exception:
+            harvest = RpcHarvest(listing_complete=False)
+        rpc_usage, live_marks, learned_placeholders = harvest.usage, harvest.marks, harvest.learned_names
+
+        # A generation the RPC sends no time for is dated from its first step's row in the
+        # conversation DB: the '#' key IS that steps idx, and every usage-bearing steps row
+        # carries its createdAt (_pb_step_secs). Asked for new RPC generations and for stored
+        # hourless entries; a lookup that could not answer (row not written yet, read error,
+        # deadline) is retried on later refreshes up to _DISK_TIME_ATTEMPTS times, counted in
+        # the entry's "dlm"; one that answered "no time" (no DB, no timestamp, no step key)
+        # is final at once. Old generations of a resumed conversation thus keep their real
+        # day instead of the new lastModifiedTime.
+        # → tests/test_antigravity_ledger_integrity.py::test_resumed_conversation_keeps_old_generations_off_today
+        retry_keys = [k for k, e in entries.items()
+                      if "#" in k and e.get("h") is None
+                      and _as_attempts(e.get(_DATED_FROM_MODIFIED)) < _DISK_TIME_ATTEMPTS]
+        wanted: dict[str, set[int]] = {}
+        for cascade_id, records in rpc_usage.items():
+            for rec in records:
+                sk = str(rec.get("stepKey"))
+                if (rec.get("hour") is None and sk.isdigit() and f"{cascade_id}#{sk}" not in entries
+                        and int(sk) > new_pruned.get(cascade_id, -1)):
+                    wanted.setdefault(cascade_id, set()).add(int(sk))
+        for k in retry_keys:
+            stem, sk = k.rsplit("#", 1)
+            if sk.isdigit():
+                wanted.setdefault(stem, set()).add(int(sk))
+        disk_times: dict[str, tuple[dict[int, int | None], bool, bool]] = {}
+        db_index: dict[str, Path] | None = None
+        for stem, idxs in wanted.items():
+            if deadline_passed(deadline):
+                break
+            if db_index is None:
+                db_index = _conversation_db_index()
+            db_path = db_index.get(stem)
+            times, complete = _step_times_from_disk(db_path, sorted(idxs), deadline)
+            disk_times[stem] = (times, complete, db_path is not None)
+
+        def disk_time(stem: str, sk: str) -> tuple[str, int] | str:
+            """(local date, hour) from the DB, else "final" (no time can come) or "retry"."""
+            if not sk.isdigit():
+                return "final"
+            looked = disk_times.get(stem)
+            if looked is None:
+                return "retry"
+            times, complete, found_db = looked
+            if int(sk) in times:
+                secs = times[int(sk)]
+                return (_local_date_hour(secs) if secs else None) or "final"
+            return "retry" if (found_db or not complete) else "final"
+
+        for k in retry_keys:
+            e = entries.get(k)
+            if e is None or e.get("h") is not None:
+                continue
+            got = disk_time(*k.rsplit("#", 1))
+            if isinstance(got, tuple):
+                e["d"], e["h"] = got
+                e.pop(_DATED_FROM_MODIFIED, None)
+            else:
+                e[_DATED_FROM_MODIFIED] = (_DISK_TIME_ATTEMPTS if got == "final"
+                                           else _as_attempts(e.get(_DATED_FROM_MODIFIED)) + 1)
+            changed = True
+
+        # A generation can't postdate its cascade's lastModifiedTime: an hourless '#' entry
         # whose date is later than its cascade's watermark was stamped with a harvest day,
         # so it moves back to the watermark's local date.
         # → tests/test_antigravity_ledger_integrity.py::test_harvest_day_entries_move_to_their_watermark_day
@@ -376,27 +501,16 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
             if mark_date and e.get("d", "") > mark_date:
                 e["d"] = mark_date
                 changed = True
-        # An entry without "h" (and not already dated from its cascade's lastModifiedTime
-        # after a query that had no time for it) re-queries its cascade so it can take its
-        # generation's real date and hour.
-        # → tests/test_rpc_watermarks.py::test_undated_entries_take_the_real_date
-        hourless_stems = {k.rsplit("#", 1)[0] for k, e in entries.items()
-                          if "#" in k and e.get("h") is None and not e.get(_DATED_FROM_MODIFIED)}
-        known = {k: v for k, v in marks.items() if k not in hourless_stems}
-        try:
-            harvest = collect_antigravity_rpc_usage(4.0, known=known, deadline=deadline)
-        except Exception:
-            harvest = RpcHarvest(listing_complete=False)
-        rpc_usage, live_marks, learned_placeholders = harvest.usage, harvest.marks, harvest.learned_names
+
         rpc_covered: set[str] = set()
         for cascade_id, records in rpc_usage.items():
             rpc_covered.add(cascade_id)
-            # A generation with no time of its own (no createdAt, and the step lookup failed)
-            # is dated from the cascade's lastModifiedTime: its latest possible day, where the
-            # harvest day would pile months of backlog onto "Today".
+            # With neither an RPC nor a disk time, a generation is dated from the cascade's
+            # lastModifiedTime: its latest possible day.
             # → tests/test_antigravity_ledger_integrity.py::test_undated_generation_takes_its_cascade_day
             mark_date = _rpc_local_date(str(live_marks.get(cascade_id) or ""))
             mark_date = min(mark_date, today_iso) if mark_date else ""
+            floor = new_pruned.get(cascade_id, -1)
             # The RPC supersedes the disk scan for this conversation: drop its DB-sourced keys so
             # nothing double-counts. RPC counts per generation, disk per step, so never gate
             # this on a record-count comparison.
@@ -422,14 +536,6 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                             stored["d"] = rec["date"]
                         stored.pop(_DATED_FROM_MODIFIED, None)
                         changed = True
-                    elif (rec_hour is None and stored.get("h") is None
-                          and not stored.get(_DATED_FROM_MODIFIED) and mark_date):
-                        # Queried and still no time: settle on the cascade's day, and stop
-                        # re-querying the cascade until it changes.
-                        if stored.get("d", "") > mark_date:
-                            stored["d"] = mark_date
-                        stored[_DATED_FROM_MODIFIED] = 1
-                        changed = True
                     # Re-resolve the model when the mapping has improved: a placeholder unknown
                     # at capture time fell back to a family default. Heal it in place (keeps
                     # date/hour/tokens — only the pricing/breakdown name changes).
@@ -447,8 +553,16 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                         entries[key]["me"] = enum
                         changed = True
                     continue
+                sk = str(rec["stepKey"])
+                if sk.isdigit() and int(sk) <= floor:
+                    continue  # an older step than one already past the horizon
                 date = rec["date"] or mark_date or today_iso
+                on_disk = disk_time(cascade_id, sk) if rec_hour is None else None
+                if isinstance(on_disk, tuple):
+                    date, rec_hour = on_disk
                 if date < cutoff:
+                    if sk.isdigit():
+                        new_pruned[cascade_id] = max(new_pruned.get(cascade_id, -1), int(sk))
                     continue
                 entry = {
                     "d": date,
@@ -468,8 +582,8 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                     entry["me"] = enum
                 if rec_hour is not None:
                     entry["h"] = rec_hour
-                elif not rec["date"] and mark_date:
-                    entry[_DATED_FROM_MODIFIED] = 1
+                else:
+                    entry[_DATED_FROM_MODIFIED] = _DISK_TIME_ATTEMPTS if on_disk == "final" else 1
                 entries[key] = entry
                 changed = True
 
@@ -492,13 +606,6 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
         old_memo = ledger.get("dbScanned")
         old_memo = old_memo if isinstance(old_memo, dict) else {}
         seen_memo: dict[str, str] = {}
-        # Per-stem highest steps idx known to be past the retention horizon (pruned, or
-        # skipped for age). Additive ledger key, change-gated like dbScanned.
-        old_pruned_raw = ledger.get(_STEPS_PRUNED)
-        old_pruned: dict[str, int] = {
-            k: v for k, v in (old_pruned_raw.items() if isinstance(old_pruned_raw, dict) else ())
-            if isinstance(v, int)}
-        new_pruned: dict[str, int] = dict(old_pruned)
         visited_stems: set[str] = set()
         for conv_dir in ANTIGRAVITY_CONVERSATION_DIRS:
             if deadline_passed(deadline):
@@ -739,15 +846,18 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
             if e.get("d", "") < cutoff:
                 del entries[key]
                 changed = True
-                if ":" in key:
-                    stem, idx_str = key.rsplit(":", 1)
+                sep = ":" if ":" in key else "#" if "#" in key else None
+                if sep:
+                    stem, idx_str = key.rsplit(sep, 1)
                     if idx_str.isdigit():
                         new_pruned[stem] = max(new_pruned.get(stem, -1), int(idx_str))
-        # A complete scan drops the floors of DBs that are gone; a cut one keeps them all.
+        # A complete scan drops the floors of conversations that are gone; a cut one keeps
+        # them all.
         if scan_complete:
-            live_colon_stems = {k.rsplit(":", 1)[0] for k in entries if ":" in k}
+            keyed_stems = {k.rsplit(":" if ":" in k else "#", 1)[0]
+                           for k in entries if ":" in k or "#" in k}
             new_pruned = {k: v for k, v in new_pruned.items()
-                          if k in visited_stems or k in live_colon_stems}
+                          if k in visited_stems or k in keyed_stems or k in harvest.listed}
         if new_pruned != old_pruned:
             ledger[_STEPS_PRUNED] = new_pruned
             changed = True
