@@ -2502,6 +2502,37 @@ def test_fold_grok_bot_keeps_the_pool_bar_and_adds_the_extras():
     assert fold_grok_bot(_fold_grok(tier="SuperGrok Plus"), _fold_bot())["tier"] == "SuperGrok Plus"
 
 
+def test_fold_grok_bot_fresher_bar_replaces_a_stale_cli_reading():
+    from providers.grok import fold_grok_bot
+    old_log = _fold_grok(source="local-grok-build", stale=True, tier="SuperGrok",
+                         fetchedAt="2026-11-06T00:21:55.379Z", period={"end": "2026-11-10T11:37:05+00:00"},
+                         limits=[{"label": "Weekly", "percent": 31.0, "unit": "percent"}])
+    bot = _fold_bot(fetchedAt="2026-11-09T19:59:20-05:00", tier="Premium week",
+                    limits=[{"label": "Weekly", "percent": 0.74, "unit": "percent"},
+                            {"label": "On-demand", "percent": 10.0, "unit": "usd", "used": 5.0, "limit": 50.0}])
+    out = fold_grok_bot(old_log, bot)
+    assert [(lim["label"], lim["percent"]) for lim in out["limits"]] == [("Weekly", 0.74), ("On-demand", 10.0)]
+    assert (out["source"], out["fetchedAt"], out["tier"]) == ("grok-bot", "2026-11-09T19:59:20-05:00", "Premium week")
+    assert "stale" not in out and out["period"] == old_log["period"] and out["label"] == "Grok"
+    # A carried Grok Bot reading still wins when it is the newer one, and says it is cached.
+    carried = fold_grok_bot(old_log, {**bot, "stale": True, "staleAsOf": "2026-11-09T19:59:20-05:00"})
+    assert carried["limits"][0]["percent"] == 0.74 and carried["stale"] is True
+
+
+def test_fold_grok_bot_never_replaces_a_current_or_newer_cli_reading():
+    from providers.grok import fold_grok_bot
+    bot = _fold_bot(fetchedAt="2026-11-07T12:01:00+00:00")
+    live = _fold_grok()                                           # not stale: the billing endpoint's
+    assert fold_grok_bot(live, bot)["limits"][0]["percent"] == 53.0
+    newer_log = _fold_grok(stale=True, fetchedAt="2026-11-07T13:00:00+00:00")
+    out = fold_grok_bot(newer_log, bot)                           # stale, but newer than Grok Bot's
+    assert out["limits"][0]["percent"] == 53.0 and out["stale"] is True and out["source"] == "grok-billing-api"
+    undated = fold_grok_bot(_fold_grok(stale=True), {**bot, "fetchedAt": None})
+    assert undated["limits"][0]["percent"] == 53.0                # no time on Grok Bot's: not newer
+    no_bar = _fold_bot(fetchedAt="2026-11-09T12:00:00+00:00", limits=[])
+    assert fold_grok_bot(_fold_grok(stale=True), no_bar)["limits"][0]["percent"] == 53.0
+
+
 def test_fold_grok_bot_failure_never_touches_a_grok_reading():
     from providers.grok import fold_grok_bot
     grok = _fold_grok()

@@ -450,14 +450,25 @@ def _roll_ended_period(result: dict[str, Any], period: dict[str, Any], now: dt.d
 _GROK_BOT_REMEDIES = frozenset(("wallet-locked", "wallet-state-unknown", "unauthorized", "api-error", "timeout"))
 
 
+def _is_newer(candidate: Any, than: Any) -> bool:
+    """True when ISO time ``candidate`` is later than ``than``; an unreadable ``than`` is older
+    than any readable time, an unreadable ``candidate`` is never newer."""
+    a, b = _parse_period_ts(candidate), _parse_period_ts(than)
+    return a is not None and (b is None or a > b)
+
+
 def fold_grok_bot(grok: dict[str, Any], bot: Any) -> dict[str, Any]:
     """The Grok tab with Grok Bot's reading folded in: all Grok products draw on ONE limit.
 
-    The pool bar stays the billing endpoint's (``grok``). Grok Bot adds its on-demand row,
-    its prepaid line and a plan name when ``grok`` has none, and only ever as extra: a failed
-    Grok Bot read never touches a Grok reading. With no Grok CLI reading at all, Grok Bot's
-    own weekly bar stands in for it, and a failure that has a remedy (unlock KWallet, sign in
-    again) is shown. → tests/test_providers.py::test_fold_grok_bot_*"""
+    The pool bar stays the billing endpoint's (``grok``) while that reading is current.
+    Grok Bot adds its on-demand row, its prepaid line and a plan name when ``grok`` has none,
+    and only ever as extra: a failed Grok Bot read never touches a Grok reading. When the
+    Grok reading is ``stale`` (the CLI's sign-in lapsed, so only an old log line is left) and
+    Grok Bot's is newer, Grok Bot's weekly bar and plan name replace it: an old number for
+    the pool is further off than the fraction of a point the two services differ by. With no
+    Grok CLI reading at all, Grok Bot's own weekly bar stands in for it, and a failure that
+    has a remedy (unlock KWallet, sign in again) is shown.
+    → tests/test_providers.py::test_fold_grok_bot_*"""
     if not isinstance(bot, dict):
         return grok
     bot_ok = bot.get("status") == "ok"
@@ -466,11 +477,24 @@ def fold_grok_bot(grok: dict[str, Any], bot: Any) -> dict[str, Any]:
     if grok.get("status") == "ok" and grok.get("limits"):
         if not bot_ok:
             return grok
-        out["limits"] = list(grok["limits"]) + [lim for lim in bot_limits if lim.get("label") != "Weekly"]
+        extras = [lim for lim in bot_limits if lim.get("label") != "Weekly"]
+        bot_weekly = [lim for lim in bot_limits if lim.get("label") == "Weekly"]
+        if grok.get("stale") and bot_weekly and _is_newer(bot.get("fetchedAt"), grok.get("fetchedAt")):
+            out["limits"] = bot_weekly + [lim for lim in grok["limits"] if lim.get("label") != "Weekly"] + extras
+            out.update(source=bot.get("source") or out.get("source"), fetchedAt=bot["fetchedAt"],
+                       message="Grok usage")
+            for key in ("stale", "staleAsOf"):
+                out.pop(key, None)
+                if bot.get(key):
+                    out[key] = bot[key]
+            if bot.get("tier"):
+                out["tier"] = bot["tier"]
+        else:
+            out["limits"] = list(grok["limits"]) + extras
+            if not out.get("tier") and bot.get("tier"):
+                out["tier"] = bot["tier"]
         if bot.get("extraUsageText"):
             out["extraUsageText"] = bot["extraUsageText"]
-        if not out.get("tier") and bot.get("tier"):
-            out["tier"] = bot["tier"]
         return out
     if bot_ok and bot_limits:
         out.update(status="ok", message="Grok usage", source=bot.get("source") or out.get("source"),
