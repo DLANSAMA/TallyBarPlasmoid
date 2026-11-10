@@ -9,6 +9,7 @@ import json
 import os
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -357,6 +358,21 @@ def test_a_lookup_that_never_answers_stops_after_its_attempts(monkeypatch, tmp_p
     monkeypatch.setattr(costmod, "_step_times_from_disk", lambda *a: reads.append(a) or real_read(*a))
     costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
     assert reads == [] and (tmp_path / "ledger.json").stat().st_mtime_ns == before
+
+
+def test_a_refresh_cut_before_the_disk_lookup_uses_up_no_attempt(monkeypatch, tmp_path):
+    conv = tmp_path / "antigravity" / "conversations"
+    conv.mkdir(parents=True)
+    _make_db(conv / "cas.db", steps=[])
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", (conv,))
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
+    _stub_language_server(monkeypatch, {"cas": _iso(_FIXED_NOW)}, [_undated_gen(1)], [])
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert res["entries"]["cas#1"]["dlm"] == 1
+    for _ in range(4):
+        costmod.update_antigravity_token_ledger(now=_FIXED_NOW, deadline=time.time() - 1)
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert res["entries"]["cas#1"]["dlm"] == 2
 
 
 # ---------------------------------------------------------------------------

@@ -449,9 +449,11 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
         # hourless entries; a lookup that could not answer (row not written yet, read error,
         # deadline) is retried on later refreshes up to _DISK_TIME_ATTEMPTS times, counted in
         # the entry's "dlm"; one that answered "no time" (no DB, no timestamp, no step key)
-        # is final at once. Old generations of a resumed conversation thus keep their real
-        # day instead of the new lastModifiedTime.
+        # is final at once; a refresh cut before the lookup started counts nothing. Old
+        # generations of a resumed conversation thus keep their real day instead of the new
+        # lastModifiedTime.
         # → tests/test_antigravity_ledger_integrity.py::test_resumed_conversation_keeps_old_generations_off_today
+        # → tests/test_antigravity_ledger_integrity.py::test_a_refresh_cut_before_the_disk_lookup_uses_up_no_attempt
         retry_keys = [k for k, e in entries.items()
                       if "#" in k and e.get("h") is None
                       and _as_attempts(e.get(_DATED_FROM_MODIFIED)) < _DISK_TIME_ATTEMPTS]
@@ -478,12 +480,13 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
             disk_times[stem] = (times, complete, db_path is not None)
 
         def disk_time(stem: str, sk: str) -> tuple[str, int] | str:
-            """(local date, hour) from the DB, else "final" (no time can come) or "retry"."""
+            """(local date, hour) from the DB, else "final" (no time can come), "retry" (the
+            lookup could not answer) or "unasked" (the deadline came before the lookup)."""
             if not sk.isdigit():
                 return "final"
             looked = disk_times.get(stem)
             if looked is None:
-                return "retry"
+                return "unasked"
             times, complete, found_db = looked
             if int(sk) in times:
                 secs = times[int(sk)]
@@ -495,6 +498,8 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
             if e is None or e.get("h") is not None:
                 continue
             got = disk_time(*k.rsplit("#", 1))
+            if got == "unasked":
+                continue  # not an attempt: a loaded machine must not use the retries up
             if isinstance(got, tuple):
                 e["d"], e["h"] = got
                 e.pop(_DATED_FROM_MODIFIED, None)
@@ -595,7 +600,7 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                     entry["me"] = enum
                 if rec_hour is not None:
                     entry["h"] = rec_hour
-                else:
+                elif on_disk != "unasked":
                     entry[_DATED_FROM_MODIFIED] = _DISK_TIME_ATTEMPTS if on_disk == "final" else 1
                 entries[key] = entry
                 changed = True
