@@ -50,14 +50,16 @@ Notable changes to TallyBar. Format follows
 
 ### Fixed
 - Antigravity counted old conversations as today's usage when their activity carried no
-  timestamp. They now take their real day, and the existing history is corrected on the
-  first refresh.
+  timestamp, or when an old conversation was reopened. They now take their real day, and
+  the existing history is corrected on the first refresh.
 - Antigravity counted some desktop conversations twice.
 - Antigravity billed Claude Opus 5.5 and Sonnet 5.5 at the Opus 5 and Sonnet 5 rates.
 - One unreadable Antigravity timestamp no longer stops the cost section for every
   provider, and one provider's failing cost summary no longer drops the others.
 - An Antigravity CLI conversation spanning several days keeps its days when the session
   ends, and usage older than the history window is not counted again as today's.
+- A running Antigravity CLI session that TallyBar cannot read no longer holds back the
+  last usage of every finished CLI session.
 - Antigravity limit alerts no longer repeat on every refresh, and its weekly limits can
   raise the 80% weekly alert.
 - Grok: a day that had partly rotated out of the CLI's log showed only what was left in
