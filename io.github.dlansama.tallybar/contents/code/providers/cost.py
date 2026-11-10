@@ -224,6 +224,22 @@ def _as_attempts(value: Any) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
+def _step_idx(text: str) -> int | None:
+    """A ledger key's step index, ``None`` unless it is plain digits SQLite can bind
+    (``str.isdigit`` alone accepts '²', and a longer number overflows an INTEGER)."""
+    return int(text) if text.isascii() and text.isdigit() and len(text) <= 18 else None
+
+
+def _floor_slot(stem: str, step_key: str) -> tuple[str, int] | None:
+    """``(stepsPruned key, index)`` for a '#' key's step part: the stem for a step idx,
+    ``<stem>#g`` for a ``g<n>`` generation index (a generation the RPC gave no step for)."""
+    idx = _step_idx(step_key)
+    if idx is not None:
+        return stem, idx
+    gen = _step_idx(step_key[1:]) if step_key.startswith("g") else None
+    return (f"{stem}#g", gen) if gen is not None else None
+
+
 def _local_date_hour(secs: int) -> tuple[str, int] | None:
     """Local ``(YYYY-MM-DD, hour)`` of a unix timestamp, ``None`` if it is no representable time."""
     try:
@@ -247,26 +263,29 @@ def _conversation_db_index() -> dict[str, Path]:
 
 
 def _step_times_from_disk(db_path: Path | None, idxs: list[int],
-                          deadline: float | None) -> tuple[dict[int, int | None], bool]:
+                          deadline: float | None) -> tuple[dict[int, int | None], set[int]]:
     """``{idx: createdAt seconds or None}`` for the ``steps`` rows of ``idxs`` the DB holds,
-    and whether every row was read (False after a sqlite error or the deadline). Rows are
-    fetched in chunks and the connection closed before any parsing (``_read_rows``)."""
+    and the idx values a read was attempted for (it stops at a sqlite error or the deadline,
+    leaving the rest unasked). Rows are fetched in chunks and the connection closed before
+    any parsing (``_read_rows``)."""
     out: dict[int, int | None] = {}
+    asked: set[int] = set()
     if db_path is None:
-        return out, True
+        return out, asked
     for j in range(0, len(idxs), 400):
         if deadline_passed(deadline):
-            return out, False
+            break
         chunk = idxs[j:j + 400]
+        asked.update(chunk)
         try:
             rows = _read_rows(
                 db_path, f"SELECT idx, metadata FROM steps WHERE idx IN ({','.join('?' * len(chunk))})",
                 chunk)
         except sqlite3.Error:
-            return out, False
+            break
         for idx, blob in rows:
             out[idx] = _pb_step_secs(bytes(blob)) if isinstance(blob, (bytes, bytearray)) else None
-    return out, True
+    return out, asked
 
 
 def _drop_marker24_at_entries(entries: dict[str, Any], deadline: float | None,
@@ -446,14 +465,17 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
         # A generation the RPC sends no time for is dated from its first step's row in the
         # conversation DB: the '#' key IS that steps idx, and every usage-bearing steps row
         # carries its createdAt (_pb_step_secs). Asked for new RPC generations and for stored
-        # hourless entries; a lookup that could not answer (row not written yet, read error,
-        # deadline) is retried on later refreshes up to _DISK_TIME_ATTEMPTS times, counted in
-        # the entry's "dlm"; one that answered "no time" (no DB, no timestamp, no step key)
-        # is final at once; a refresh cut before the lookup started counts nothing. Old
-        # generations of a resumed conversation thus keep their real day instead of the new
-        # lastModifiedTime.
+        # hourless entries; a lookup that could not answer (row not written yet, read error)
+        # is retried on later refreshes up to _DISK_TIME_ATTEMPTS times, counted in the
+        # entry's "dlm"; one that answered "no time" (no DB, no timestamp, no step key) is
+        # final at once. A row the deadline left unread counts nothing, and a new generation
+        # in that state is not stored and its cascade not watermarked, so the next refresh
+        # asks again rather than dating it today. Old generations of a resumed conversation
+        # thus keep their real day instead of the new lastModifiedTime.
         # → tests/test_antigravity_ledger_integrity.py::test_resumed_conversation_keeps_old_generations_off_today
         # → tests/test_antigravity_ledger_integrity.py::test_a_refresh_cut_before_the_disk_lookup_uses_up_no_attempt
+        # → tests/test_antigravity_ledger_integrity.py::test_rows_the_deadline_left_unread_use_up_no_attempt
+        # → tests/test_antigravity_ledger_integrity.py::test_new_generation_waits_for_its_disk_lookup
         retry_keys = [k for k, e in entries.items()
                       if "#" in k and e.get("h") is None
                       and _as_attempts(e.get(_DATED_FROM_MODIFIED)) < _DISK_TIME_ATTEMPTS]
@@ -461,14 +483,17 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
         for cascade_id, records in rpc_usage.items():
             for rec in records:
                 sk = str(rec.get("stepKey"))
-                if (rec.get("hour") is None and sk.isdigit() and f"{cascade_id}#{sk}" not in entries
-                        and int(sk) > new_pruned.get(cascade_id, -1)):
-                    wanted.setdefault(cascade_id, set()).add(int(sk))
+                step = _step_idx(sk)
+                if (rec.get("hour") is None and step is not None
+                        and f"{cascade_id}#{sk}" not in entries
+                        and step > new_pruned.get(cascade_id, -1)):
+                    wanted.setdefault(cascade_id, set()).add(step)
         for k in retry_keys:
             stem, sk = k.rsplit("#", 1)
-            if sk.isdigit():
-                wanted.setdefault(stem, set()).add(int(sk))
-        disk_times: dict[str, tuple[dict[int, int | None], bool, bool]] = {}
+            step = _step_idx(sk)
+            if step is not None:
+                wanted.setdefault(stem, set()).add(step)
+        disk_times: dict[str, tuple[dict[int, int | None], set[int], bool]] = {}
         db_index: dict[str, Path] | None = None
         for stem, idxs in wanted.items():
             if deadline_passed(deadline):
@@ -476,22 +501,25 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
             if db_index is None:
                 db_index = _conversation_db_index()
             db_path = db_index.get(stem)
-            times, complete = _step_times_from_disk(db_path, sorted(idxs), deadline)
-            disk_times[stem] = (times, complete, db_path is not None)
+            times, asked = _step_times_from_disk(db_path, sorted(idxs), deadline)
+            disk_times[stem] = (times, asked, db_path is not None)
 
         def disk_time(stem: str, sk: str) -> tuple[str, int] | str:
             """(local date, hour) from the DB, else "final" (no time can come), "retry" (the
-            lookup could not answer) or "unasked" (the deadline came before the lookup)."""
-            if not sk.isdigit():
+            lookup could not answer) or "unasked" (the deadline came before the row's read)."""
+            step = _step_idx(sk)
+            if step is None:
                 return "final"
             looked = disk_times.get(stem)
             if looked is None:
                 return "unasked"
-            times, complete, found_db = looked
-            if int(sk) in times:
-                secs = times[int(sk)]
+            times, asked, found_db = looked
+            if not found_db:
+                return "final"
+            if step in times:
+                secs = times[step]
                 return (_local_date_hour(secs) if secs else None) or "final"
-            return "retry" if (found_db or not complete) else "final"
+            return "retry" if step in asked else "unasked"
 
         for k in retry_keys:
             e = entries.get(k)
@@ -521,6 +549,7 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                 changed = True
 
         rpc_covered: set[str] = set()
+        deferred: set[str] = set()
         for cascade_id, records in rpc_usage.items():
             rpc_covered.add(cascade_id)
             # With neither an RPC nor a disk time, a generation is dated from the cascade's
@@ -528,7 +557,6 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
             # → tests/test_antigravity_ledger_integrity.py::test_undated_generation_takes_its_cascade_day
             mark_date = _rpc_local_date(str(live_marks.get(cascade_id) or ""))
             mark_date = min(mark_date, today_iso) if mark_date else ""
-            floor = new_pruned.get(cascade_id, -1)
             # The RPC supersedes the disk scan for this conversation: drop its DB-sourced keys so
             # nothing double-counts. RPC counts per generation, disk per step, so never gate
             # this on a record-count comparison.
@@ -572,15 +600,19 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                         changed = True
                     continue
                 sk = str(rec["stepKey"])
-                if sk.isdigit() and int(sk) <= floor:
-                    continue  # an older step than one already past the horizon
+                slot = _floor_slot(cascade_id, sk)
+                if slot and slot[1] <= new_pruned.get(slot[0], -1):
+                    continue  # no newer than one already past the horizon
                 date = rec["date"] or mark_date or today_iso
                 on_disk = disk_time(cascade_id, sk) if rec_hour is None else None
+                if on_disk == "unasked":
+                    deferred.add(cascade_id)
+                    continue
                 if isinstance(on_disk, tuple):
                     date, rec_hour = on_disk
                 if date < cutoff:
-                    if sk.isdigit():
-                        new_pruned[cascade_id] = max(new_pruned.get(cascade_id, -1), int(sk))
+                    if slot:
+                        new_pruned[slot[0]] = max(new_pruned.get(slot[0], -1), slot[1])
                     continue
                 entry = {
                     "d": date,
@@ -600,7 +632,7 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                     entry["me"] = enum
                 if rec_hour is not None:
                     entry["h"] = rec_hour
-                elif on_disk != "unasked":
+                else:
                     entry[_DATED_FROM_MODIFIED] = _DISK_TIME_ATTEMPTS if on_disk == "final" else 1
                 entries[key] = entry
                 changed = True
@@ -871,15 +903,16 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
                 sep = ":" if ":" in key else "#" if "#" in key else None
                 if sep:
                     stem, idx_str = key.rsplit(sep, 1)
-                    if idx_str.isdigit():
-                        new_pruned[stem] = max(new_pruned.get(stem, -1), int(idx_str))
+                    slot = _floor_slot(stem, idx_str)
+                    if slot and (sep == "#" or slot[0] == stem):
+                        new_pruned[slot[0]] = max(new_pruned.get(slot[0], -1), slot[1])
         # A complete scan drops the floors of conversations that are gone; a cut one keeps
         # them all.
         if scan_complete:
             keyed_stems = {k.rsplit(":" if ":" in k else "#", 1)[0]
                            for k in entries if ":" in k or "#" in k}
-            new_pruned = {k: v for k, v in new_pruned.items()
-                          if k in visited_stems or k in keyed_stems or k in harvest.listed}
+            alive = visited_stems | keyed_stems | harvest.listed
+            new_pruned = {k: v for k, v in new_pruned.items() if k.removesuffix("#g") in alive}
         if new_pruned != old_pruned:
             ledger[_STEPS_PRUNED] = new_pruned
             changed = True
@@ -889,7 +922,7 @@ def update_antigravity_token_ledger(now: dt.datetime | None = None, deadline: fl
         # load-bearing (tests/test_rpc_watermarks.py::test_no_write_churn_when_marks_identical).
         stems_with_entries = {k.rsplit("#", 1)[0] for k in entries if "#" in k}
         new_marks = {k: v for k, v in marks.items() if k in stems_with_entries}
-        new_marks.update(live_marks)
+        new_marks.update((k, v) for k, v in live_marks.items() if k not in deferred)
         if new_marks != marks:
             ledger["rpcWatermarks"] = new_marks
             changed = True

@@ -375,6 +375,79 @@ def test_a_refresh_cut_before_the_disk_lookup_uses_up_no_attempt(monkeypatch, tm
     assert res["entries"]["cas#1"]["dlm"] == 2
 
 
+def test_rows_the_deadline_left_unread_use_up_no_attempt(monkeypatch, tmp_path):
+    conv = tmp_path / "antigravity" / "conversations"
+    conv.mkdir(parents=True)
+    _make_db(conv / "cas.db", steps=[])
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", (conv,))
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
+    monkeypatch.setattr(agmod, "find_antigravity_processes", lambda: [])
+    _write_ledger(tmp_path, entries={
+        f"cas#{i}": {"d": "2026-06-08", "u": 1, "c": 0, "o": 0, "me": 1132} for i in range(500)})
+    reads: list = []
+    real_read = costmod._read_rows
+
+    def read_then_expire(*a):
+        reads.append(a)
+        return real_read(*a)
+
+    monkeypatch.setattr(costmod, "_read_rows", read_then_expire)
+    real_passed = costmod.deadline_passed
+    monkeypatch.setattr(costmod, "deadline_passed",
+                        lambda deadline, **kw: bool(reads) or real_passed(deadline, **kw))
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    counted = [e.get("dlm") for k, e in sorted(res["entries"].items(), key=lambda kv: int(kv[0][4:]))]
+    assert counted == [1] * 400 + [None] * 100
+
+
+def test_new_generation_waits_for_its_disk_lookup(monkeypatch, tmp_path):
+    conv = tmp_path / "antigravity" / "conversations"
+    conv.mkdir(parents=True)
+    _make_db(conv / "cas.db", steps=[(1, _step_blob(_noon("2026-06-01"), u=1000))])
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", (conv,))
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
+    _stub_language_server(monkeypatch, {"cas": _iso(_FIXED_NOW)}, [_undated_gen(1)], [])
+    real_passed = costmod.deadline_passed
+    monkeypatch.setattr(costmod, "deadline_passed", lambda deadline, **kw: True)
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert res["entries"] == {} and "cas" not in res.get("rpcWatermarks", {})
+    monkeypatch.setattr(costmod, "deadline_passed", real_passed)
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert (res["entries"]["cas#1"]["d"], res["rpcWatermarks"]["cas"]) == ("2026-06-01", _iso(_FIXED_NOW))
+
+
+def test_generation_without_a_step_stays_pruned_when_its_conversation_resumes(monkeypatch, tmp_path):
+    conv = tmp_path / "antigravity" / "conversations"
+    conv.mkdir(parents=True)
+    _make_db(conv / "cas.db", steps=[])
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", (conv,))
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
+    monkeypatch.setattr(agmod, "find_antigravity_processes", lambda: [])
+    _write_ledger(tmp_path, entries={
+        "cas#g0": {"d": "2026-04-20", "u": 900, "c": 0, "o": 0, "me": 1132, "dlm": 3}})
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert res["entries"] == {} and res["stepsPruned"] == {"cas#g": 0}
+    stepless = [{**_undated_gen(0, tokens=n), "stepIndices": []} for n in (900, 70)]
+    _stub_language_server(monkeypatch, {"cas": _iso(_FIXED_NOW)}, stepless, [])
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert {k: e["u"] for k, e in res["entries"].items()} == {"cas#g1": 70}
+
+
+@pytest.mark.parametrize("step", ["²", "9" * 30, "9" * 5000], ids=["superscript", "30-digits", "5000-digits"])
+def test_a_step_key_sqlite_cannot_bind_does_not_stop_the_update(monkeypatch, tmp_path, step):
+    conv = tmp_path / "antigravity" / "conversations"
+    conv.mkdir(parents=True)
+    _make_db(conv / "cas.db", steps=[])
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_CONVERSATION_DIRS", (conv,))
+    monkeypatch.setattr(costmod, "ANTIGRAVITY_LEDGER_PATH", tmp_path / "ledger.json")
+    monkeypatch.setattr(agmod, "find_antigravity_processes", lambda: [])
+    _write_ledger(tmp_path, entries={
+        f"cas#{step}": {"d": "2026-06-08", "u": 5, "c": 0, "o": 0, "me": 1132},
+        f"cas#{step}x": {"d": "2026-04-20", "u": 5, "c": 0, "o": 0, "me": 1132}})
+    res = costmod.update_antigravity_token_ledger(now=_FIXED_NOW)
+    assert res["entries"][f"cas#{step}"]["dlm"] == 3
+
+
 # ---------------------------------------------------------------------------
 # Marker-24 gen_metadata records duplicate the steps rows
 # ---------------------------------------------------------------------------
