@@ -53,7 +53,7 @@ PRICING_CACHE_VERSION = 3
 _RELEVANT_PROVIDERS = frozenset(("anthropic", "openai", "gemini", "xai"))
 # LiteLLM lists the OpenAI codex, codex-mini and pro models (and some xAI ones) as mode
 # "responses", not "chat"; they bill local-log usage like any chat model.
-# → tests/test_pricing_data.py::test_litellm_ingests_responses_mode_models
+# → tests/test_pricing_lookup.py::test_litellm_ingests_responses_mode_models
 _BILLED_MODES = frozenset(("chat", "responses"))
 
 
@@ -316,7 +316,7 @@ _last_fetch_time: float = 0.0
 # catalog row as installed (the intro rate of a scheduled model) and _match_memo the key it
 # resolved to and whether that is the same model; the usage date picks intro or list rate
 # AFTER the lookup, so the two sides of a switch never share a memo entry.
-# → tests/test_pricing_data.py::test_usage_date_picks_the_intro_or_list_rate
+# → tests/test_pricing_lookup.py::test_usage_date_picks_the_intro_or_list_rate
 _resolve_memo: dict[str, dict[str, float]] = {}
 _match_memo: dict[str, tuple[str, bool]] = {}
 # Bumped (under _pricing_lock) every time _active_pricing is (re)built. get_pricing scans

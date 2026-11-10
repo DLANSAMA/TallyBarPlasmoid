@@ -65,7 +65,7 @@ def has_catalog_price(model: str | None) -> bool:
     fallback): its exact key or a pinned-date / ``[1m]`` / ``-latest`` / ``-preview``
     variant of it. False means usage_cost_usd bills it at a shorter sibling's rate
     (``claude-fable-5-2`` off ``claude-fable-5``) or its family's default instead.
-    → tests/test_pricing_data.py::test_a_sibling_match_is_not_a_catalog_price"""
+    → tests/test_pricing_lookup.py::test_a_sibling_match_is_not_a_catalog_price"""
     return bool(model_pricing(model)) and _resolve_pricing(model).same_model
 
 
