@@ -112,14 +112,30 @@ def retry_after_seconds(value: Any) -> float | None:
     return max(0.0, (when - dt.datetime.now(dt.timezone.utc)).total_seconds())
 
 
-def http_json(url: str, jar: CookieJar, timeout: float, method: str = "GET", body: bytes | None = None) -> tuple[int, Any]:
+def http_json(
+    url: str,
+    jar: CookieJar,
+    timeout: float,
+    method: str = "GET",
+    body: bytes | None = None,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, Any]:
     _require_https(url)
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar), _HttpsOnlyRedirects())
-    headers = {
+    # A bearer-carrying request must not follow redirects (see _RefuseRedirects); cookie-only
+    # callers still do, to https only.
+    # → tests/test_http_helpers.py::test_http_json_refuses_redirects_only_for_bearer_requests
+    bearer = any(k.lower() == "authorization" for k in (headers or {}))
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(jar),
+        _RefuseRedirects() if bearer else _HttpsOnlyRedirects(),
+    )
+    request_headers = {
         "Accept": "application/json, text/plain, */*",
         "User-Agent": "Mozilla/5.0 TallyBar Plasma/0.1",
     }
-    request = urllib.request.Request(url, data=body, method=method, headers=headers)
+    if headers:
+        request_headers.update(headers)
+    request = urllib.request.Request(url, data=body, method=method, headers=request_headers)
     try:
         with opener.open(request, timeout=timeout) as response:
             raw = response.read(MAX_JSON_BODY_BYTES)
@@ -190,8 +206,9 @@ async def http_json_async(
     timeout: float,
     method: str = "GET",
     body: bytes | None = None,
+    headers: dict[str, str] | None = None,
 ) -> tuple[int, Any]:
-    return await to_daemon_thread(http_json, url, jar, timeout, method, body)
+    return await to_daemon_thread(http_json, url, jar, timeout, method, body, headers)
 
 
 async def run_threaded_provider(

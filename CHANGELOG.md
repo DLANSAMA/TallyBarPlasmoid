@@ -7,6 +7,14 @@ Notable changes to TallyBar. Format follows
 ## [Unreleased]
 
 ### Added
+- The Claude tab can read its limits with Claude Code's own sign-in when the browser
+  route has nothing: no claude.ai cookie, a locked KWallet, a rejected session, or
+  claude.ai rate-limiting. The browser route is still tried first, and the Claude Code
+  statusLine capture remains the last resort. TallyBar only uses the access token
+  Claude Code keeps in `~/.claude/.credentials.json`: it never renews it, never reads
+  the refresh token and never writes the file. When that token has lapsed (about eight
+  hours after Claude Code last ran) and there is no browser cookie either, the tab asks
+  you to open Claude Code to renew it.
 - Claude cost counts Claude desktop's Cowork and agent sessions, and transcripts kept
   under `$CLAUDE_CONFIG_DIR` or `~/.config/claude`. A transcript found in two places is
   counted once.
@@ -26,6 +34,16 @@ Notable changes to TallyBar. Format follows
   show.
 
 ### Changed
+- Grok and Grok Bot are one tab. All Grok products share a single weekly limit, so
+  two tabs could show two different numbers for it. The Grok tab shows xAI's weekly
+  bar with the week's split by product under it (for example "Grok Bot 53% · Grok
+  Build 8%"), read from the same billing reply as the bar. Grok Bot's plan name,
+  on-demand spend and prepaid line join the tab when the Grok Bot app is signed in,
+  and its weekly bar stands in when the `grok` CLI isn't set up. A saved Grok Bot
+  tab setting keeps the Grok tab on.
+- The Grok tab's cost figures say they cover Grok Build only: the "This week" line
+  under the weekly bar and the cost card's heading. Grok Bot's share of the limit
+  has no token history, so those figures leave it out.
 - The cost scan is several times faster and writes far less. The Claude transcript
   cache used to be rewritten in full (about 150 MB with a long history) whenever a
   session was open; a refresh now writes about a kilobyte. The existing cache is

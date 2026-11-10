@@ -301,11 +301,13 @@ def test_cold_start_placeholder_status_reads_as_fetching(tmp_path):
 
 def test_tabs_mark_every_bad_status_but_honour_mute(tmp_path):
     snap = _snapshot(gemini={"status": "api-empty"}, antigravity={"status": "missing-cookies"},
-                     grokbot={"status": "partial"}, grok={"status": "not-running"}, claude={"status": "missing-cli"})
+                     codex={"status": "partial"}, grok={"status": "not-running"})
     snap["config"]["mutedProviders"] = ["grok"]
     flags = _probe(tmp_path, snap, [f"item.tabStatusBad('{k}')" for k in
-                                    ("gemini", "antigravity", "grokbot", "grok", "claude", "codex")])
-    assert flags == [True, True, True, False, True, False]
+                                    ("gemini", "antigravity", "codex", "grok", "claude")])
+    assert flags == [True, True, True, False, False]
+    snap = _snapshot(claude={"status": "missing-cli"})
+    assert _probe(tmp_path, snap, ["item.tabStatusBad('claude')"]) == [True]
 
 
 def test_status_message_and_action_show_beside_cost_data(tmp_path):

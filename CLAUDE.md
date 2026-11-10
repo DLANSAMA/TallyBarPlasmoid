@@ -6,7 +6,7 @@ changed and why belongs in commit messages and [`CHANGELOG.md`](CHANGELOG.md), n
 
 ## What this is
 
-TallyBar is a **KDE Plasma 6 widget (Plasmoid)** monitoring AI session usage (Codex/OpenAI, Gemini, Claude, Antigravity, Grok, Grok Bot). Two halves:
+TallyBar is a **KDE Plasma 6 widget (Plasmoid)** monitoring AI session usage (Codex/OpenAI, Gemini, Claude, Antigravity, Grok; Grok Bot is part of the Grok tab). Two halves:
 - **QML frontend** (`io.github.dlansama.tallybar/contents/ui/`) — `main.qml` (state), `CompactRepresentation.qml`, `FullRepresentation.qml`, `CostPopout.qml`, `SettingsPopout.qml`, modular sections in `ui/components/` (`UsageLimitCard.qml`, `ProviderTabBar.qml`, `CostSection.qml`, `ActionFooter.qml`, etc.) and helpers in `ui/lib/` (`format.js`, `ui_helpers.js`).
 - **Python backend** (`io.github.dlansama.tallybar/contents/code/`) — one-shot CLI, prints JSON, exits.
 
@@ -47,9 +47,9 @@ Runtime: stdlib-only (no third-party deps). `.venv` is for pytest only. Release:
 - `providers/gemini.py` — Gemini scraping + Google One AI credits.
 - `providers/antigravity.py` — local language-server + Cloud Code API; `choose_antigravity_result`, `apply_google_one_credits`.
 - `providers/codex.py` — `codex` CLI JSON-RPC + OpenAI cookie fallback.
-- `providers/claude.py` — Claude browser-API path.
-- `providers/grok.py` — Grok Build weekly credit bar, read live from xAI's billing endpoint with the grok CLI's access token when the network is allowed, else from the local `unified.jsonl` log; token/cost history from the same log, no network.
-- `providers/grok_bot.py` — Grok Bot weekly bar from Cursor's dashboard service, signed in through the Grok Bot desktop app; network only.
+- `providers/claude.py` — Claude browser-API path, the Claude Code sign-in (OAuth) fallback and the statusLine fallback.
+- `providers/grok.py` — the Grok tab: weekly credit bar (the one limit all Grok products share) read live from xAI's billing endpoint with the grok CLI's access token when the network is allowed, else from the local `unified.jsonl` log; token/cost history from the same log, no network; `fold_grok_bot` merges Grok Bot's reading into it.
+- `providers/grok_bot.py` — Grok Bot reading (plan, on-demand, prepaid, and a weekly bar for users without the CLI) from Cursor's dashboard service, signed in through the Grok Bot desktop app; network only.
 - `providers/cost.py` — cost enrichment + Antigravity token-capture pipeline (`update_antigravity_token_ledger`).
 - `providers/__init__.py` — re-exports public names backend.py imports.
 - `parsers.py` — pure payload → limit-row functions. No I/O.

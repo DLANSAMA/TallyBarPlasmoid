@@ -1,9 +1,16 @@
 """Public provider API: the names backend.py imports, pinned by ``__all__``."""
 from .gemini import GEMINI_DOMAINS, run_gemini_web, run_google_one_credits, google_one_credit_fresh
-from .claude import apply_claude_statusline_fallback, load_claude_statusline, run_claude_api
+from .claude import (
+    apply_claude_oauth_fallback,
+    apply_claude_statusline_fallback,
+    claude_needs_oauth,
+    load_claude_statusline,
+    run_claude_api,
+    run_claude_oauth,
+)
 from .codex import run_openai_cookie_api, run_codex_rpc
 from .antigravity import choose_antigravity_result, run_antigravity_remote, run_antigravity_local, apply_google_one_credits
-from .grok import run_grok_local
+from .grok import fold_grok_bot, run_grok_local
 from .grok_bot import run_grok_bot
 from .cost import compute_local_cost_summaries, apply_cost_summaries
 
@@ -13,6 +20,9 @@ __all__ = [
     "run_google_one_credits",
     "google_one_credit_fresh",
     "run_claude_api",
+    "run_claude_oauth",
+    "apply_claude_oauth_fallback",
+    "claude_needs_oauth",
     "apply_claude_statusline_fallback",
     "load_claude_statusline",
     "run_openai_cookie_api",
@@ -21,6 +31,7 @@ __all__ = [
     "run_antigravity_remote",
     "run_antigravity_local",
     "apply_google_one_credits",
+    "fold_grok_bot",
     "run_grok_local",
     "run_grok_bot",
     "compute_local_cost_summaries",

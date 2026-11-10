@@ -35,16 +35,20 @@ from io_helpers import (
 )
 from providers import (
     GEMINI_DOMAINS,
+    apply_claude_oauth_fallback,
     apply_claude_statusline_fallback,
     apply_cost_summaries,
     apply_google_one_credits,
     choose_antigravity_result,
+    claude_needs_oauth,
     compute_local_cost_summaries,
+    fold_grok_bot,
     google_one_credit_fresh,
     load_claude_statusline,
     run_antigravity_local,
     run_antigravity_remote,
     run_claude_api,
+    run_claude_oauth,
     run_codex_rpc,
     run_gemini_web,
     run_google_one_credits,
@@ -62,6 +66,7 @@ __all__ = [
     "SNAPSHOT_PATH",
     "all_ai_month_to_date_cost",
     "all_ai_projected_month_cost",
+    "apply_claude_oauth_fallback",
     "apply_claude_statusline_fallback",
     "apply_cost_summaries",
     "apply_google_one_credits",
@@ -88,7 +93,9 @@ __all__ = [
     "refresh_worst_case_seconds",
     "run_antigravity_local",
     "run_antigravity_remote",
+    "claude_needs_oauth",
     "run_claude_api",
+    "run_claude_oauth",
     "run_codex_rpc",
     "run_gemini_web",
     "run_google_one_credits",
@@ -104,7 +111,7 @@ __all__ = [
     "update_refresh_interval",
 ]
 
-PROVIDER_ORDER = ("codex", "claude", "gemini", "antigravity", "grok", "grokbot")
+PROVIDER_ORDER = ("codex", "claude", "gemini", "antigravity", "grok")
 # The provider keys of a config written before `providerCatalog` existed. A saved
 # `providers` list is the ENABLED set, so a key missing from it means "turned off" only
 # if the catalog the list was saved under knew that key (see _enabled_providers).
@@ -235,6 +242,9 @@ def _enabled_providers(config: dict[str, Any]) -> list[str]:
     catalog = config.get("providerCatalog")
     if not isinstance(catalog, list):
         catalog = list(_LEGACY_PROVIDER_CATALOG)
+    # Grok Bot was its own tab before all Grok usage shared one limit; keeping it on keeps Grok on.
+    if "grokbot" in saved and "grok" not in saved:
+        saved = [*saved, "grok"]
     enabled = [p for p in PROVIDER_ORDER if p in saved or p not in catalog]
     return enabled or list(PROVIDER_ORDER)
 
@@ -703,6 +713,16 @@ def carry_forward_partial_antigravity_lanes(provider: dict[str, Any],
 _TRANSIENT_PROVIDER_STATUSES = frozenset(("timeout", "api-error", "unauthorized", "error"))
 
 
+def _cached_grok_bot_view(cached: Any) -> dict[str, Any]:
+    """``cached`` reshaped so ``carry_forward_provider_last_good`` finds Grok Bot's last reading,
+    which rides on the Grok provider as ``grokBotReading``."""
+    providers = cached.get("providers") if isinstance(cached, dict) else None
+    grok = providers.get("grok") if isinstance(providers, dict) else None
+    reading = grok.get("grokBotReading") if isinstance(grok, dict) else None
+    return {"timestamp": (cached or {}).get("timestamp") if isinstance(cached, dict) else None,
+            "providers": {"grokbot": reading}}
+
+
 def carry_forward_provider_last_good(provider: dict[str, Any], cached: Any, key: str,
                                      *, max_stale_seconds: int = 900) -> dict[str, Any]:
     """Freeze the last-known-good reading over a TRANSIENT provider failure.
@@ -938,9 +958,9 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         # log) + token/cost history from ~/.grok logs. run_grok_local fills limits;
         # apply_cost_summaries adds the card.
         "grok": {**default_provider("Grok", "local-grok-logs"), "accentColor": "#1d9bf0"},
-        # Grok Bot: a separate product and meter from Grok Build — network-only (Cursor's
-        # dashboard service, signed in through the Grok Bot desktop app). No cost card.
-        "grokbot": {**default_provider("Grok Bot", "grok-bot"), "accentColor": "#e6e6e6"},
+        # Grok Bot's own reading (Cursor's dashboard service, through the Grok Bot desktop
+        # app's sign-in). Folded into "grok" and dropped before the snapshot is emitted.
+        "grokbot": default_provider("Grok Bot", "grok-bot"),
     }
     diagnostics: dict[str, Any] = {}
 
@@ -1257,8 +1277,25 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     # (Cloudflare challenge / one-off timeout) on Claude/Gemini/Codex/Grok Bot would otherwise
     # overwrite the cache with an error card. Freeze the last good reading for a short grace
     # window off the cached snapshot loaded up top; beyond it the real error resurfaces.
-    for _name in ("claude", "gemini", "codex", "grokbot"):
+    for _name in ("claude", "gemini", "codex"):
         providers[_name] = carry_forward_provider_last_good(providers[_name], cached_snapshot, _name)
+
+    # Grok Bot is carried the same way, off the reading the previous snapshot kept on the Grok
+    # provider, then folded into it: all Grok usage shares one limit, so there is one Grok tab.
+    grok_bot = carry_forward_provider_last_good(
+        providers.pop("grokbot"), _cached_grok_bot_view(cached_snapshot), "grokbot")
+    providers["grok"] = {**fold_grok_bot(providers["grok"], grok_bot), "grokBotReading": grok_bot}
+
+    # Claude Code sign-in (OAuth) fallback: when the cookie path produced no live limits (no
+    # cookies, locked wallet, rejected session, rate limit), ask Anthropic's usage endpoint with
+    # the token Claude Code keeps. It runs before the statusLine capture, which stays the last
+    # resort, and never touches a live cookie reading. → tests/test_claude_oauth.py
+    if not args.no_network and claude_needs_oauth(providers["claude"]):
+        providers["claude"] = apply_claude_oauth_fallback(
+            providers["claude"],
+            await bounded_provider(run_claude_oauth(args.timeout, prev_claude), args.timeout,
+                                   {"label": "Claude", "source": "claude-oauth", "limits": []}),
+        )
 
     # Claude Code statusLine fallback (integrations/claude_code/statusline_capture.py): when
     # the claude.ai cookie path produced no live limits — Cloudflare 403/429, signed out,

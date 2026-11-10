@@ -1,0 +1,73 @@
+{
+  "five_hour": null,
+  "seven_day": {
+    "utilization": 64.0,
+    "resets_at": "RESET_WEEK",
+    "limit_dollars": null,
+    "used_dollars": null,
+    "remaining_dollars": null,
+    "locked_reason": null
+  },
+  "seven_day_opus": null,
+  "seven_day_sonnet": null,
+  "extra_usage": {
+    "is_enabled": false,
+    "monthly_limit": null,
+    "used_credits": null,
+    "utilization": null,
+    "currency": null,
+    "decimal_places": null,
+    "disabled_reason": null,
+    "user_disabled": true,
+    "spend_limit_reached": false,
+    "credits_ever_enabled": true,
+    "daily": null,
+    "weekly": null
+  },
+  "limits": [
+    {
+      "kind": "weekly_all",
+      "group": "weekly",
+      "percent": 64,
+      "severity": "normal",
+      "resets_at": "RESET_WEEK",
+      "scope": null,
+      "is_active": true
+    },
+    {
+      "kind": "weekly_scoped",
+      "group": "weekly",
+      "percent": 21,
+      "severity": "normal",
+      "resets_at": "RESET_WEEK",
+      "scope": {"model": {"id": null, "display_name": "Fable"}, "surface": null},
+      "is_active": false
+    }
+  ],
+  "spend": {
+    "used": {"amount_minor": 0, "currency": "USD", "exponent": 2},
+    "limit": null,
+    "percent": 0,
+    "severity": "normal",
+    "enabled": false,
+    "disabled_reason": null,
+    "cap": null,
+    "balance": null,
+    "auto_reload": null,
+    "can_purchase_credits": false,
+    "can_toggle": false
+  },
+  "member_dashboard_available": false,
+  "seven_day_breakdown": {
+    "as_of": "RESET_WEEK",
+    "window_started_at": "RESET_WEEK",
+    "rows": [
+      {"key": "claude_code", "display_name": "Claude Code", "percent": 94},
+      {"key": "chat", "display_name": "Chats", "percent": 0},
+      {"key": "other", "display_name": "Other", "percent": 6}
+    ]
+  },
+  "weekly_scoped_shares": [
+    {"limit_index": 1, "used_percent_of_weekly": 11, "allowance_percent_of_weekly": 50}
+  ]
+}

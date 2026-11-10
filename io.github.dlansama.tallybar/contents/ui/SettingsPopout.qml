@@ -262,8 +262,8 @@ PlasmaCore.PopupPlasmaWindow {
 
                         property bool act: root.providerEnabled(modelData)
 
-                        // Share the row with the Row's real gaps (spacing 6 × n-1), so a
-                        // sixth provider doesn't push the last chip past the card edge.
+                        // Share the row with the Row's real gaps (spacing 6 × n-1), so an
+                        // added provider doesn't push the last chip past the card edge.
                         width: (root.settingsWidth - 28 - 6 * (root.allProviderKeys.length - 1)) / root.allProviderKeys.length
                         height: 28
                         radius: 7
@@ -317,8 +317,8 @@ PlasmaCore.PopupPlasmaWindow {
                         // Muted reads as the "active" (highlighted) chip here.
                         property bool act: root.providerMuted(modelData)
 
-                        // Share the row with the Row's real gaps (spacing 6 × n-1), so a
-                        // sixth provider doesn't push the last chip past the card edge.
+                        // Share the row with the Row's real gaps (spacing 6 × n-1), so an
+                        // added provider doesn't push the last chip past the card edge.
                         width: (root.settingsWidth - 28 - 6 * (root.allProviderKeys.length - 1)) / root.allProviderKeys.length
                         height: 28
                         radius: 7

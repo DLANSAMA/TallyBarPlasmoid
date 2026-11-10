@@ -696,6 +696,36 @@ def test_extract_limits_from_json_depth_capped():
 # parse_grok_billing_config (main-tree unique)
 # ---------------------------------------------------------------------------
 
+def test_grok_product_split():
+    cfg = {"productUsage": [
+        {"product": "GrokBuild", "usagePercent": 8.0},
+        {"product": "GrokBot", "usagePercent": 53.0},
+        {"product": "SomeNewThing", "usagePercent": 0.0},      # zero shares are left out
+        {"product": "OtherThing", "usagePercent": "9"},        # not a number
+        {"product": "", "usagePercent": 5.0},                  # no name
+    ]}
+    assert parsers.grok_product_split(cfg) == "Grok Bot 53% · Grok Build 8%"
+    assert parsers.grok_product_split({"productUsage": [{"product": "GrokCodeAgent", "usagePercent": 4.4}]}) \
+        == "Grok Code Agent 4%"
+    assert parsers.grok_product_split({"productUsage": [{"product": f"P{i}", "usagePercent": 10 + i}
+                                                        for i in range(5)]}).count("%") == 3
+    for bad in ({}, {"productUsage": None}, {"productUsage": "x"}, {"productUsage": []}, None):
+        assert parsers.grok_product_split(bad) == ""
+
+
+def test_parse_grok_billing_config_puts_the_split_under_the_weekly_bar():
+    config = {
+        "creditUsagePercent": 53.0,
+        "currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "start": "2026-11-03T11:37:05+00:00",
+                          "end": "2030-01-01T00:00:00+00:00"},
+        "productUsage": [{"product": "GrokBot", "usagePercent": 53.0}],
+    }
+    limit = parsers.parse_grok_billing_config({"ctx": {"config": config}})["limits"][0]
+    assert limit["percent"] == 53.0 and limit["sublabel"] == "Grok Bot 53%"
+    del config["productUsage"]
+    assert "sublabel" not in parsers.parse_grok_billing_config({"ctx": {"config": config}})["limits"][0]
+
+
 def test_parse_grok_billing_config_weekly_credits():
     event = {
         "msg": "billing: fetched credits config",

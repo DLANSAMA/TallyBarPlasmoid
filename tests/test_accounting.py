@@ -1240,7 +1240,7 @@ def test_local_grok_billing_week_window(tmp_path):
 
 
 def test_enrich_ui_formatting_grok_billing_week_detail(tmp_path):
-    """enrich_ui_formatting injects 'This week: N tokens · $ X.XX' onto the Weekly limit."""
+    """enrich_ui_formatting injects 'This week (Grok Build): N tokens · $ X.XX' onto the Weekly limit."""
     week_tokens = 110000
     week_cost   = 3.21
 
@@ -1256,7 +1256,7 @@ def test_enrich_ui_formatting_grok_billing_week_detail(tmp_path):
     accounting.enrich_ui_formatting(providers)
     limit = providers["grok"]["limits"][0]
     expected_tokens_str = accounting.compact_token_count(week_tokens)
-    assert limit["formattedDetailText"] == f"This week: {expected_tokens_str} tokens · $ {week_cost:.2f}"
+    assert limit["formattedDetailText"] == f"This week (Grok Build): {expected_tokens_str} tokens · $ {week_cost:.2f}"
 
     providers2 = {
         "grok": {
