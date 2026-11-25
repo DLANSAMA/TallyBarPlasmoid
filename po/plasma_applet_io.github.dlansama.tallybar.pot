@@ -525,6 +525,18 @@ msgstr ""
 msgid "Set a custom monthly budget"
 msgstr ""
 
+#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:675
+#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:712
+msgid "Claude Code sign-in fallback"
+msgstr ""
+
+#: io.github.dlansama.tallybar/contents/ui/SettingsPopout.qml:724
+msgid ""
+"When the browser route has no Claude reading, ask Anthropic's usage endpoint "
+"with the access token Claude Code keeps on this computer. Anthropic's terms "
+"limit plan sign-in to its own apps, so this is off unless you turn it on."
+msgstr ""
+
 #: io.github.dlansama.tallybar/contents/ui/components/ActionFooter.qml:47
 msgid "All AI"
 msgstr ""

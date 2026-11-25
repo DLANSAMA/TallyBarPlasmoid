@@ -201,6 +201,12 @@ def short_duration(seconds: float) -> str:
     return f"{minutes}m"
 
 
+# A burn rate read from a few minutes or a couple of percent of a window swings wildly, so the
+# plain-words forecast waits for both. → tests/test_parsers.py::test_session_forecast_waits_for_enough_data
+FORECAST_MIN_ELAPSED_SECONDS = 900.0
+FORECAST_MIN_PERCENT = 2.0
+
+
 def usage_pace_detail(percent: float, reset_iso: str, window_minutes: int) -> dict[str, Any]:
     if not reset_iso or window_minutes <= 0:
         return {}
@@ -254,6 +260,8 @@ def usage_pace_detail(percent: float, reset_iso: str, window_minutes: int) -> di
     }
     if right:
         detail["detailRightText"] = right
+        if elapsed >= FORECAST_MIN_ELAPSED_SECONDS and actual >= FORECAST_MIN_PERCENT:
+            detail["forecastText"] = right
     if pace_percent is not None:
         detail["pacePercent"] = max(0.0, min(100.0, pace_percent))
     return detail

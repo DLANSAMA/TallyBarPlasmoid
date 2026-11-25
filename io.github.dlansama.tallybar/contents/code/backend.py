@@ -246,6 +246,7 @@ def public_config(config: dict[str, Any]) -> dict[str, Any]:
         "panelDisplayMode": config.get("panelDisplayMode", "percent"),
         "monthlyBudget": config.get("monthlyBudget", 0),
         "defaultProvider": config.get("defaultProvider") if config.get("defaultProvider") in PROVIDER_ORDER else "",
+        "claudeSignInFallback": config.get("claudeSignInFallback") is True,
         # Per-provider mute. A muted provider is dropped from the panel's
         # attention/badge logic and from desktop notifications, but stays visible in the popup.
         "mutedProviders": config.get("mutedProviders", []),
@@ -766,7 +767,7 @@ _PANEL_DISPLAY_MODES = ("percent", "reset", "cost", "pace")
 def update_config_values(updates: dict[str, Any]) -> dict[str, Any]:
     """Whitelisted, validated load-modify-save of the user-tunable config keys
     (notifications, panel display, providers, mutedProviders, monthlyBudget,
-    defaultProvider, refreshIntervalMinutes), under the same exclusive flock as
+    defaultProvider, claudeSignInFallback, refreshIntervalMinutes), under the same exclusive flock as
     update_refresh_interval so concurrent writes can't lost-update config.json.
     Unknown/invalid keys are ignored rather than raising."""
     import fcntl
@@ -818,6 +819,8 @@ def update_config_values(updates: dict[str, Any]) -> dict[str, Any]:
                 key = updates["defaultProvider"]
                 if key == "" or key in PROVIDER_ORDER:
                     config["defaultProvider"] = key
+            if "claudeSignInFallback" in updates:
+                config["claudeSignInFallback"] = updates["claudeSignInFallback"] is True
             if "monthlyBudget" in updates:
                 # 0 (or absent) disables the budget alert.
                 try:
@@ -1167,8 +1170,11 @@ async def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     # Claude Code sign-in (OAuth) fallback: when the cookie path produced no live limits (no
     # cookies, locked wallet, rejected session, rate limit), ask Anthropic's usage endpoint with
     # the token Claude Code keeps. It runs before the statusLine capture, which stays the last
-    # resort, and never touches a live cookie reading. → tests/test_claude_oauth.py
-    if not args.no_network and claude_needs_oauth(providers["claude"]):
+    # resort, and never touches a live cookie reading. Off until the user turns it on:
+    # Anthropic's terms restrict using plan sign-in outside its own apps.
+    # → tests/test_claude_oauth.py::test_sign_in_fallback_is_off_until_enabled
+    if (config.get("claudeSignInFallback") is True and not args.no_network
+            and claude_needs_oauth(providers["claude"])):
         providers["claude"] = apply_claude_oauth_fallback(
             providers["claude"],
             await bounded_provider(run_claude_oauth(args.timeout, prev_claude), args.timeout,
@@ -1273,7 +1279,7 @@ def main() -> int:
     parser.add_argument("--set-refresh-interval", type=float, help="write the refresh interval to the TallyBar config")
     parser.add_argument("--last-snapshot", action="store_true", help="print the cached last snapshot (no network) and exit")
     parser.add_argument("--cost", action="store_true", help="print a clean per-provider cost/token summary (JSON) and exit")
-    parser.add_argument("--set-config", type=str, help="merge a JSON object of whitelisted config keys (notificationsEnabled, panelDisplayMode, notificationThresholds, providers, mutedProviders, monthlyBudget, defaultProvider, refreshIntervalMinutes) and exit")
+    parser.add_argument("--set-config", type=str, help="merge a JSON object of whitelisted config keys (notificationsEnabled, panelDisplayMode, notificationThresholds, providers, mutedProviders, monthlyBudget, defaultProvider, claudeSignInFallback, refreshIntervalMinutes) and exit")
     args = parser.parse_args()
 
     if args.set_config is not None:

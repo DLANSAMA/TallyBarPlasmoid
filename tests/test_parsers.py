@@ -900,3 +900,22 @@ def test_claude_unverified_ultra_still_shows_a_running_session():
     running = dict(_LIVE_IDLE_CLAUDE, five_hour={"utilization": 40, "resets_at": "2099-11-05T23:00:00+00:00"})
     rows = parsers.parse_claude_usage(running, session_window=False)
     assert rows[0]["label"] == "Session" and rows[0]["percent"] == 40 and not rows[0].get("idle")
+
+
+def _session_pace(percent, elapsed_minutes, window_minutes=300):
+    import datetime as dt
+    reset = dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=window_minutes - elapsed_minutes)
+    return parsers.usage_pace_detail(percent, reset.isoformat(), window_minutes)
+
+
+def test_session_forecast_waits_for_enough_data():
+    # 10% after 5 minutes would read "runs out in 45m" and be wrong by the hour.
+    assert "forecastText" not in _session_pace(10, 5)
+    # A near-zero reading says nothing about the pace.
+    assert "forecastText" not in _session_pace(1, 120)
+    detail = _session_pace(50, 120)
+    assert detail["forecastText"].startswith("Runs out in ")
+
+
+def test_session_forecast_says_when_the_window_will_last():
+    assert _session_pace(10, 120)["forecastText"] == "Lasts to reset"
