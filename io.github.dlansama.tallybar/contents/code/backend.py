@@ -245,6 +245,7 @@ def public_config(config: dict[str, Any]) -> dict[str, Any]:
         "notificationThresholds": config.get("notificationThresholds", list(DEFAULT_NOTIFY_THRESHOLDS)),
         "panelDisplayMode": config.get("panelDisplayMode", "percent"),
         "monthlyBudget": config.get("monthlyBudget", 0),
+        "defaultProvider": config.get("defaultProvider") if config.get("defaultProvider") in PROVIDER_ORDER else "",
         "claudeSignInFallback": config.get("claudeSignInFallback") is True,
         # Per-provider mute. A muted provider is dropped from the panel's
         # attention/badge logic and from desktop notifications, but stays visible in the popup.
@@ -766,7 +767,7 @@ _PANEL_DISPLAY_MODES = ("percent", "reset", "cost", "pace")
 def update_config_values(updates: dict[str, Any]) -> dict[str, Any]:
     """Whitelisted, validated load-modify-save of the user-tunable config keys
     (notifications, panel display, providers, mutedProviders, monthlyBudget,
-    claudeSignInFallback, refreshIntervalMinutes), under the same exclusive flock as
+    defaultProvider, claudeSignInFallback, refreshIntervalMinutes), under the same exclusive flock as
     update_refresh_interval so concurrent writes can't lost-update config.json.
     Unknown/invalid keys are ignored rather than raising."""
     import fcntl
@@ -813,6 +814,11 @@ def update_config_values(updates: dict[str, Any]) -> dict[str, Any]:
                 raw = updates["mutedProviders"]
                 if isinstance(raw, list):
                     config["mutedProviders"] = [p for p in PROVIDER_ORDER if p in raw]
+            if "defaultProvider" in updates:
+                # "" clears it (the widget then opens on Claude).
+                key = updates["defaultProvider"]
+                if key == "" or key in PROVIDER_ORDER:
+                    config["defaultProvider"] = key
             if "claudeSignInFallback" in updates:
                 config["claudeSignInFallback"] = updates["claudeSignInFallback"] is True
             if "monthlyBudget" in updates:
@@ -1273,7 +1279,7 @@ def main() -> int:
     parser.add_argument("--set-refresh-interval", type=float, help="write the refresh interval to the TallyBar config")
     parser.add_argument("--last-snapshot", action="store_true", help="print the cached last snapshot (no network) and exit")
     parser.add_argument("--cost", action="store_true", help="print a clean per-provider cost/token summary (JSON) and exit")
-    parser.add_argument("--set-config", type=str, help="merge a JSON object of whitelisted config keys (notificationsEnabled, panelDisplayMode, notificationThresholds, providers, mutedProviders, monthlyBudget, claudeSignInFallback, refreshIntervalMinutes) and exit")
+    parser.add_argument("--set-config", type=str, help="merge a JSON object of whitelisted config keys (notificationsEnabled, panelDisplayMode, notificationThresholds, providers, mutedProviders, monthlyBudget, defaultProvider, claudeSignInFallback, refreshIntervalMinutes) and exit")
     args = parser.parse_args()
 
     if args.set_config is not None:

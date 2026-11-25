@@ -295,6 +295,60 @@ PlasmaCore.PopupPlasmaWindow {
                 }
             }
 
+            // --- Tab the widget opens on ---------------------------------------
+            Text {
+                color: root.mutedTextColor(0.55)
+                font.family: root.uiFont
+                font.pixelSize: 10
+                font.weight: Font.DemiBold
+                text: i18n("OPENS ON")
+            }
+
+            Row {
+                Layout.fillWidth: true
+                spacing: 6
+
+                Repeater {
+                    model: root.allProviderKeys
+
+                    delegate: Rectangle {
+                        required property var modelData
+
+                        property bool act: root.defaultProviderValue() === modelData
+
+                        width: (root.settingsWidth - 28 - 6 * (root.allProviderKeys.length - 1)) / root.allProviderKeys.length
+                        height: 28
+                        radius: 7
+                        color: act ? root.accentTintColor(0.22) : (openMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.08) : Qt.rgba(1, 1, 1, 0.04))
+                        border.width: act ? 1 : 0
+                        border.color: root.accentTintColor(0.4)
+
+                        Text {
+                            anchors.centerIn: parent
+                            color: parent.act ? root.primaryTextColor() : root.primaryTextColor(0.7)
+                            font.family: root.uiFont
+                            font.pixelSize: 11
+                            textFormat: Text.PlainText
+                            text: root.providerShortLabel(modelData)
+                        }
+
+                        MouseArea {
+                            id: openMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            // Clicking the chosen one again clears it.
+                            onClicked: root.configChangeRequested({
+                                "defaultProvider": parent.act ? "" : modelData
+                            })
+                            Accessible.role: Accessible.RadioButton
+                            Accessible.name: i18n("Open on %1", root.providerShortLabel(modelData))
+                            Accessible.checked: parent.act
+                        }
+                    }
+                }
+            }
+
             // --- Mute alerts per provider --------------------------
             Text {
                 color: root.mutedTextColor(0.55)

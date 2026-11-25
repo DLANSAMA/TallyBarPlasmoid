@@ -11,6 +11,8 @@ Notable changes to TallyBar. Format follows
   approval setting TallyBar asked for. TallyBar now starts it with `never`, which current releases accept.
 
 ### Added
+- A new **Opens on** row in Settings picks the tab the widget starts on, so the panel icon
+  no longer falls back to Claude after every restart. Tap the chosen provider again to clear it.
 - The 5-hour session row now says when it will run out at the current pace ("At this
   pace: runs out in 2h 10m", or "lasts to reset"), as the weekly rows already did. It
   stays blank for the first 15 minutes of a window and until 2% is used, because a

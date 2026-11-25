@@ -829,6 +829,9 @@ Item {
     function panelModeValue() {
         return String(root.configValue("panelDisplayMode", "percent"));
     }
+    function defaultProviderValue() {
+        return String(root.configValue("defaultProvider", ""));
+    }
     function notificationsEnabledValue() {
         return root.configValue("notificationsEnabled", true) !== false;
     }
