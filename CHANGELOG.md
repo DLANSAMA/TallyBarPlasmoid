@@ -11,6 +11,10 @@ Notable changes to TallyBar. Format follows
   approval setting TallyBar asked for. TallyBar now starts it with `never`, which current releases accept.
 
 ### Added
+- The 5-hour session row now says when it will run out at the current pace ("At this
+  pace: runs out in 2h 10m", or "lasts to reset"), as the weekly rows already did. It
+  stays blank for the first 15 minutes of a window and until 2% is used, because a
+  burn rate read from so little swings too far to trust.
 - The Claude tab can read its limits with Claude Code's own sign-in when the browser
   route has nothing: no claude.ai cookie, a locked KWallet, a rejected session, or
   claude.ai rate-limiting. The browser route is still tried first, and the Claude Code

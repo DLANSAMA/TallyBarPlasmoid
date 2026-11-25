@@ -320,6 +320,15 @@ def _metric_pace_line(limit: dict[str, Any]) -> str:
     return f"Pace: {left}"
 
 
+def _session_forecast_line(limit: dict[str, Any]) -> str:
+    if not _is_session_window(limit) or limit.get("idle") or limit.get("detailText") or limit.get("detail"):
+        return ""
+    forecast = str(limit.get("forecastText") or "").strip()
+    if not forecast:
+        return ""
+    return f"At this pace: {forecast[0].lower()}{forecast[1:]}"
+
+
 def _extra_usage_detail(limit: dict[str, Any], provider_key: str, credit_balance: dict[str, Any] | None) -> str:
     balance_amount = credit_balance.get("amount") if credit_balance else None
     if credit_balance and isinstance(balance_amount, (int, float)) and balance_amount > 0:
@@ -410,7 +419,7 @@ def enrich_ui_formatting(providers: dict[str, Any]) -> None:
             else:
                 limit["formattedUsedText"] = f"{pct:.0f}% used"
 
-            pace = _metric_pace_line(limit)
+            pace = _metric_pace_line(limit) or _session_forecast_line(limit)
             if pace:
                 limit["formattedDetailText"] = pace
             else:
