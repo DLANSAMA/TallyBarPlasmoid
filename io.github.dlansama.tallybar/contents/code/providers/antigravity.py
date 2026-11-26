@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import ssl
+import stat
 import subprocess
 import sys
 import time
@@ -16,7 +17,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from accounting import (
     antigravity_credit_state,
@@ -85,22 +86,159 @@ ANTIGRAVITY_BINARY_SCAN_OVERLAP_BYTES = 1024  # carry-over so an OAuth id/secret
 
 
 
-def _parse_language_server_cmdline(cmd_str: str, args: list[str]) -> tuple[str, str] | None:
-    """If a process cmdline is an Antigravity language server, return its (csrf_token, scheme)."""
-    if "language_server" not in cmd_str or "--app_data_dir" not in cmd_str or "antigravity" not in cmd_str:
-        return None
-    token = None
+_SAFE_APP_DATA_DIR_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+_DAEMON_FILE_MAX_BYTES = 16_384
+
+
+def _cmdline_flag_value(args: list[str], flag: str) -> str:
+    prefix = f"{flag}="
     for i, arg in enumerate(args):
-        if arg == "--csrf_token" and i + 1 < len(args):
-            token = args[i + 1]
-            break
-        elif arg.startswith("--csrf_token="):
-            token = arg.split("=", 1)[1]
-            break
-    if not token:
+        if arg == flag and i + 1 < len(args):
+            return args[i + 1]
+        if arg.startswith(prefix):
+            return arg[len(prefix):]
+    return ""
+
+
+def _cmdline_has_flag(args: list[str], flag: str) -> bool:
+    prefix = f"{flag}="
+    return any(arg == flag or arg.startswith(prefix) for arg in args)
+
+
+def _valid_tcp_port(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 65535:
+        return value
+    return None
+
+
+def _safe_antigravity_app_dir(name: str) -> bool:
+    return (
+        bool(name)
+        and name not in (".", "..")
+        and bool(_SAFE_APP_DATA_DIR_RE.fullmatch(name))
+        and "antigravity" in name.lower()
+    )
+
+
+def _daemon_dirs_for_lookup(root: Path, app_data_dir: str | None) -> list[Path]:
+    # When --app_data_dir was passed on cmdline, stay strictly inside that directory (never
+    # widen an invalid or traversal value). Only when the flag is absent altogether scan
+    # direct safe antigravity* children of ~/.gemini.
+    if app_data_dir is not None:
+        app_dir = app_data_dir.strip()
+        return [root / app_dir / "daemon"] if _safe_antigravity_app_dir(app_dir) else []
+    dirs: list[Path] = []
+    try:
+        with os.scandir(root) as it:
+            for entry in it:
+                if not _safe_antigravity_app_dir(entry.name):
+                    continue
+                try:
+                    if not entry.is_dir(follow_symlinks=False):
+                        continue
+                except OSError:
+                    continue
+                dirs.append(Path(entry.path) / "daemon")
+    except OSError:
+        return []
+    return dirs
+
+
+def _find_ls_daemon_auth(
+    pid: int,
+    app_data_dir: str | None,
+    fallback_scheme: str,
+    gemini_dir: Path | None = None,
+) -> tuple[str, str, list[tuple[str, int]]] | None:
+    """Read CSRF token, preferred scheme, and explicit ``(scheme, port)`` targets for ``pid``
+    from ``~/.gemini/<app_data_dir>/daemon/*.json``.
+
+    Antigravity 2.35+ keeps ``csrfToken`` off ``language_server``'s cmdline and writes a 0600
+    discovery JSON file per server under its ``daemon/`` directory instead.
+    → tests/test_antigravity_hardening.py::test_parse_language_server_reads_daemon_discovery_file
+    """
+    root = gemini_dir if gemini_dir is not None else (Path.home() / ".gemini")
+    candidates: list[tuple[int, str]] = []
+    for daemon_dir in _daemon_dirs_for_lookup(root, app_data_dir):
+        try:
+            with os.scandir(daemon_dir) as it:
+                for entry in it:
+                    if not entry.name.endswith(".json"):
+                        continue
+                    try:
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                        mtime_ns = entry.stat(follow_symlinks=False).st_mtime_ns
+                    except OSError:
+                        continue
+                    candidates.append((mtime_ns, entry.path))
+        except OSError:
+            continue
+
+    my_uid = os.getuid()
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    for _, path in candidates:
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        except OSError:
+            continue
+        try:
+            with os.fdopen(fd, "rb") as fh:
+                st = os.fstat(fh.fileno())
+                if not stat.S_ISREG(st.st_mode) or st.st_uid != my_uid:
+                    continue
+                raw = fh.read(_DAEMON_FILE_MAX_BYTES)
+        except OSError:
+            continue
+        try:
+            data = json.loads(raw.decode("utf-8", errors="replace"))
+        except ValueError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        file_pid = data.get("pid")
+        if not isinstance(file_pid, int) or isinstance(file_pid, bool) or file_pid != pid:
+            continue
+        csrf = data.get("csrfToken")
+        if not isinstance(csrf, str) or not csrf.strip():
+            continue
+        https_port = _valid_tcp_port(data.get("httpsPort"))
+        http_port = _valid_tcp_port(data.get("httpPort"))
+        endpoints: list[tuple[str, int]] = []
+        if https_port is not None:
+            endpoints.append(("https", https_port))
+        if http_port is not None:
+            endpoints.append(("http", http_port))
+        scheme = endpoints[0][0] if endpoints else fallback_scheme
+        return csrf.strip(), scheme, endpoints
+    return None
+
+
+def _parse_language_server_cmdline(
+    cmd_str: str,
+    args: list[str],
+    pid: int | None = None,
+) -> tuple[str, str] | None:
+    """If a process cmdline is an Antigravity language server, return its (csrf_token, scheme)."""
+    if "language_server" not in cmd_str or "antigravity" not in cmd_str.lower():
         return None
+    has_app_dir = _cmdline_has_flag(args, "--app_data_dir")
     scheme = "https" if "--https_server_port" in cmd_str else "http"
-    return token, scheme
+    token = _cmdline_flag_value(args, "--csrf_token").strip()
+    if token:
+        if not has_app_dir:
+            return None
+        return token, scheme
+    if pid is None:
+        return None
+    app_data_dir = _cmdline_flag_value(args, "--app_data_dir") if has_app_dir else None
+    found = _find_ls_daemon_auth(pid, app_data_dir, scheme)
+    if found is None:
+        return None
+    csrf, resolved_scheme, endpoints = found
+    if endpoints:
+        _daemon_endpoints[pid] = endpoints
+    return csrf, resolved_scheme
 
 
 def _parse_agy_cmdline(args: list[str], pid: int | None = None) -> tuple[str, str] | None:
@@ -239,6 +377,9 @@ def _agy_descendant_env(agy_pid: int, proc_root: str = "/proc") -> tuple[str, st
 # because the backend is one-shot: do NOT reuse this memo in a long-lived/daemon context,
 # where processes come and go and a cached list would go stale.
 _process_scan_cache: "list[tuple[int, str, str]] | None" = None
+# Explicit (scheme, port) pairs reported by daemon discovery JSON files for this one-shot run,
+# tried before falling back to antigravity_ports(pid). Cleared with _process_scan_cache.
+_daemon_endpoints: dict[int, list[tuple[str, int]]] = {}
 
 
 def find_antigravity_processes() -> list[tuple[int, str, str]]:
@@ -255,6 +396,7 @@ def _reset_process_scan_cache() -> None:
     one-shot backend never needs it (the process exits after a single refresh)."""
     global _process_scan_cache
     _process_scan_cache = None
+    _daemon_endpoints.clear()
 
 
 def _owned_by_current_user(pid: int) -> bool:
@@ -296,7 +438,7 @@ def _scan_antigravity_processes() -> list[tuple[int, str, str]]:
                         continue
                 elif not _owned_by_current_user(proc.info['pid']):
                     continue
-                parsed = _parse_language_server_cmdline(" ".join(cmdline), cmdline)
+                parsed = _parse_language_server_cmdline(" ".join(cmdline), cmdline, proc.info['pid'])
                 if parsed is None:
                     parsed = _parse_agy_cmdline(cmdline, proc.info['pid'])
                     if parsed:
@@ -324,7 +466,7 @@ def _scan_antigravity_processes() -> list[tuple[int, str, str]]:
         except OSError:
             continue
         args = cmdline.split("\0")
-        parsed = _parse_language_server_cmdline(cmdline, args)
+        parsed = _parse_language_server_cmdline(cmdline, args, int(pid_str))
         if parsed is None:
             parsed = _parse_agy_cmdline(args, int(pid_str))
             if parsed:
@@ -637,31 +779,52 @@ def collect_antigravity_rpc_usage(
         if deadline_passed(deadline, inclusive=True):
             listing_complete = False
             break
-        ports, _ = antigravity_ports(pid)
-        if not ports:
-            unlistable(pid)
-            continue
+        daemon_targets = list(_daemon_endpoints.get(pid) or ())
         schemes = (scheme, "http" if scheme == "https" else "https")
         base = None
         summaries: Any = {}
-        for port in ports:
+        tried: set[tuple[str, int]] = set()
+        for s, port in daemon_targets:
             if deadline_passed(deadline, inclusive=True):
                 break
-            for s in schemes:
-                per_call = clamp_to_deadline(min(timeout, 3.0), deadline)
-                try:
-                    status, data = _post_local_rpc(
-                        f"{s}://127.0.0.1:{port}{_LS_RPC_BASE}/GetAllCascadeTrajectories",
-                        token, _LS_RPC_METADATA, per_call,
-                    )
-                except Exception:
-                    continue
-                if status == 200 and isinstance(data, dict):
-                    base = f"{s}://127.0.0.1:{port}"
-                    summaries = data.get("trajectorySummaries") or {}
-                    break
-            if base:
+            tried.add((s, port))
+            per_call = clamp_to_deadline(min(timeout, 3.0), deadline)
+            try:
+                status, data = _post_local_rpc(
+                    f"{s}://127.0.0.1:{port}{_LS_RPC_BASE}/GetAllCascadeTrajectories",
+                    token, _LS_RPC_METADATA, per_call,
+                )
+            except Exception:
+                continue
+            if status == 200 and isinstance(data, dict):
+                base = f"{s}://127.0.0.1:{port}"
+                summaries = data.get("trajectorySummaries") or {}
                 break
+        if not base and not deadline_passed(deadline, inclusive=True):
+            ports, _ = antigravity_ports(pid)
+            if not ports and not daemon_targets:
+                unlistable(pid)
+                continue
+            for port in ports:
+                if deadline_passed(deadline, inclusive=True):
+                    break
+                for s in schemes:
+                    if (s, port) in tried:
+                        continue
+                    per_call = clamp_to_deadline(min(timeout, 3.0), deadline)
+                    try:
+                        status, data = _post_local_rpc(
+                            f"{s}://127.0.0.1:{port}{_LS_RPC_BASE}/GetAllCascadeTrajectories",
+                            token, _LS_RPC_METADATA, per_call,
+                        )
+                    except Exception:
+                        continue
+                    if status == 200 and isinstance(data, dict):
+                        base = f"{s}://127.0.0.1:{port}"
+                        summaries = data.get("trajectorySummaries") or {}
+                        break
+                if base:
+                    break
         if not base or not isinstance(summaries, dict):
             if deadline_passed(deadline, inclusive=True):
                 listing_complete = False
@@ -957,51 +1120,89 @@ def antigravity_oauth_pairs_from_data(data: bytes) -> list[tuple[str, str]]:
     return preferred
 
 
-def antigravity_oauth_clients(credentials: dict[str, Any]) -> list[tuple[str, str]]:
-    pairs: list[tuple[str, str]] = []
+def _iter_antigravity_oauth_clients(credentials: dict[str, Any]) -> Iterator[tuple[str, str]]:
+    """Yield candidate ``(client_id, client_secret)`` pairs lazily: env -> credentials -> newest
+    deduplicated local Antigravity binary. Stops binary scanning after the first binary that
+    yields pairs (newer builds are a superset) so a working credential never reads 200 MB+ off disk.
+    → tests/test_antigravity_hardening.py::test_oauth_clients_scans_modern_binary_and_dedupes_symlinks
+    """
+    seen: set[tuple[str, str]] = set()
 
-    def add_pair(client_id: Any, client_secret: Any) -> None:
-        client_id = str(client_id or "").strip()
-        client_secret = str(client_secret or "").strip()
-        if client_id and client_secret and (client_id, client_secret) not in pairs:
-            pairs.append((client_id, client_secret))
+    def _fresh(client_id: Any, client_secret: Any) -> tuple[str, str] | None:
+        cid = str(client_id or "").strip()
+        csec = str(client_secret or "").strip()
+        if not cid or not csec or (cid, csec) in seen:
+            return None
+        seen.add((cid, csec))
+        return (cid, csec)
 
-    add_pair(os.environ.get("ANTIGRAVITY_OAUTH_CLIENT_ID"), os.environ.get("ANTIGRAVITY_OAUTH_CLIENT_SECRET"))
-    add_pair(
-        credentials.get("client_id") or credentials.get("clientID"),
-        credentials.get("client_secret") or credentials.get("clientSecret"),
-    )
+    for pair in (
+        _fresh(os.environ.get("ANTIGRAVITY_OAUTH_CLIENT_ID"), os.environ.get("ANTIGRAVITY_OAUTH_CLIENT_SECRET")),
+        _fresh(
+            credentials.get("client_id") or credentials.get("clientID"),
+            credentials.get("client_secret") or credentials.get("clientSecret"),
+        ),
+    ):
+        if pair is not None:
+            yield pair
 
     home = Path.home()
-    candidates = [
+    raw_candidates = [
+        home / ".local/share/antigravity-ide/resources/bin/language_server",
         home / ".local/share/antigravity-ide/resources/app/extensions/antigravity/bin/language_server_linux_x64",
         home / ".local/share/antigravity-ide/resources/app/out/main.js",
     ]
     for pattern in (
+        str(home / ".local/opt/Antigravity*/resources/bin/language_server"),
         str(home / ".local/opt/Antigravity*/resources/app/extensions/antigravity/bin/language_server_linux_x64"),
         str(home / ".local/opt/Antigravity*/resources/app/out/main.js"),
+        "/opt/Antigravity*/resources/bin/language_server",
         "/opt/Antigravity*/resources/app/extensions/antigravity/bin/language_server_linux_x64",
         "/opt/Antigravity*/resources/app/out/main.js",
     ):
-        candidates.extend(Path(path) for path in glob.glob(pattern))
+        raw_candidates.extend(Path(path) for path in glob.glob(pattern))
 
-    for path in candidates:
+    deduped: list[tuple[int, str]] = []
+    seen_real: set[str] = set()
+    for path in raw_candidates:
         try:
-            with open(path, "rb") as f:
+            real = os.path.realpath(path)
+            if real in seen_real:
+                continue
+            st = os.stat(real)
+        except OSError:
+            continue
+        if not stat.S_ISREG(st.st_mode):
+            continue
+        seen_real.add(real)
+        deduped.append((st.st_mtime_ns, real))
+    deduped.sort(key=lambda item: item[0], reverse=True)
+
+    for _, real in deduped:
+        yielded_from_binary = False
+        try:
+            with open(real, "rb") as f:
                 chunk_size = ANTIGRAVITY_BINARY_SCAN_CHUNK_BYTES
                 overlap = ANTIGRAVITY_BINARY_SCAN_OVERLAP_BYTES
                 data = f.read(chunk_size)
                 while data:
-                    for pair in antigravity_oauth_pairs_from_data(data):
-                        if pair not in pairs:
-                            pairs.append(pair)
+                    for cid, csec in antigravity_oauth_pairs_from_data(data):
+                        pair = _fresh(cid, csec)
+                        if pair is not None:
+                            yielded_from_binary = True
+                            yield pair
                     next_chunk = f.read(chunk_size - overlap)
                     if not next_chunk:
                         break
                     data = data[-overlap:] + next_chunk
         except Exception:
             continue
-    return pairs
+        if yielded_from_binary:
+            return
+
+
+def antigravity_oauth_clients(credentials: dict[str, Any]) -> list[tuple[str, str]]:
+    return list(_iter_antigravity_oauth_clients(credentials))
 
 
 def refresh_antigravity_credentials(
@@ -1014,7 +1215,7 @@ def refresh_antigravity_credentials(
     if not refresh_token:
         return None
 
-    for client_id, client_secret in antigravity_oauth_clients(credentials):
+    for client_id, client_secret in _iter_antigravity_oauth_clients(credentials):
         body = urllib.parse.urlencode(
             {
                 "client_id": client_id,
@@ -1357,6 +1558,40 @@ def _local_quota_summary(origin: str, token: str, timeout: float) -> list[dict[s
     return parse_antigravity_quota_summary(data.get("response", data))
 
 
+def _probe_local_status(origin: str, port: int, token: str, timeout: float) -> dict[str, Any] | None:
+    path = "/exa.language_server_pb.LanguageServerService/GetUserStatus"
+    try:
+        status, data = post_local_json(f"{origin}{path}", token, min(timeout, 3.0))
+    except Exception:
+        return None
+    if status != 200:
+        return None
+    limits = parse_antigravity_limits(data)
+    lanes = normalized_antigravity_lanes(limits, include_missing=True)
+
+    summary_lanes = _local_quota_summary(origin, token, timeout)
+    if summary_lanes:
+        limits = lanes = summary_lanes
+    credit_balance, credit_limit = antigravity_credit_state(data)
+    if credit_limit is not None:
+        lanes.append(credit_limit)
+    provider: dict[str, Any] = {
+        "label": "Antigravity",
+        "status": "ok" if limits else "api-empty",
+        "source": f"local-antigravity:{port}",
+        "message": "Read Antigravity local language-server status",
+        "limits": lanes,
+    }
+    if summary_lanes:
+        provider["limitsSource"] = "quota-summary"
+    tier = antigravity_tier(data)
+    if tier:
+        provider["tier"] = tier
+    if credit_balance is not None:
+        provider["creditBalance"] = credit_balance
+    return provider
+
+
 def run_antigravity_local(timeout: float) -> dict[str, Any]:
     result: dict[str, Any] = {
         "label": "Antigravity",
@@ -1369,47 +1604,28 @@ def run_antigravity_local(timeout: float) -> dict[str, Any]:
     if not proc:
         return result
     pid, token, scheme = proc
+    daemon_targets = list(_daemon_endpoints.get(pid) or ())
+    tried: set[tuple[str, int]] = set()
+    for s, port in daemon_targets:
+        tried.add((s, port))
+        provider = _probe_local_status(f"{s}://127.0.0.1:{port}", port, token, timeout)
+        if provider is not None:
+            return provider
     ports, lsof_error = antigravity_ports(pid)
-    if not ports:
+    if not ports and not daemon_targets:
         msg = "Antigravity process found, no listening API port"
         if lsof_error:
             msg += f" ({lsof_error})"
         result.update(status="no-port", message=msg)
         return result
-    path = "/exa.language_server_pb.LanguageServerService/GetUserStatus"
     schemes = (scheme, "http" if scheme == "https" else "https")
     for port in ports:
         for s in schemes:
-            try:
-                status, data = post_local_json(f"{s}://127.0.0.1:{port}{path}", token, min(timeout, 3.0))
-                if status != 200:
-                    continue
-                limits = parse_antigravity_limits(data)
-                lanes = normalized_antigravity_lanes(limits, include_missing=True)
-
-                summary_lanes = _local_quota_summary(f"{s}://127.0.0.1:{port}", token, timeout)
-                if summary_lanes:
-                    limits = lanes = summary_lanes
-                credit_balance, credit_limit = antigravity_credit_state(data)
-                if credit_limit is not None:
-                    lanes.append(credit_limit)
-                provider: dict[str, Any] = {
-                    "label": "Antigravity",
-                    "status": "ok" if limits else "api-empty",
-                    "source": f"local-antigravity:{port}",
-                    "message": "Read Antigravity local language-server status",
-                    "limits": lanes,
-                }
-                if summary_lanes:
-                    provider["limitsSource"] = "quota-summary"
-                tier = antigravity_tier(data)
-                if tier:
-                    provider["tier"] = tier
-                if credit_balance is not None:
-                    provider["creditBalance"] = credit_balance
-                return provider
-            except Exception:
+            if (s, port) in tried:
                 continue
+            provider = _probe_local_status(f"{s}://127.0.0.1:{port}", port, token, timeout)
+            if provider is not None:
+                return provider
     result.update(status="api-error", message="Antigravity local API did not return status")
     return result
 
