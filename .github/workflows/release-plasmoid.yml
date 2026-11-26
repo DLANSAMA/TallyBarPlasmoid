@@ -99,7 +99,7 @@ jobs:
         # Pinned to an immutable commit SHA (supply-chain hardening): a mutable @v1/@v2
         # tag could be moved by an upstream compromise to run arbitrary code with our
         # contents:write GITHUB_TOKEN. Bump the comment + SHA together to update.
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           files: |
             io.github.dlansama.tallybar.plasmoid
