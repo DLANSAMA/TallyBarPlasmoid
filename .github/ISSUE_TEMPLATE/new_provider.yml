@@ -1,0 +1,54 @@
+name: New provider request / capture
+description: Request support for another AI coding tool or attach a scrubbed API capture
+labels: ["enhancement", "provider"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        TallyBar needs a real response shape to add a provider. You can generate one locally with:
+
+        ```bash
+        python3 tools/capture_provider.py <provider>
+        ```
+
+        This writes a scrubbed `0600` JSON file locally and uploads nothing. Free tiers work fine.
+
+  - type: input
+    id: provider_name
+    attributes:
+      label: Provider name
+      placeholder: "e.g. GitHub Copilot, Cursor, Windsurf"
+    validations:
+      required: true
+
+  - type: input
+    id: plan_tier
+    attributes:
+      label: Plan / tier
+      placeholder: "e.g. Free, Pro, Hobby"
+    validations:
+      required: false
+
+  - type: textarea
+    id: credential_storage
+    attributes:
+      label: How the tool stores credentials / usage locally
+      placeholder: "CLI binary, config dir, browser session, local logs, etc."
+    validations:
+      required: true
+
+  - type: textarea
+    id: scrubbed_capture
+    attributes:
+      label: Scrubbed API response capture
+      render: json
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirm_scrubbed
+    attributes:
+      label: Privacy check
+      options:
+        - label: I inspected the capture file and verified it contains no tokens, cookies, emails, or personal identifiers.
+          required: true

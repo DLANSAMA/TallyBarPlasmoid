@@ -1,5 +1,11 @@
 # TallyBar
 
+[![CI](https://github.com/DLANSAMA/TallyBarPlasmoid/actions/workflows/ci.yml/badge.svg)](https://github.com/DLANSAMA/TallyBarPlasmoid/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/DLANSAMA/TallyBarPlasmoid)](https://github.com/DLANSAMA/TallyBarPlasmoid/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Plasma 6](https://img.shields.io/badge/KDE%20Plasma-6.0%2B-1d99f3)
+![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776ab)
+
 A KDE Plasma 6 panel widget that shows how much of your AI coding assistants'
 usage you have left — and what that usage would have cost at pay-per-use rates.
 
@@ -216,6 +222,8 @@ with them:
 - **Refreshes stop while the screen is locked**, and do not overwrite the cached
   snapshot when they do.
 
+To report a security issue privately, see [SECURITY.md](SECURITY.md).
+
 ## Development
 
 ```bash
@@ -254,9 +262,10 @@ against local files only. That is what most of the test suite exercises. The UI
 can be run without Plasma — see
 [`tools/preview/README.md`](tools/preview/README.md).
 
-CI runs the lint and the tests on every pull request and every push to `main`;
-pushing a `v*` tag builds the `.plasmoid`, stamps the version into
-`metadata.json`, and attaches the package to a GitHub release.
+CI runs lint, type-checking, packaging, and tests across Python 3.11–3.13 on every pull
+request and every push to `main`; pushing a `v*` tag builds the `.plasmoid`, stamps the
+version into `metadata.json`, generates `SHA256SUMS`, and attaches both to a GitHub
+release. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full contribution checklist.
 
 ## Known limitations
 

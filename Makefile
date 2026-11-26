@@ -56,13 +56,20 @@ qmllint:
 	fi
 
 # Type-check the Python backend with mypy (config in mypy.ini).
+# Prefers the repo venv so local and CI runs use the same requirements.txt pin;
+# missing mypy is skipped locally and a hard failure under CI (mirrors qmllint).
 typecheck:
-	@if command -v uvx > /dev/null 2>&1; then \
-	    echo "Running mypy (via uvx) on $(APPLET)/contents/code/ ..."; \
-	    cd $(APPLET)/contents/code && uvx mypy . --config-file ../../../mypy.ini; \
+	@if [ -x "$(VENV)/mypy" ]; then \
+	    echo "Running mypy ($(VENV)/mypy) on $(APPLET)/contents/code/ ..."; \
+	    cd $(APPLET)/contents/code && ../../../$(VENV)/mypy . --config-file ../../../mypy.ini; \
 	elif command -v mypy > /dev/null 2>&1; then \
 	    echo "Running mypy on $(APPLET)/contents/code/ ..."; \
 	    cd $(APPLET)/contents/code && mypy . --config-file ../../../mypy.ini; \
+	elif command -v uvx > /dev/null 2>&1; then \
+	    echo "Running mypy (via uvx) on $(APPLET)/contents/code/ ..."; \
+	    cd $(APPLET)/contents/code && uvx mypy . --config-file ../../../mypy.ini; \
+	elif [ -n "$$CI" ]; then \
+	    echo "mypy not found — failing because CI is set (pip install -r requirements.txt)"; exit 1; \
 	else \
 	    echo "mypy not found — skipping type-check (pip install mypy or: uvx mypy)"; \
 	fi

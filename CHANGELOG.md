@@ -98,6 +98,8 @@ Notable changes to TallyBar. Format follows
 - First launch reads "Fetching usage data…" instead of "No usage data", and the panel
   badge and tab marks agree on which statuses count as a problem.
 - Very large counts (999.5 billion and up) no longer hang the popup.
+- `integrations/antigravity_cli/cli_statusline_capture.py` is now executable, matching
+  the direct `"command"` path documented in `integrations/README.md`.
 
 ## [0.2.1] — 2026-11-05
 
@@ -323,3 +325,8 @@ First public release.
 - Every `Text` element rendering a backend string is pinned to `Text.PlainText`,
   backend-supplied URLs open only when `https`, and `notify-send` arguments are
   `--`-terminated.
+
+[Unreleased]: https://github.com/DLANSAMA/TallyBarPlasmoid/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/DLANSAMA/TallyBarPlasmoid/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/DLANSAMA/TallyBarPlasmoid/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/DLANSAMA/TallyBarPlasmoid/releases/tag/v0.1.0

@@ -64,9 +64,36 @@ jobs:
           mv metadata.json.tmp io.github.dlansama.tallybar/metadata.json
           echo "metadata.json Version set to $VERSION"
 
-      - name: Build Plasmoid
+      - name: Build Plasmoid and checksums
         run: |
           make build
+          sha256sum io.github.dlansama.tallybar.plasmoid > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          python3 - "$VERSION" <<'PY'
+          import re, sys
+          from pathlib import Path
+
+          version = sys.argv[1]
+          text = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          pattern = re.compile(
+              r"^## \[" + re.escape(version) + r"\][^\n]*\n(.*?)(?=^## \[|^\[|\Z)",
+              re.M | re.S,
+          )
+          m = pattern.search(text)
+          body = m.group(1).strip() if m else ""
+          if body:
+              Path("release_notes.md").write_text(body + "\n", encoding="utf-8")
+          PY
+          if [ -s release_notes.md ]; then
+            echo "has_notes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_notes=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Create Release
         # Pinned to an immutable commit SHA (supply-chain hardening): a mutable @v1/@v2
@@ -74,6 +101,10 @@ jobs:
         # contents:write GITHUB_TOKEN. Bump the comment + SHA together to update.
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          files: io.github.dlansama.tallybar.plasmoid
+          files: |
+            io.github.dlansama.tallybar.plasmoid
+            SHA256SUMS
+          body_path: ${{ steps.notes.outputs.has_notes == 'true' && 'release_notes.md' || '' }}
+          generate_release_notes: ${{ steps.notes.outputs.has_notes != 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

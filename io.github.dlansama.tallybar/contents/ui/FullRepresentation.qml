@@ -7,12 +7,9 @@ import "components"
 Item {
     id: root
 
-    // Handle for passing this item into Repeater/ListView DELEGATES. A delegate is its own
-    // component scope, so inside `UsageLimitCard { root: root }` the right-hand `root`
-    // resolves to the card's OWN `root` property (undefined), not this id — the cards then
-    // rendered as three collapsed "Usage" rows. Top-level children can use `root: root`
-    // (same component, the id wins); delegates must use `root: host`.
-    // -> tests/test_qml_render.py
+    // Alias for passing this item into child components and delegates: binding `root: root`
+    // triggers qmllint's [id-shadows-member] warning and inside a delegate resolves to the
+    // delegate's own undefined `root` property. → tests/test_qml_render.py
     readonly property Item host: root
 
     property var telemetry: ({
@@ -1408,7 +1405,7 @@ Item {
     // cost data / costGraphMode state; `anchorItem` is the left-edge flyoutAnchor KWin
     // places the window against (opens leftward, beside the Cost row).
     CostPopout {
-        root: root
+        root: host
         anchorItem: flyoutAnchor
     }
 
@@ -1416,7 +1413,7 @@ Item {
     // functions / config state / signals; `anchorItem` is the invisible left-edge
     // anchor KWin places the window against (opens leftward, beside the lower body).
     SettingsPopout {
-        root: root
+        root: host
         anchorItem: settingsAnchor
     }
 
@@ -1435,12 +1432,12 @@ Item {
 
         ProviderTabBar {
             id: providerDock
-            root: root
+            root: host
         }
 
         ProviderHeader {
             id: heroPanel
-            root: root
+            root: host
         }
 
         // Degraded-state banner: first UI consumer of telemetry.diagnostics (cost-scan
@@ -1514,18 +1511,18 @@ Item {
             // status that is not ok gets its message here, compactly, with them still below.
             EmptyStateSection {
                 id: emptyStateSection
-                root: root
+                root: host
                 availableHeight: metricsScroller.height
             }
 
             ExtraUsageSection {
                 id: extraUsageSection
-                root: root
+                root: host
             }
 
             CostSection {
                 id: costSection
-                root: root
+                root: host
             }
 
             }
@@ -1564,7 +1561,7 @@ Item {
 
         ActionFooter {
             id: actionFooter
-            root: root
+            root: host
         }
 
     }

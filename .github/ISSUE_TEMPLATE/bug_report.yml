@@ -1,0 +1,61 @@
+name: Bug report
+description: Report a broken provider, UI glitch, or crash
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Codex
+        - Claude
+        - Gemini
+        - Antigravity
+        - Grok / Grok Bot
+        - Cost / Pricing
+        - UI / Plasma Panel
+        - Packaging / Install
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the bug and what you expected to see.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: false
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: "e.g. Plasma 6.3, Python 3.12, Arch Linux, TallyBar v0.2.1"
+    validations:
+      required: true
+
+  - type: textarea
+    id: backend_output
+    attributes:
+      label: Backend output (optional)
+      description: |
+        Run `python3 io.github.dlansama.tallybar/contents/code/backend.py --once --no-network --pretty` (or without `--no-network`) and paste the relevant provider block. Diagnostics are scrubbed, but review before posting.
+      render: json
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirm_scrubbed
+    attributes:
+      label: Privacy check
+      options:
+        - label: I have reviewed any attached output/logs and confirmed no personal tokens or cookies are included.
+          required: true
