@@ -274,7 +274,8 @@ def test_nothing_to_try_leaves_the_provider_alone():
 
 # --- build_snapshot wiring ---------------------------------------------------------
 
-async def _snapshot(claude_result, oauth_result, no_network=False):
+async def _snapshot(claude_result, oauth_result, no_network=False, config=None):
+    config = {"claudeSignInFallback": True} if config is None else config
     args = MagicMock()
     args.no_network = no_network
     args.timeout = 0.5
@@ -296,7 +297,7 @@ async def _snapshot(claude_result, oauth_result, no_network=False):
     async def noop_pricing(*a, **k):
         return
 
-    with patch("backend.load_config", return_value={}), \
+    with patch("backend.load_config", return_value=config), \
          patch("backend.load_snapshot", return_value={}), \
          patch("backend.collect_browser_sessions", return_value=([], {"kwallet": {"status": "ok"}})), \
          patch("backend.run_threaded_provider", side_effect=fast_threaded), \
@@ -351,3 +352,17 @@ async def test_expired_sign_in_without_cookies_surfaces_in_the_snapshot():
     snap, _ = await _snapshot(FAILED, {"status": "unauthorized", "message": "Claude Code sign-in expired; open Claude Code to renew it"})
     claude = snap["providers"]["claude"]
     assert claude["status"] == "unauthorized" and "open Claude Code" in claude["message"]
+
+
+@pytest.mark.asyncio
+async def test_sign_in_fallback_is_off_until_enabled():
+    for config in ({}, {"claudeSignInFallback": False}, {"claudeSignInFallback": "yes"}):
+        snap, calls = await _snapshot(FAILED, _ok_reading(), config=config)
+        assert calls == [] and snap["providers"]["claude"].get("source") != "claude-oauth"
+
+
+def test_sign_in_fallback_setting_is_a_validated_boolean():
+    assert backend.public_config({})["claudeSignInFallback"] is False
+    assert backend.update_config_values({"claudeSignInFallback": True})["claudeSignInFallback"] is True
+    assert backend.public_config(backend.load_config())["claudeSignInFallback"] is True
+    assert backend.update_config_values({"claudeSignInFallback": "yes"})["claudeSignInFallback"] is False

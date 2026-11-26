@@ -887,8 +887,14 @@ Item {
     function panelModeValue() {
         return String(root.configValue("panelDisplayMode", "percent"));
     }
+    function defaultProviderValue() {
+        return String(root.configValue("defaultProvider", ""));
+    }
     function notificationsEnabledValue() {
         return root.configValue("notificationsEnabled", true) !== false;
+    }
+    function claudeSignInFallbackValue() {
+        return root.configValue("claudeSignInFallback", false) === true;
     }
     function thresholdsValue() {
         const t = root.configValue("notificationThresholds", [90, 100]);

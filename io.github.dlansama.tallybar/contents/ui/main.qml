@@ -24,6 +24,7 @@ PlasmoidItem {
     ]
 
     property string selectedProvider: "claude"
+    property bool defaultProviderApplied: false
     property bool loading: false
     property bool liveLoaded: false
     // Wall-clock (Date.now() ms) of the last SUCCESSFUL live refresh. Used to debounce the
@@ -214,6 +215,15 @@ PlasmoidItem {
         // providerOrder, both reactive), so it self-updates — don't reassign it here (that would
         // destroy the binding). Only reconcile the selection so it never points at a hidden tab.
         const tabs = root.activeProviders;
+        // The saved default applies once, on the first config that carries it (a cached
+        // snapshot written by an older version doesn't): a later Settings change must not
+        // yank the tab the user is looking at.
+        const cfg = root.telemetry && root.telemetry.config;
+        if (!root.defaultProviderApplied && cfg && typeof cfg.defaultProvider === "string") {
+            root.defaultProviderApplied = true;
+            if (tabs.indexOf(cfg.defaultProvider) >= 0)
+                root.selectedProvider = cfg.defaultProvider;
+        }
         if (tabs.indexOf(root.selectedProvider) < 0)
             root.selectedProvider = tabs[0];
     }
