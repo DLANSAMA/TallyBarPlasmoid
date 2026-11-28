@@ -78,6 +78,11 @@ Notable changes to TallyBar. Format follows
   and kept aside as `.corrupt`.
 
 ### Fixed
+- Claude cost left out the advisor model's tokens. A turn that consults an advisor reports
+  that usage apart from its own, and TallyBar now counts it under the advisor's model at
+  that model's rates, cache reads and writes included. The first refreshes after the
+  update re-read the Claude history to pick it up; months already closed in the cost
+  archive keep their recorded totals.
 - The Codex tab showed no numbers on `codex` 0.167 and newer, which no longer accept the `untrusted`
   approval setting TallyBar asked for. TallyBar now starts it with `never`, which current releases accept.
 - Antigravity counted old conversations as today's usage when their activity carried no

@@ -43,7 +43,7 @@ _PARSE_CACHE_DIR = Path.home() / ".tallybar" / "cache"
 _CACHE_SCHEMA_VERSION = 1          # bump to invalidate ALL parse caches at once
 # A cached record is only valid for the output shape that wrote it, so a shape change
 # bumps its version. → tests/test_accounting.py::test_parse_cache_versions_track_output_shape
-_CLAUDE_PARSE_VERSION = 6
+_CLAUDE_PARSE_VERSION = 7
 _CODEX_PARSE_VERSION = 3
 _GROK_PARSE_VERSION = 3
 _GEMINI_PARSE_VERSION = 4
@@ -676,6 +676,38 @@ def _visible_output_chars(content: Any) -> int:
     return total
 
 
+def _advisor_usages(usage: Any) -> list[list[Any]]:
+    """``[model, usage]`` for each advisor sub-inference of one message, in order.
+
+    The Messages API lists every sub-inference of a request in ``usage.iterations``. The
+    top-level usage is the sum of the ``message`` entries (the model that answered) and
+    leaves the ``advisor_message`` entries out, because each is billed at its own
+    ``model``'s rates. Only those are returned: a ``message`` entry would count the
+    top-level usage twice."""
+    iterations = usage.get("iterations") if isinstance(usage, dict) else None
+    if not isinstance(iterations, list):
+        return []
+    out: list[list[Any]] = []
+    for entry in iterations:
+        if not isinstance(entry, dict) or entry.get("type") != "advisor_message":
+            continue
+        if usage_token_total(entry) <= 0:
+            continue
+        model = entry.get("model")
+        out.append([model if isinstance(model, str) and model else None, slim_usage(entry)])
+    return out
+
+
+def _advisor_parts(usage: Any, model: Any) -> list[tuple[Any, Any]]:
+    """``(usage, model)`` per advisor sub-inference carried in one kept request's usage;
+    one that names no model bills at the request's own."""
+    advisor = usage.get("advisor") if isinstance(usage, dict) else None
+    if not isinstance(advisor, list):
+        return []
+    return [(entry[1], entry[0] or model) for entry in advisor
+            if isinstance(entry, (list, tuple)) and len(entry) == 2 and isinstance(entry[1], dict)]
+
+
 def _parse_claude_file(path: Path, start: int = 0,
                        end: int | None = None) -> list[dict[str, Any]] | None:
     """Parse a Claude session JSONL — the BYTE range ``[start, end)`` of it when given
@@ -705,6 +737,11 @@ def _parse_claude_file(path: Path, start: int = 0,
     holds the real ``output_tokens`` and the max-output fold has nothing to recover.
     Main-session lines never carry these fields. The flag derives from the path, which is
     the parse cache's key, so the cache stays a pure function of each entry's file.
+
+    A message that consulted an advisor model carries those sub-inferences inside its
+    usage as ``u["advisor"]`` (``_advisor_usages``). They sit in the usage, not beside
+    it, so they are deduplicated with the message: every line of a message, and every
+    copy of it in another transcript, repeats the same list.
     """
     try:
         handle = path.open("rb")
@@ -733,10 +770,14 @@ def _parse_claude_file(path: Path, start: int = 0,
             usage = message.get("usage") or record.get("usage")
             if usage_token_total(usage) <= 0:
                 continue
+            slim = slim_usage(usage)
+            advisor = _advisor_usages(usage)
+            if advisor:
+                slim["advisor"] = advisor
             rec: dict[str, Any] = {
                 "t": record.get("timestamp"),
                 "m": message.get("model") or record.get("model"),
-                "u": slim_usage(usage),
+                "u": slim,
                 "r": str(message.get("id") or record.get("requestId") or record.get("uuid") or ""),
             }
             if subagent:
@@ -1089,25 +1130,32 @@ def local_claude_token_summary(
             slot = local_slots[t // 60] = (local.date().isoformat(), local.hour,
                                            local.date() == today)
         day_key, hour, is_today = slot
-        split = usage_split(usage, model, day_key)
-        tokens, cost = split.tokens, split.cost
-        if t >= month_window_start:
-            month_tokens += tokens
-            month_cost += cost
-            type_split_add(split_month, split)
-            model_slot = model_costs.setdefault(str(model), {"cost": 0.0, "tokens": 0})
-            model_slot["cost"] += cost
-            model_slot["tokens"] += tokens
-        if day_key in daily:
-            bucket_add(daily[day_key], tokens, cost, model)
-            type_split_add(split_week, split)
-        if day_key in monthly_buckets and monthly_buckets[day_key].get("inMonth"):
-            bucket_add(monthly_buckets[day_key], tokens, cost, model)
-        if is_today:
-            today_tokens += tokens
-            today_cost += cost
-            type_split_add(split_today, split)
-            bucket_add(hourly[hour], tokens, cost, model)
+        # The request itself, then each advisor sub-inference it carried: every part is
+        # one inference, priced alone (its own prompt picks its own tier) under its own
+        # model. → tests/test_claude_advisor.py
+        parts = [(usage, model)]
+        if type(usage) is dict and "advisor" in usage:
+            parts += _advisor_parts(usage, model)
+        for part_usage, part_model in parts:
+            split = usage_split(part_usage, part_model, day_key)
+            tokens, cost = split.tokens, split.cost
+            if t >= month_window_start:
+                month_tokens += tokens
+                month_cost += cost
+                type_split_add(split_month, split)
+                model_slot = model_costs.setdefault(str(part_model), {"cost": 0.0, "tokens": 0})
+                model_slot["cost"] += cost
+                model_slot["tokens"] += tokens
+            if day_key in daily:
+                bucket_add(daily[day_key], tokens, cost, part_model)
+                type_split_add(split_week, split)
+            if day_key in monthly_buckets and monthly_buckets[day_key].get("inMonth"):
+                bucket_add(monthly_buckets[day_key], tokens, cost, part_model)
+            if is_today:
+                today_tokens += tokens
+                today_cost += cost
+                type_split_add(split_today, split)
+                bucket_add(hourly[hour], tokens, cost, part_model)
 
     summary = token_summary(today_tokens, month_tokens, "local-claude-logs", today_cost, month_cost, tier,
                             now=current,
