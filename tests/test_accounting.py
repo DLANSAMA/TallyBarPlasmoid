@@ -2137,7 +2137,14 @@ def _fingerprint(obj):
 def _fixture_claude(tmp_path):
     usage = {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 7,
              "cache_creation_input_tokens": 3,
-             "cache_creation": {"ephemeral_5m_input_tokens": 1, "ephemeral_1h_input_tokens": 2}}
+             "cache_creation": {"ephemeral_5m_input_tokens": 1, "ephemeral_1h_input_tokens": 2},
+             "iterations": [
+                 {"type": "message", "input_tokens": 10, "output_tokens": 5},
+                 {"type": "advisor_message", "model": "claude-opus-5-5", "input_tokens": 40,
+                  "output_tokens": 9, "cache_read_input_tokens": 6,
+                  "cache_creation_input_tokens": 2, "service_tier": "standard",
+                  "cache_creation": {"ephemeral_5m_input_tokens": 0,
+                                     "ephemeral_1h_input_tokens": 2}}]}
     lines = [
         {"type": "assistant", "timestamp": "2026-01-02T03:04:05Z", "uuid": "u1",
          "requestId": "req1", "message": {"id": "msg1", "model": "claude-opus-4-8",
@@ -2191,7 +2198,7 @@ def _fixture_gemini(tmp_path):
 
 # (version, fingerprint of the parser's output on the fixture above)
 _PARSE_PINS = {
-    "claude": (6, "07501fee7c53456a"),
+    "claude": (7, "7a27587609cb9edd"),
     "codex": (3, "c78d70d4941f28c1"),
     "grok": (3, "610763b0f302ac40"),
     "gemini": (4, "08a92be3066fcd9c"),
