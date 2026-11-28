@@ -49,8 +49,8 @@ jobs:
 
       - name: Type-check (mypy)
         run: |
-          # Strict since the tree was made type-clean; `make check` blocks on this
-          # locally too. Uses the Makefile target so CI and local runs can't drift.
+          # `make check` blocks on this locally too. Uses the Makefile target so CI and
+          # local runs can't drift.
           make typecheck
 
       - name: Verify plasmoid packaging

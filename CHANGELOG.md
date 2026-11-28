@@ -6,10 +6,6 @@ Notable changes to TallyBar. Format follows
 
 ## [Unreleased]
 
-### Fixed
-- The Codex tab showed no numbers on `codex` 0.167 and newer, which no longer accept the `untrusted`
-  approval setting TallyBar asked for. TallyBar now starts it with `never`, which current releases accept.
-
 ### Added
 - A new **Opens on** row in Settings picks the tab the widget starts on, so the panel icon
   no longer falls back to Claude after every restart. Tap the chosen provider again to clear it.
@@ -82,6 +78,8 @@ Notable changes to TallyBar. Format follows
   and kept aside as `.corrupt`.
 
 ### Fixed
+- The Codex tab showed no numbers on `codex` 0.167 and newer, which no longer accept the `untrusted`
+  approval setting TallyBar asked for. TallyBar now starts it with `never`, which current releases accept.
 - Antigravity counted old conversations as today's usage when their activity carried no
   timestamp, or when an old conversation was reopened. They now take their real day, and
   the existing history is corrected on the first refresh.

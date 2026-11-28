@@ -18,7 +18,7 @@ with `used_percentage` and a `resets_at` epoch
 a status line.
 
 **Why it is worth wiring.** TallyBar's normal Claude path reads claude.ai with
-your browser cookies — which is what tripped Cloudflare into 403/429 flapping.
+your browser cookies, a route Cloudflare can rate-limit (403/429).
 This route is official, needs no cookies, no network and no credentials of its
 own: Claude Code simply hands over numbers it already has.
 
