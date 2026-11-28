@@ -4,6 +4,7 @@ config durability, scrubber anchoring and strict JSON output."""
 import datetime as dt
 import json
 import sys
+import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -19,6 +20,19 @@ import io_helpers  # noqa: E402
 
 def _iso(offset_seconds: float = 5.0) -> str:
     return (dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=offset_seconds)).isoformat()
+
+
+def _pin_backend_clock(monkeypatch) -> dt.datetime:
+    """Freeze ``backend``'s clock at a local midday and return that instant."""
+    noon = dt.datetime(2026, 11, 15, 12, 0).astimezone()
+
+    class Fixed(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls.fromtimestamp(noon.timestamp(), tz)
+
+    monkeypatch.setattr(backend, "dt", types.SimpleNamespace(**{**vars(dt), "datetime": Fixed}))
+    return noon
 
 
 def _cached_with_cost(ts: str):
@@ -75,14 +89,21 @@ async def test_cost_scan_timeout_carries_previous_cost_summaries():
 
 
 @pytest.mark.asyncio
-async def test_cost_carry_keeps_original_stale_as_of_and_expires():
-    old = _iso(3 * 3600)
-    cached = _cached_with_cost(_iso())
+async def test_cost_carry_keeps_original_stale_as_of_and_expires(monkeypatch):
+    # The carry keeps only readings from the same local day, so a 3-hour-old one needs a clock
+    # more than 3 hours past midnight.
+    noon = _pin_backend_clock(monkeypatch)
+
+    def ago(seconds: float) -> str:
+        return (noon - dt.timedelta(seconds=seconds)).astimezone(dt.timezone.utc).isoformat()
+
+    old = ago(3 * 3600)
+    cached = _cached_with_cost(ago(5))
     cached["providers"]["claude"]["costSummary"].update(stale=True, staleAsOf=old)
     res = await _build(cached, scan_exc=TimeoutError())
     assert res["providers"]["claude"]["costSummary"]["staleAsOf"] == old
-    expired = _cached_with_cost(_iso())
-    expired["providers"]["claude"]["costSummary"].update(stale=True, staleAsOf=_iso(7 * 3600))
+    expired = _cached_with_cost(ago(5))
+    expired["providers"]["claude"]["costSummary"].update(stale=True, staleAsOf=ago(7 * 3600))
     res = await _build(expired, scan_exc=TimeoutError())
     assert "costSummary" not in res["providers"]["claude"]
 

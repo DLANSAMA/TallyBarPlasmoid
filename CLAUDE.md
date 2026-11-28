@@ -35,7 +35,7 @@ make remove
 
 make pot                    # regenerate the translation template after adding i18n() strings
 make preview                # the UI in a standalone window, from tools/preview/mock-telemetry.json
-make screenshots            # README PNGs + cost-demo.gif (docs/screenshots/) from a live backend snapshot: real spend, published — look at each
+make screenshots            # README PNGs + cost-demo.gif (docs/screenshots/) from a live backend snapshot: real spend, published — look at each; MOCK=1 renders the mock fixture instead
 make render-baselines       # tests/render-baselines/ from the mock fixture, byte-stable; what test_qml_render compares
 ```
 
@@ -110,6 +110,6 @@ deleting the comments that describe it.
 - `--background` skips GUI-prompt credential actions (e.g. KWallet unlock); widget always passes it. `--no-network` skips all remote API calls.
 - Backend state under `~/.tallybar/`: `config.json`, `last_snapshot.json`, `antigravity_token_ledger.json`, `cost_archive.json`, `grok_archive.json`, usage caches, parse caches (`cache/`).
 - Tests add `io.github.dlansama.tallybar/contents/code` to `sys.path`; imports within `code/` are flat (`from cookies import ...`), matching how Plasma runs the script.
-- `tests/conftest.py` runs every test against an empty per-test home: it patches `Path.home()` in-process (a test that sets `HOME` itself wins) and rewrites every home-relative `Path` constant in the code and integration modules. Subprocesses keep the real `HOME`, so a test that runs a script against state passes its own. Without it the suite wrote the real cost archive and parse caches.
+- `tests/conftest.py` runs every test against an empty per-test home: it patches `Path.home()` in-process (a test that sets `HOME` itself wins) and rewrites every home-relative `Path` constant in the code and integration modules. Subprocesses keep the real `HOME`, so a test that runs a script against state passes its own. Without it the suite would write the real cost archive and parse caches.
 - `integrations/` wiring requires edits OUTSIDE the repo (e.g. `~/.gemini/antigravity-cli/settings.json`) — tell the user and let them make or approve the change; never do it silently.
 - Anything published from this repo (package metadata, README, release assets, commits) carries the project identity already in `metadata.json` — never a contributor's personal address. Check before publishing, not after.

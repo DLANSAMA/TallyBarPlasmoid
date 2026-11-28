@@ -26,6 +26,7 @@ property — the same property `main.qml` binds in the real applet.
 
 ```bash
 make screenshots       # README images, docs/screenshots/*.png + cost-demo.gif, from live usage
+make screenshots MOCK=1  # the same six images from the fixture: synthetic numbers only
 make render-baselines  # test baselines, tests/render-baselines/*.png, from the fixture
 ```
 
@@ -36,6 +37,10 @@ Both run fully offscreen, with no display and no Plasma.
 (`snapshot=`). The README images therefore show the developer's REAL usage and
 spend, and they are published: open every PNG, and step through the GIF, before
 committing them. They differ on every run, so no test compares them.
+
+`make screenshots MOCK=1` never runs the backend: it renders `mock-telemetry.json`,
+rebased onto today, so the images carry the fixture's synthetic numbers and plan
+names and nobody's real spend.
 
 `make render-baselines` renders `mock-telemetry.json` instead. `screenshot.qml`
 slides the fixture's fixed reference week onto `SHOT_DAY`, so the baselines are
@@ -86,9 +91,8 @@ presses and releases go through QtTest's `TestEvent`, so the widget's own
 tooltip, not a picture of one.
 
 - `hover` jumps from the bar beside the Day tab's busiest bar straight onto it,
-  without crossing the gap between them, and rests until the tooltip shows. That
-  jump is the move that used to leave the tooltip hidden, which is why it is a
-  render baseline.
+  without crossing the gap between them, and rests until the tooltip shows. The
+  tooltip has to survive that jump, which is why it is a render baseline.
 - `tour` rests on each tab's busiest bar until its tooltip shows, clicks it open
   to the per-model breakdown, then moves on to the next tab (Day, Week, Month,
   back to Day). It runs about 16 seconds.

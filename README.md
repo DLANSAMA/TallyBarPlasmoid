@@ -10,8 +10,8 @@ A KDE Plasma 6 panel widget that shows how much of your AI coding assistants'
 usage you have left — and what that usage would have cost at pay-per-use rates.
 
 <p align="center">
-  <img src="docs/screenshots/widget-claude.png" alt="TallyBar showing Claude's 5-hour and weekly limits with a pay-per-use cost estimate" width="340">
-  <img src="docs/screenshots/widget-antigravity.png" alt="TallyBar showing Antigravity's Gemini and Claude/GPT quota windows" width="340">
+  <img src="docs/screenshots/widget-claude.png" alt="TallyBar's Claude tab: the session, weekly and Fable limits with their pace, above a pay-per-use cost estimate" width="340">
+  <img src="docs/screenshots/widget-antigravity.png" alt="TallyBar's Antigravity tab: one limit for Gemini and one for the other models (Claude, GPT), above a pay-per-use cost estimate" width="340">
 </p>
 
 ## Why
@@ -42,29 +42,32 @@ as a month heat grid. Clicking any bar or day expands it into a per-model breakd
 
 | Provider        | Quota / limits                                    | Where that comes from                                                  |
 |-----------------|---------------------------------------------------|------------------------------------------------------------------------|
-| **Codex**       | session window, weekly window, plan               | the `codex` CLI's app-server over JSON-RPC; browser cookies as fallback |
+| **Codex**       | session window, weekly window, plan               | the `codex` CLI's app-server over JSON-RPC; chatgpt.com with your browser's session as fallback |
 | **Claude**      | session window (not on Ultra), weekly window, per-model windows, plan | claude.ai, using your browser's existing session; else Claude Code's sign-in; plan read from disk |
 | **Gemini**      | daily usage, Google One AI credit pool            | gemini.google.com and one.google.com, using your browser's existing session |
-| **Antigravity** | Gemini window, Claude/GPT window, plan            | the local Antigravity language server, plus Google's Cloud Code API     |
-| **Grok**        | the one weekly limit all Grok products share, split by product; on-demand spend when capped | xAI's billing service via the `grok` CLI's sign-in; else the CLI's log; the Grok Bot desktop app's sign-in adds plan and spend |
+| **Antigravity** | 5-hour and weekly windows for Gemini and for Claude/GPT, plan | the local Antigravity language server, plus Google's Cloud Code API     |
+| **Grok**        | the one weekly limit all Grok products share, split by product; plan and on-demand spend | xAI's billing service via the `grok` CLI's sign-in; else the CLI's log; the Grok Bot desktop app's sign-in adds plan and spend |
+
+Each bar carries its reset countdown, which keeps counting between refreshes. Session and
+weekly bars also show a pace marker and a forecast: `Pace: On pace · Lasts to reset`, or
+`At this pace: runs out in 2h 10m`. A reading that could not be refreshed stays on screen
+with its age (`Updated 3h ago (cached)`) instead of disappearing. Desktop notifications
+fire when a limit passes a threshold you pick.
 
 Cost is computed separately, from **local log files only** — the transcripts
 each CLI already writes to `~/.claude` (plus `$CLAUDE_CONFIG_DIR` and the Claude
-desktop app's Cowork and agent sessions under `~/.config/Claude`), `~/.codex`,
+desktop app's sessions under `~/.config/Claude` and `~/.config/claude`), `~/.codex`,
 `~/.gemini`, `~/.grok` and
 Antigravity's trajectory databases. Tokens are priced against the
 [LiteLLM](https://github.com/BerriAI/litellm) model catalog (fetched once and
 cached on disk), which is why the heading reads *"Cost (if pay-per-use)"* — it
 is what your usage *would* have cost on the API, not what you were charged.
-Each request is priced on its own, so a model that costs more for long prompts
-(Claude Haiku 5.5 past 100K tokens, GPT-5.5 past 272K, Gemini 2.5 and 3.1 Pro past
-200K, Grok 4.x from 200K) is billed at the higher rate only for the requests whose
-prompt crosses that size.
-Usage through Grok Bot has no local cost history yet: the Grok tab's cost card covers Grok Build only.
-
-Clicking the cost row opens a separate chart window with a 7-day bar chart, a
-month grid, a 24-hour histogram, and a per-model breakdown you can expand by
-clicking a bar.
+Each request is priced on its own, at the rate in force on the day it happened. A model
+that costs more for long prompts (Claude Haiku 5.5 past 100K tokens, GPT-5.5 past 272K)
+is billed at the higher rate only for the requests whose prompt crosses that size. A
+model with no exact price is billed at a neighbouring model's rate and named in the cost
+section (`Estimated rate: …`). The **All AI** line at the bottom of every tab adds the
+providers together.
 
 ## Requirements
 
@@ -72,11 +75,11 @@ clicking a bar.
 - **Python 3.11** or newer — the backend uses `asyncio.TaskGroup` and
   `asyncio.timeout`, both new in 3.11
 - Nothing else. The backend is standard-library only: no pip install, no
-  virtualenv, no daemon. (`.venv` in this repo is for running the tests.)
+  virtualenv, no daemon.
 
 Optional, per provider: KWallet for decrypting Chromium-family cookies, and
-whichever CLIs you actually use. Every provider is independent — a missing one
-shows a status line, never an error dialog.
+whichever CLIs and desktop apps you actually use. Every provider is independent — a
+missing one shows a one-line message in its tab, never an error dialog.
 
 ## Install
 
@@ -101,14 +104,16 @@ Then right-click your panel → **Add Widgets…** → search for *TallyBar*.
 `make install` wraps `kpackagetool6`; `make build` produces the same `.plasmoid`
 package the release ships.
 
-To update an existing install, `make upgrade`, then restart the shell so Plasma
-drops its cached copy of the QML:
+To update an existing install, `make upgrade` (or, with a downloaded package,
+`kpackagetool6 --type Plasma/Applet --upgrade io.github.dlansama.tallybar.plasmoid`),
+then restart the shell so Plasma drops its cached copy of the QML:
 
 ```bash
 systemctl --user restart plasma-plasmashell.service
 ```
 
-`make remove` uninstalls it.
+`make remove` uninstalls it, as does
+`kpackagetool6 --type Plasma/Applet --remove io.github.dlansama.tallybar`.
 
 ## First run
 
@@ -117,8 +122,8 @@ immediately on cold start, so it is never blank while a fetch is in flight.
 
 Each provider connects itself:
 
-- **Codex** works as soon as its CLI has been used once — it is read from the
-  local app-server.
+- **Codex** works as soon as the `codex` CLI is installed and signed in. TallyBar
+  starts the CLI's own app-server for each reading; nothing has to be left running.
 - **Grok** works as soon as the `grok` CLI has been signed in and used once. All
   Grok products (Grok, Grok Build, Grok Bot) share one weekly limit, so there is one
   Grok tab: the bar is read live with the CLI's sign-in, with the split by product
@@ -127,9 +132,12 @@ Each provider connects itself:
 - **Antigravity** is read from its language server, which runs while Antigravity
   (or `agy`) is open. Plan and quota keep working from a cached token afterwards.
 - **Claude** and **Gemini** use the session cookies already in your browser
-  (Chrome, Chromium, Brave, Edge or Firefox). If you are signed in to claude.ai
-  or gemini.google.com in one of those, there is nothing to configure; if you
-  are not, the widget shows a **Sign in** button that opens the right page.
+  (Chrome, Chromium, Brave, Edge or Firefox, including Flatpak Firefox). If you are
+  signed in to claude.ai or gemini.google.com in one of those, there is nothing to
+  configure; if you are not, the tab shows a sign-in button that opens the right
+  page. Chrome, Chromium, Brave and Edge encrypt their cookies with a key kept in
+  KWallet, so the wallet has to be unlocked; the tab shows an **Unlock KWallet**
+  button when it is not.
 - **Claude** can also read Claude Code's own sign-in (`~/.claude/.credentials.json`)
   when the browser route has nothing: no cookie, a locked KWallet, or a rejected
   session. It is off until you turn on **Claude Code sign-in fallback** in Settings,
@@ -142,20 +150,72 @@ Each provider connects itself:
   KWallet, like the browser cookies. Without the Grok CLI, its weekly bar stands in
   for the Grok bar.
 
-On a machine with none of these installed, the widget still starts and shows one
-status line per provider (`No matching browser cookies`, `Grok Build data dir
-(~/.grok) not found`, …) rather than failing.
+On a machine with none of these installed, the widget still starts and each tab says
+what it is missing (`Antigravity isn't running — open it to read live session usage.`)
+rather than failing. [Troubleshooting](#troubleshooting) lists the messages.
+
+## Using it
+
+**In the panel.** Click the icon to open the popup. Scroll or middle-click on it to
+change what it shows: the selected provider's bars, its reset countdown, its cost, or
+its pace. Right-click for **Refresh**, and **Unlock KWallet** when the wallet is locked.
+Hovering shows a summary tooltip.
+
+**In the popup.** One tab per provider; a marked tab has a problem to look at. Clicking
+the cost row opens the chart flyout. The footer has four buttons: the provider's usage
+dashboard, its status page, refresh, and settings.
 
 ## Configuration
 
-The gear icon opens a settings flyout: refresh interval, which providers get a
-tab, what the panel itself displays (percentage, cost or bars), notification
-thresholds, per-provider mute, and an optional monthly budget.
+The sliders button in the popup footer opens the settings flyout:
 
-Settings live in `~/.tallybar/config.json`. The rest of that directory is the
-widget's own state — cached snapshot, the Antigravity token ledger, the monthly
-cost archive, and parse caches. All of it is regenerable: delete it and the next
-refresh rebuilds it.
+| Setting | Choices |
+|---|---|
+| **Panel icon shows** | Bars, Reset, Cost or Pace |
+| **Refresh every** | 1, 2, 5, 15 or 30 minutes |
+| **Show providers** | which providers get a tab |
+| **Opens on** | the tab the widget starts on |
+| **Mute alerts** | silence notifications per provider |
+| **Usage notifications** | on or off, with a **Test** button |
+| **Alert when usage passes** | 80, 90, 95 and 100% |
+| **Monthly budget** | off, $50, $100, $250, $500 or a custom amount |
+| **Claude Code sign-in fallback** | off unless you turn it on (see [First run](#first-run)) |
+
+Settings live in `~/.tallybar/config.json`; deleting it resets them. The rest of that
+directory is the widget's own state. The cached snapshot and the parse caches are
+rebuilt by the next refresh. The Antigravity token ledger, the monthly cost archive and
+the Grok archive hold history that the tools' own logs may no longer contain, so
+deleting those loses older totals.
+
+## Troubleshooting
+
+Each provider fails on its own, and its tab says why:
+
+| The tab says | What it means | What to do |
+|---|---|---|
+| `Sign in to claude.ai in Chrome (Default), then refresh.` | No session cookie for that site in the named browser profile | Press the sign-in button, sign in, then refresh |
+| `No supported browser profiles found — …` | No Chrome, Chromium, Brave, Edge or Firefox profile on this machine | Sign in to the site in one of those browsers |
+| `KWallet is locked. Unlock it to read this provider's session cookies.` | The cookie key is in a locked wallet; a background refresh never prompts for it | Press **Unlock KWallet** in the tab or the right-click menu |
+| `API rejected session cookies (401)`, `Google session signed out — …` | The browser session has expired | Sign in again in the browser, then refresh |
+| `Claude Code sign-in expired; open Claude Code to renew it` | The sign-in fallback's token has lapsed | Open Claude Code, or sign in to claude.ai in a browser |
+| `Codex isn't running — start the Codex app to read usage.` | The `codex` CLI was not found | Install the `codex` CLI and sign in |
+| `Antigravity isn't running — open it to read live session usage.` | The Antigravity language server is not running | Open Antigravity or run `agy` |
+| `No Grok usage found — …` | Neither the `grok` CLI nor the Grok Bot app is set up | Sign in to either one |
+| `Updated 3h ago (cached)` | The last good reading is shown because a newer one could not be fetched | Usually clears on its own; for Grok, running `grok` renews its sign-in |
+| `(paused: screen locked)` | Refreshes stop while the screen is locked | Nothing; it resumes on unlock |
+| `Refresh failed, showing last values: …` | The whole refresh failed | Press refresh; if it persists, run the backend by hand (below) |
+| `Cost scan timed out — totals may be stale` | Reading the local logs took too long; the previous totals are kept | Nothing; the next refresh usually finishes |
+| `Price list update failed — costs use cached rates` | The price catalog could not be downloaded | Nothing; the cached prices are used |
+
+To see what the widget sees, run its backend the way the widget does:
+
+```bash
+python3 ~/.local/share/plasma/plasmoids/io.github.dlansama.tallybar/contents/code/backend.py --once --background --pretty
+```
+
+Each provider's `status` and `message` are in the output. Tokens and cookies are
+scrubbed, but it still names your home directory and browser profiles: read it before
+pasting it into an issue.
 
 ## How it works
 
@@ -178,7 +238,7 @@ makes the backend trivially testable and debuggable by hand:
 
 ```bash
 # Exactly what the widget runs, but readable
-python3 io.github.dlansama.tallybar/contents/code/backend.py --once --pretty
+python3 io.github.dlansama.tallybar/contents/code/backend.py --once --background --pretty
 
 # Skip every remote call (local logs and language servers only)
 python3 io.github.dlansama.tallybar/contents/code/backend.py --once --no-network --pretty
@@ -200,10 +260,8 @@ This widget reads credentials, so it is worth being explicit about what it does
 with them:
 
 - **Nothing is sent anywhere but the provider it belongs to.** There is no
-  telemetry, no analytics, no update check. The only hosts contacted are the
-  ones in the table above, Google's token service (`oauth2.googleapis.com`) to
-  renew Antigravity's own sign-in, and `raw.githubusercontent.com` for the price
-  catalog.
+  telemetry, no analytics, no update check. The hosts TallyBar requests are listed
+  [below](#hosts-contacted).
 - **Browser cookies are read, never kept.** The browser's own database is never
   opened directly (that would fight the browser for the lock). It is copied into
   a private `0700` directory under `$XDG_RUNTIME_DIR` — tmpfs, cleared at logout
@@ -217,26 +275,49 @@ with them:
 - **Everything written to disk is written atomically at `0600`** under a `0700`
   parent — temp file, `fsync`, `os.replace` — and the files that matter carry a
   `.bak` mirror with corruption quarantine on load.
-- **Credentialed requests refuse redirects.** CPython's redirect handler copies
-  the `Authorization` header cross-origin; the Google and xAI endpoints that receive a
-  bearer token never legitimately redirect, so a `3xx` from one is treated as an
-  attack and raised instead of followed.
+- **Requests that carry a bearer token refuse redirects.** CPython's redirect handler
+  copies the `Authorization` header cross-origin; the Anthropic, Google, xAI and Cursor
+  endpoints that receive one never legitimately redirect, so a `3xx` from one is treated
+  as an attack and raised instead of followed. Cookie requests follow HTTPS redirects
+  only.
 - **Refreshes stop while the screen is locked**, and do not overwrite the cached
   snapshot when they do.
+
+### Hosts contacted
+
+| Host | For |
+|---|---|
+| `claude.ai` | Claude limits, with your browser session |
+| `api.anthropic.com` | Claude limits, only with the Claude Code sign-in fallback turned on |
+| `gemini.google.com`, `one.google.com` | Gemini usage and the Google One AI credit pool |
+| `chatgpt.com` | Codex limits, only when the `codex` CLI gives none |
+| `cloudcode-pa.googleapis.com`, or the `daily-` channel host Antigravity itself uses | Antigravity plan and quota |
+| `oauth2.googleapis.com` | renewing Antigravity's own sign-in |
+| `cli-chat-proxy.grok.com` | xAI's billing service, for the Grok bar |
+| `api2.cursor.sh` | the dashboard service the Grok Bot app itself uses |
+| `raw.githubusercontent.com` | the price catalog (no credentials sent) |
+
+A request that carries cookies follows a redirect only to another HTTPS address, so a
+signed-out Google page can lead to `accounts.google.com`. The `codex` CLI and the
+Antigravity language server are local processes that make their own calls.
 
 To report a security issue privately, see [SECURITY.md](SECURITY.md).
 
 ## Development
 
+The runtime needs nothing installed; `.venv` holds the test and lint tools only.
+
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
+make              # list the targets
 make test         # the pytest suite
 make lint         # pyflakes (what CI runs)
 make check        # flake8 + Qt6 qmllint (fails on QML errors) + mypy
 make preview      # load a UI component in a standalone window, no Plasma needed
-make screenshots  # re-render docs/screenshots/ (PNGs + demo GIF) offscreen from this machine's live usage
+make screenshots  # re-render docs/screenshots/ (PNGs + demo GIF) offscreen from this machine's live usage; MOCK=1 uses the mock fixture
 make render-baselines  # re-render the mock-fixture PNGs the render tests compare against
+make pot          # regenerate the translation template after changing i18n() strings
 make build        # package io.github.dlansama.tallybar.plasmoid
 ```
 
@@ -279,13 +360,17 @@ release. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full contribution checkl
 - **The Claude Code sign-in route (once turned on) lasts as long as Claude Code's access token.**
   TallyBar sends the access token Claude Code keeps and never renews it; it lapses
   about eight hours after Claude Code last did. Past that the Claude tab asks you to
-  open Claude Code (which renews it), or uses the browser route or the statusLine
-  capture if you have them.
+  open Claude Code (which renews it), or uses the browser route or the
+  [statusLine capture](integrations/README.md) if you have them.
 - **Grok's live bar lasts as long as the CLI's sign-in.** TallyBar uses the access
   token the `grok` CLI keeps in `~/.grok/auth.json` and never renews it; it lapses
   about six hours after the CLI last did. After that the bar shows xAI's last reading
   from the CLI's log, which only updates when the CLI starts, and marks it "(cached)"
   past an hour. Running `grok` renews its sign-in.
+- **Grok Bot has no cost history.** Its share of the weekly limit shows in the Grok bar,
+  but it keeps no local token log, so the Grok tab's cost card covers Grok Build only.
+- **English only.** The strings are marked for translation and a template is in `po/`,
+  but no translation ships.
 - **Costs are estimates.** They are list prices applied to locally logged token
   counts. Treat them as a sense of scale, not a bill. An Antigravity CLI session
   known only from its status-line total is billed at the base rate, since no single

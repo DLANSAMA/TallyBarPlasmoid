@@ -10,7 +10,7 @@ These assets are provider marks, not TallyBar-owned artwork. Keep them unmodifie
 - `tallybar-provider-icons/grok-*.svg`: The Grok mark, a trademark of xAI. Reused
   unmodified except for the fill colour (`#6d6978` inactive / `white` selected, matching the other switcher
   marks) and a tightened `viewBox` so it carries the same visual weight as its siblings —
-  the path data is untouched. Replaces an earlier placeholder X mark drawn for this repo.
+  the path data is untouched.
 - `tallybar-provider-icons/grokbot-*.svg`: The Grok Bot mark, a trademark of xAI /
   SpaceXAI. Geometry taken from Grok Bot 0.63.0 (`/opt/Grok Bot/resources/app.asar` →
   `dist/renderer/assets/index.eager-common-CN0nwxVh.js`): the outline path `h7` plus the

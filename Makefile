@@ -1,7 +1,26 @@
-.PHONY: install upgrade remove build test lint qmllint typecheck check preview screenshots render-baselines pot clean
+.PHONY: help install upgrade remove build test lint qmllint typecheck check preview screenshots render-baselines pot clean
 
 APPLET := io.github.dlansama.tallybar
 VENV := .venv/bin
+
+.DEFAULT_GOAL := help
+
+help:
+	@echo "TallyBar make targets:"
+	@echo "  install           install the widget (first time)"
+	@echo "  upgrade           reinstall after changes; restart plasmashell to load them"
+	@echo "  remove            uninstall the widget"
+	@echo "  build             package $(APPLET).plasmoid"
+	@echo "  test              run the pytest suite"
+	@echo "  check             lint + qmllint + typecheck (the CI gates)"
+	@echo "  lint              flake8 (pyflakes errors only)"
+	@echo "  qmllint           Qt6 qmllint on the QML"
+	@echo "  typecheck         mypy on the backend"
+	@echo "  preview           open a UI component in a standalone window (COMPONENT=CostPopout)"
+	@echo "  render-baselines  re-render tests/render-baselines/ from the mock fixture"
+	@echo "  screenshots       re-render docs/screenshots/ from this machine's live usage (MOCK=1: the mock fixture)"
+	@echo "  pot               regenerate the translation template"
+	@echo "  clean             remove the built package, __pycache__ and the mypy cache"
 
 install:
 	@find $(APPLET) -type d -name "__pycache__" -prune -exec rm -rf {} +
@@ -126,19 +145,22 @@ CURSOR_PX := 48
 # are published and show real spend: look at every one before committing. They change with
 # every refresh, so the render tests compare against render-baselines instead. The GIF needs
 # ffmpeg, Qt's QtTest QML module and the Breeze cursor theme.
+# MOCK=1 renders tools/preview/mock-telemetry.json instead (rebased onto today, the backend
+# never runs), for images that must not carry anyone's real spend or plan.
+SHOT_MOCK := $(filter 1,$(MOCK))
 screenshots:
 	@command -v qml6 > /dev/null 2>&1 || { \
 	    echo "qml6 not found — install qt6-declarative (qt6-tools)"; exit 1; }
 	@command -v ffmpeg > /dev/null 2>&1 || { echo "ffmpeg not found — install ffmpeg"; exit 1; }
 	@mkdir -p docs/screenshots
 	@tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
-	python3 $(BACKEND) --once --timeout 12 --background > "$$tmp/snapshot.json" && \
-	$(MAKE) --no-print-directory _render OUTDIR=docs/screenshots SOURCE="snapshot=$$tmp/snapshot.json" && \
+	$(if $(SHOT_MOCK),,python3 $(BACKEND) --once --timeout 12 --background > "$$tmp/snapshot.json" &&) \
+	$(MAKE) --no-print-directory _render OUTDIR=docs/screenshots SOURCE="$(if $(SHOT_MOCK),,snapshot=$$tmp/snapshot.json)" && \
 	python3 $(DEMO) cursors "$$tmp/cursors" $(CURSOR_PX) && mkdir "$$tmp/frames" && \
-	$(SHOT_ENV) qml6 $(SHOT) -- snapshot="$$tmp/snapshot.json" component=CostPopout graphMode=day \
+	$(SHOT_ENV) qml6 $(SHOT) -- $(if $(SHOT_MOCK),,snapshot="$$tmp/snapshot.json") component=CostPopout graphMode=day \
 	    walk=tour demo="$$tmp/frames" cursors="$$tmp/cursors" && \
 	python3 $(DEMO) assemble "$$tmp/frames" docs/screenshots/cost-demo.gif 624
-	@echo "Wrote docs/screenshots/*.png and cost-demo.gif"
+	@echo "Wrote docs/screenshots/*.png and cost-demo.gif$(if $(SHOT_MOCK), from the mock fixture)"
 
 # Render baselines (tests/render-baselines/): the same shots from the mock fixture, with
 # its week/month buckets rebased onto SHOT_DAY so the PNGs are byte-stable on any day, plus

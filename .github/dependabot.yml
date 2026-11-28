@@ -7,6 +7,9 @@ updates:
     labels:
       - "dependencies"
       - "ci"
+    groups:
+      actions:
+        patterns: ["*"]
 
   - package-ecosystem: "pip"
     directory: "/"
@@ -14,3 +17,6 @@ updates:
       interval: "monthly"
     labels:
       - "dependencies"
+    groups:
+      dev-tools:
+        patterns: ["*"]
